@@ -1,0 +1,6 @@
+{
+  "name": "Fluxo & Renko 10R - MT5 Quant Terminal",
+  "description": "Terminal de análise de fluxo atemporal tick-a-tick comparado com Renko 10R de 50 pontos para automação e disparo de ordens MT5 em Python por convergência.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    color-scheme: dark;
+    background-color: #030712;
+  }
+
+  code, pre, .font-mono, [data-mono] {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom scrollbars for dark trading terminal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #090d16;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Regras de Impressão e Exportação para PDF */
+@media print {
+  @page {
+    margin: 1.5cm;
+    size: A4 portrait;
+  }
+
+  body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    color-scheme: light !important;
+  }
+
+  header, nav, .print\\:hidden {
+    display: none !important;
+  }
+
+  pre, code {
+    white-space: pre-wrap !important;
+    word-break: break-all;
+  }
+
+  .print\\:break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
