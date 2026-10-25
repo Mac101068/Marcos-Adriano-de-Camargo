@@ -61,6 +61,17 @@ async def home(request: Request):
 async def status():
     return JSONResponse(content=get_status())
 
+@app.get("/api/initial_data")
+async def get_initial_data():
+    import json
+    data_path = os.path.join(os.path.dirname(__file__), "initialData.json")
+    if not os.path.exists(data_path):
+        data_path = os.path.join(os.path.dirname(__file__), "interface_github", "src", "data", "initialData.json")
+    if os.path.exists(data_path):
+        with open(data_path, "r", encoding="utf-8") as f:
+            return JSONResponse(content=json.load(f))
+    return JSONResponse(content={"error": "initialData.json nao encontrado"}, status_code=404)
+
 @app.post("/api/connect")
 async def connect():
     success = validar_e_conectar()
