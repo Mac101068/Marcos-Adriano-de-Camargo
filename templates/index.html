@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RoboFluxoB3 | Smart Flow Trading Dashboard</title>
+    <meta name="description" content="Painel de controle profissional para o RoboFluxoB3 - Trading automatizado na B3 com análise de fluxo atemporal">
+    <link rel="stylesheet" href="/static/css/style.css?v=40">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <!-- Lightweight Charts (TradingView) para Range Bars -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+
+<body>
+    <!-- HEADER -->
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon">
+                    <i class="bi bi-graph-up-arrow"></i>
+                </div>
+                <div class="logo-text">
+                    <h1>RoboFluxoB3</h1>
+                    <p>Smart Flow Trading System</p>
+                </div>
+            </div>
+            <div class="status-badges">
+                <div class="badge" id="badge-mode">
+                    <span class="badge-dot" style="background-color: var(--blue);"></span>
+                    <span id="badge-mode-text">MODO: TEMPO REAL</span>
+                </div>
+                <div class="badge" id="badge-robot">
+                    <span class="badge-dot"></span>
+                    <span id="badge-robot-text">ROBOT: OFFLINE</span>
+                </div>
+                <div class="badge" id="badge-mt5">
+                    <span class="badge-dot"></span>
+                    <span id="badge-mt5-text">MT5: DESCONECTADO</span>
+                </div>
+                <div class="badge">
+                    <i class="bi bi-clock" style="font-size: 0.75rem; color: var(--text-muted);"></i>
+                    <span id="current-time" style="font-family: 'JetBrains Mono', monospace;">--:--:--</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN -->
+    <main class="container">
+        <!-- MÉTRICAS -->
+        <div class="metrics-bar">
+            <div class="card">
+                <div class="card-body metric-card signals">
+                    <div class="metric-value" id="metric-signals">0</div>
+                    <div class="metric-label">Sinais</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body metric-card orders">
+                    <div class="metric-value" id="metric-orders">0</div>
+                    <div class="metric-label">Ordens</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body metric-card pnl" style="border-left: 3px solid var(--green);">
+                    <div class="metric-value" id="metric-pnl" style="color: var(--green);">0 pts</div>
+                    <div class="metric-label" id="metric-pnl-reais">P&L: R$ 0,00</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body metric-card winrate">
+                    <div class="metric-value" id="metric-winrate" style="color: var(--cyan);">0%</div>
+                    <div class="metric-label" id="metric-drawdown">Acerto | DD 0p</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body metric-card balance">
+                    <div class="metric-value" id="metric-balance">R$ 0</div>
+                    <div class="metric-label">Saldo MT5</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CONTROLES + SINAIS -->
+        <div class="panel-row">
+            <div class="sidebar-stack">
+                <!-- Controle do Robô -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i class="bi bi-sliders card-icon"></i>
+                            Operação & Simulação
+                        </div>
+                    </div>
+                    <div class="card-body controls-section">
+                        <!-- Mode Tabs -->
+                        <div class="mode-tabs">
+                            <button type="button" class="mode-tab active" id="tab-btn-live">
+                                <i class="bi bi-broadcast"></i> Tempo Real
+                            </button>
+                            <button type="button" class="mode-tab" id="tab-btn-sim">
+                                <i class="bi bi-play-circle"></i> Simulador MT5
+                            </button>
+                        </div>
+
+                        <!-- Painel LIVE -->
+                        <div id="panel-live">
+                            <div class="form-group">
+                                <label class="form-label" for="input-ativo">Ativo B3</label>
+                                <input type="text" id="input-ativo" class="form-input" value="WINZ26" maxlength="10"
+                                    placeholder="Ex: WINZ26">
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-connect" id="btn-connect">
+                                    <i class="bi bi-plug"></i>
+                                    CONECTAR MT5
+                                </button>
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-start" id="btn-start">
+                                    <i class="bi bi-play-fill"></i>
+                                    INICIAR
+                                </button>
+                                <button class="btn btn-stop" id="btn-stop" disabled>
+                                    <i class="bi bi-stop-fill"></i>
+                                    PARAR
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Painel SIMULADOR / REPLAY -->
+                        <div id="panel-sim" style="display: none;">
+                            <div class="form-group">
+                                <label class="form-label" for="input-sim-ativo">Ativo dos Ticks</label>
+                                <input type="text" id="input-sim-ativo" class="form-input" value="WINZ26" maxlength="10"
+                                    placeholder="Ex: WINZ26, WIN$">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="select-sim-date">Data do Pregão</label>
+                                <select id="select-sim-date" class="form-select">
+                                    <option value="3dias" selected>🚀 3 Pregões Combinados (21, 22 e 23/10)</option>
+                                    <option value="2026-10-23">Sexta-feira (23/10/2026) - 1.15M ticks</option>
+                                    <option value="2026-10-22">Quinta-feira (22/10/2026) - 970k ticks</option>
+                                    <option value="2026-10-21">Quarta-feira (21/10/2026) - 968k ticks</option>
+                                    <option value="auto">Último pregão disponível (Auto)</option>
+                                    <option value="custom">Data Personalizada...</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="group-sim-custom-date" style="display: none;">
+                                <label class="form-label" for="input-sim-custom-date">Selecione a Data</label>
+                                <input type="date" id="input-sim-custom-date" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="select-sim-pos">Corte no Pregão</label>
+                                <select id="select-sim-pos" class="form-select">
+                                    <option value="inicio">Abertura (09:00 adiante)</option>
+                                    <option value="fim">Fechamento (Últimos ticks)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="select-sim-ticks">Volume de Ticks</label>
+                                <select id="select-sim-ticks" class="form-select">
+                                    <option value="1000000" selected>🌟 Pregão Completo (Todos os ticks)</option>
+                                    <option value="100000">100.000 ticks (~2h30 pregão)</option>
+                                    <option value="50000">50.000 ticks (~1h15)</option>
+                                    <option value="25000">25.000 ticks (~40 min)</option>
+                                    <option value="10000">10.000 ticks (~15 min)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Velocidade do Replay</label>
+                                <div class="sim-speed-pills" id="speed-pills">
+                                    <button type="button" class="speed-pill" data-speed="1">1x</button>
+                                    <button type="button" class="speed-pill" data-speed="5">5x</button>
+                                    <button type="button" class="speed-pill active" data-speed="10">10x</button>
+                                    <button type="button" class="speed-pill" data-speed="25">25x</button>
+                                    <button type="button" class="speed-pill" data-speed="50">50x</button>
+                                    <button type="button" class="speed-pill" data-speed="100">Turbo</button>
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-simulate" id="btn-start-sim">
+                                    <i class="bi bi-play-circle-fill"></i>
+                                    INICIAR SIMULAÇÃO
+                                </button>
+                                <button class="btn btn-stop" id="btn-stop-sim" disabled>
+                                    <i class="bi bi-stop-fill"></i>
+                                    PARAR
+                                </button>
+                            </div>
+
+                            <!-- CSV Dropzone -->
+                            <div class="csv-upload-box" id="csv-dropzone" title="Importar arquivo CSV de ticks exportado do MT5">
+                                <input type="file" id="input-csv-file" accept=".csv,.txt">
+                                <div class="csv-upload-text">
+                                    <i class="bi bi-filetype-csv" style="font-size: 1rem; color: #c084fc;"></i>
+                                    <span id="csv-upload-label">Importar CSV do MetaTrader</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Monitor de Progresso de Simulação -->
+                        <div class="sim-progress-box" id="sim-progress-box" style="display: none;">
+                            <div class="sim-progress-header">
+                                <span class="sim-progress-title">
+                                    <i class="bi bi-play-circle-fill"></i> REPLAY ATIVO
+                                </span>
+                                <span class="sim-progress-pct" id="sim-pct">0%</span>
+                            </div>
+                            <div class="sim-progress-track">
+                                <div class="sim-progress-fill" id="sim-fill"></div>
+                            </div>
+                            <div class="sim-stats-grid">
+                                <div class="sim-stat-item">
+                                    <span class="sim-stat-label">Ticks</span>
+                                    <span class="sim-stat-val" id="sim-ticks-count">0 / 0</span>
+                                </div>
+                                <div class="sim-stat-item">
+                                    <span class="sim-stat-label">Hora no Pregão</span>
+                                    <span class="sim-stat-val" id="sim-tick-clock" style="color: var(--cyan);">--:--:--</span>
+                                </div>
+                                <div class="sim-stat-item">
+                                    <span class="sim-stat-label">Data</span>
+                                    <span class="sim-stat-val" id="sim-date-val">-</span>
+                                </div>
+                                <div class="sim-stat-item">
+                                    <span class="sim-stat-label">Velocidade</span>
+                                    <span class="sim-stat-val" id="sim-speed-val">10x</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Info Conta -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i class="bi bi-person-badge card-icon"></i>
+                            Conta MT5
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="info-grid">
+                            <div class="info-row">
+                                <span class="info-label">Login</span>
+                                <span class="info-value" id="info-login">-</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Servidor</span>
+                                <span class="info-value" id="info-server">-</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Saldo</span>
+                                <span class="info-value" id="info-balance">R$ 0,00</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Equity</span>
+                                <span class="info-value" id="info-equity">R$ 0,00</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabela de Sinais -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="bi bi-lightning-charge card-icon"></i>
+                        Sinais de Fluxo
+                    </div>
+                    <span class="card-badge">TEMPO REAL</span>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-wrapper">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Horário</th>
+                                    <th>Tipo</th>
+                                    <th>Direção</th>
+                                    <th>Preço Gatilho</th>
+                                </tr>
+                            </thead>
+                            <tbody id="signals-table-body">
+                                <tr>
+                                    <td colspan="4"
+                                        style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                                        <i class="bi bi-lightning" style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem; opacity: 0.3;"></i>
+                                        Aguardando sinais...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- GRÁFICOS (Lado a Lado no Desktop) -->
+        <div class="dashboard-grid">
+            <!-- Gráfico Range Bars -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="bi bi-bar-chart-line card-icon"></i>
+                        Range Bars — Preço Atemporal
+                    </div>
+                    <span class="card-badge" id="chart-bar-count">0 BARRAS</span>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="chart-container" id="range-chart-container">
+                        <div class="chart-empty" id="range-chart-empty">
+                            <i class="bi bi-bar-chart-line"></i>
+                            <p>Aguardando dados de Range Bars</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footprint Chart -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <i class="bi bi-grid-3x3-gap card-icon"></i>
+                        Footprint — Volume por Nível
+                    </div>
+                    <div class="chart-header-actions">
+                        <span class="card-badge" id="fp-selected-bar">Selecione uma barra</span>
+                    </div>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="footprint-canvas-container" id="footprint-container">
+                        <canvas id="footprint-canvas"></canvas>
+                        <div class="chart-empty" id="footprint-empty">
+                            <i class="bi bi-grid-3x3-gap"></i>
+                            <p>Dados de Footprint</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LOGS -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">
+                    <i class="bi bi-terminal card-icon"></i>
+                    Log do Sistema
+                </div>
+                <button id="btn-clear-logs" class="btn-clear">
+                    <i class="bi bi-trash"></i> Limpar
+                </button>
+            </div>
+            <div class="card-body" style="padding: 0.35rem 0.625rem;">
+                <div class="logs-container" id="logs-container">
+                    <div id="logs-content"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/static/js/app.js?v=40"></script>
+</body>
+
+</html>

@@ -1,0 +1,19 @@
+# Ambientes virtuais e cache Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# Node e dependências
+node_modules/
+interface_github/node_modules/
+interface_github/dist/
+
+# Backups e binários
+backups/
+*.zip
+*.csv
+.vscode/
+.agents/

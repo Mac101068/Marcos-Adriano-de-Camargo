@@ -1,0 +1,1 @@
+﻿{"running":false,"mt5_connected":true,"account_info":{"login":50534540,"server":"XPMT5-DEMO","balance":1050082.0,"equity":1050082.0,"trade_mode":0},"error":null,"signals_count":0,"orders_count":0,"queue_size":0,"last_signals":[],"logs":["[20:49:43] Conectado ao MT5 - XPMT5-DEMO"]}
