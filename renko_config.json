@@ -4,5 +4,9 @@
   "min_delta_threshold": 50,
   "min_reversal_delta": 75,
   "pyramid_tp_points": 100,
-  "last_updated": "2026-10-26T12:06:34.513032"
+  "accumulation_filter_enabled": true,
+  "accumulation_window_boxes": 6,
+  "accumulation_max_alternations": 3,
+  "accumulation_min_range_mult": 2.0,
+  "last_updated": "2026-10-26T14:24:00"
 }

@@ -53,10 +53,69 @@ PYRAMID_CONTRACTS = 1.0         # Lote das ordens de pirâmide
 MAIN_CONTRACTS = 1.0            # Lote da ordem mãe de surfe
 MAX_POSITIONS = 5               # Limite máximo de ordens simultâneas
 MIN_DELTA_THRESHOLD = 50.0      # Delta mínimo para entrada comum
+MIN_DELTA_THRESHOLD = 50.0      # Delta mínimo para entrada comum
 MIN_REVERSAL_DELTA = 75.0       # Delta mínimo obrigatório para autorizar reversão de mão (Filtro Anti-Whipsaw)
+
+# FILTRO DE ACUMULAÇÃO / CONSOLIDAÇÃO / CAIXOTE
+ACCUMULATION_FILTER_ENABLED = True
+ACCUMULATION_WINDOW_BOXES = 6
+ACCUMULATION_MAX_ALTERNATIONS = 3
+ACCUMULATION_MIN_RANGE_MULT = 2.0
+
+def check_accumulation(boxes, box_to_check, window_size=6, max_alternations=3, min_range_mult=2.0, box_points=100):
+    """
+    Identifica se o mercado está em região de ACUMULAÇÃO / CONSOLIDAÇÃO / CAIXOTE:
+    Retorna: (is_accumulating: bool, is_breakout: bool, reason: str, range_min: float, range_max: float)
+    """
+    if len(boxes) < window_size:
+        return False, False, "", 0.0, 0.0
+
+    recent_boxes = boxes[-window_size:]
+    
+    # 1. Contagem de alternâncias consecutivas (Choppiness)
+    alternations = 0
+    for i in range(1, len(recent_boxes)):
+        if recent_boxes[i]["direction"] != recent_boxes[i-1]["direction"]:
+            alternations += 1
+
+    # 2. Amplitude dos últimos boxes anteriores ao box atual
+    highs = [b["high"] for b in recent_boxes[:-1]]
+    lows = [b["low"] for b in recent_boxes[:-1]]
+    if not highs or not lows:
+        return False, False, "", 0.0, 0.0
+
+    range_max = max(highs)
+    range_min = min(lows)
+    amplitude = range_max - range_min
+    min_required_amplitude = box_points * min_range_mult
+
+    is_choppy = alternations >= max_alternations
+    is_narrow = amplitude < min_required_amplitude
+
+    if not is_choppy and not is_narrow:
+        return False, False, "", range_min, range_max
+
+    # Se estava consolidado, verifica se o box_to_check rompeu efetivamente o caixote
+    curr_close = box_to_check["close"]
+    direction = box_to_check["direction"]
+    
+    if direction == "UP" and curr_close > range_max:
+        return False, True, f"Rompimento de Alta do Caixote [{range_min:.0f} - {range_max:.0f}] confirmado no close {curr_close:.0f}", range_min, range_max
+    elif direction == "DOWN" and curr_close < range_min:
+        return False, True, f"Rompimento de Baixa do Caixote [{range_min:.0f} - {range_max:.0f}] confirmado no close {curr_close:.0f}", range_min, range_max
+
+    reason_detail = []
+    if is_choppy:
+        reason_detail.append(f"{alternations} viradas em {window_size} boxes (choppiness)")
+    if is_narrow:
+        reason_detail.append(f"amplitude {amplitude:.0f} pts < mín {min_required_amplitude:.0f} pts")
+
+    reason = f"Acumulação/Caixote [{range_min:.0f} - {range_max:.0f}] ({', '.join(reason_detail)})"
+    return True, False, reason, range_min, range_max
 
 def load_renko_config():
     global RENKO_R, BOX_POINTS, PYRAMID_TP_POINTS, MIN_DELTA_THRESHOLD, MIN_REVERSAL_DELTA
+    global ACCUMULATION_FILTER_ENABLED, ACCUMULATION_WINDOW_BOXES, ACCUMULATION_MAX_ALTERNATIONS, ACCUMULATION_MIN_RANGE_MULT
     cfg_file = os.path.join(os.path.dirname(__file__), "renko_config.json")
     if os.path.exists(cfg_file):
         try:
@@ -71,7 +130,11 @@ def load_renko_config():
                 PYRAMID_TP_POINTS = int(data.get("pyramid_tp_points", BOX_POINTS))
                 MIN_DELTA_THRESHOLD = float(data.get("min_delta_threshold", 50.0))
                 MIN_REVERSAL_DELTA = float(data.get("min_reversal_delta", 75.0))
-                print(f"⚙️ [CONFIG CARREGADA] Renko: {RENKO_R}R ({BOX_POINTS} pts) | TP Pirâmide: +{PYRAMID_TP_POINTS} pts | Filtro Reversão Delta: {MIN_REVERSAL_DELTA}")
+                ACCUMULATION_FILTER_ENABLED = bool(data.get("accumulation_filter_enabled", True))
+                ACCUMULATION_WINDOW_BOXES = int(data.get("accumulation_window_boxes", 6))
+                ACCUMULATION_MAX_ALTERNATIONS = int(data.get("accumulation_max_alternations", 3))
+                ACCUMULATION_MIN_RANGE_MULT = float(data.get("accumulation_min_range_mult", 2.0))
+                print(f"⚙️ [CONFIG CARREGADA] Renko: {RENKO_R}R ({BOX_POINTS} pts) | Filtro Acumulação: {'ATIVO' if ACCUMULATION_FILTER_ENABLED else 'DESATIVADO'} (Janela {ACCUMULATION_WINDOW_BOXES} boxes)")
         except Exception as e:
             print(f"Erro ao carregar renko_config.json: {e}")
 
@@ -339,7 +402,23 @@ class MT5OrderManager:
             time.sleep(0.05)
             active_positions = []
 
-        # 2. Verifica se a Ordem Mãe já existe
+        # 2. FILTRO DE ACUMULAÇÃO / CONSOLIDAÇÃO (Anti-Whipsaw / Caixote)
+        if ACCUMULATION_FILTER_ENABLED and RENKO_ENGINE and len(RENKO_ENGINE.boxes) >= ACCUMULATION_WINDOW_BOXES:
+            is_acc, is_break, acc_reason, r_min, r_max = check_accumulation(
+                RENKO_ENGINE.boxes,
+                box,
+                window_size=ACCUMULATION_WINDOW_BOXES,
+                max_alternations=ACCUMULATION_MAX_ALTERNATIONS,
+                min_range_mult=ACCUMULATION_MIN_RANGE_MULT,
+                box_points=BOX_POINTS
+            )
+            if is_acc:
+                print(f"🛡️ [FILTRO ACUMULAÇÃO] Entrada de {current_dir} BLOQUEADA: {acc_reason}. Preservando capital contra falso rompimento!")
+                return False, 0, "BLOCKED_ACCUMULATION"
+            elif is_break:
+                print(f"🚀 [ROMPIMENTO CONFIRMADO] {acc_reason}! Entrada autorizada na explosão do caixote!")
+
+        # 3. Verifica se a Ordem Mãe já existe
         has_main_order = False
         pyramid_count = 0
         for pos in active_positions:

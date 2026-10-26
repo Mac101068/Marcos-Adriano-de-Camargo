@@ -479,6 +479,21 @@ function updateStatus() {
                 badgeStrategyName.textContent = `PIRÂMIDE & CONFLUÊNCIA ${currentR}R`;
             }
 
+            // Badge Acumulação / Consolidação
+            const badgeAcc = document.getElementById('badge-accumulation');
+            const badgeAccText = document.getElementById('badge-accumulation-text');
+            if (badgeAcc && badgeAccText) {
+                if (data.is_accumulating) {
+                    badgeAcc.style.display = 'inline-flex';
+                    const rMin = data.accumulation_range && data.accumulation_range[0] ? data.accumulation_range[0].toFixed(0) : '';
+                    const rMax = data.accumulation_range && data.accumulation_range[1] ? data.accumulation_range[1].toFixed(0) : '';
+                    badgeAccText.textContent = `ACUMULAÇÃO [${rMin}-${rMax}]: PAUSADO`;
+                    badgeAcc.title = data.accumulation_reason || "Região de caixote detectada";
+                } else {
+                    badgeAcc.style.display = 'none';
+                }
+            }
+
             // MT5 Connection
             if (data.mt5_connected) {
                 badgeMt5.className = 'badge mt5-ok';

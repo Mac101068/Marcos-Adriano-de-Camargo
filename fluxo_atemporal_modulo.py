@@ -408,6 +408,58 @@ class RenkoFlowEngine:
         return None, ""
 
 
+def check_market_accumulation(boxes: List[Dict[str, Any]], box_to_check: Dict[str, Any], window_size: int = 6, max_alternations: int = 3, min_range_mult: float = 2.0, box_points: float = 100.0) -> Tuple[bool, bool, str, float, float]:
+    """
+    Identifica se o mercado está em região de ACUMULAÇÃO / CONSOLIDAÇÃO / CAIXOTE:
+    Retorna: (is_accumulating: bool, is_breakout: bool, reason: str, range_min: float, range_max: float)
+    """
+    if len(boxes) < window_size:
+        return False, False, "", 0.0, 0.0
+
+    recent_boxes = boxes[-window_size:]
+
+    # 1. Contagem de alternâncias consecutivas (Choppiness)
+    alternations = 0
+    for i in range(1, len(recent_boxes)):
+        if recent_boxes[i]["direction"] != recent_boxes[i-1]["direction"]:
+            alternations += 1
+
+    # 2. Amplitude dos boxes anteriores ao box atual
+    highs = [b["high"] for b in recent_boxes[:-1]]
+    lows = [b["low"] for b in recent_boxes[:-1]]
+    if not highs or not lows:
+        return False, False, "", 0.0, 0.0
+
+    range_max = max(highs)
+    range_min = min(lows)
+    amplitude = range_max - range_min
+    min_required_amplitude = box_points * min_range_mult
+
+    is_choppy = alternations >= max_alternations
+    is_narrow = amplitude < min_required_amplitude
+
+    if not is_choppy and not is_narrow:
+        return False, False, "", range_min, range_max
+
+    # Se estava consolidado, verifica se o box_to_check rompeu efetivamente o caixote
+    curr_close = float(box_to_check["close"])
+    direction = box_to_check["direction"]
+
+    if direction == "UP" and curr_close > range_max:
+        return False, True, f"Rompimento de Alta do Caixote [{range_min:.0f} - {range_max:.0f}] confirmado no close {curr_close:.0f}", range_min, range_max
+    elif direction == "DOWN" and curr_close < range_min:
+        return False, True, f"Rompimento de Baixa do Caixote [{range_min:.0f} - {range_max:.0f}] confirmado no close {curr_close:.0f}", range_min, range_max
+
+    reason_detail = []
+    if is_choppy:
+        reason_detail.append(f"{alternations} viradas em {window_size} boxes (choppiness)")
+    if is_narrow:
+        reason_detail.append(f"amplitude {amplitude:.0f} pts < mín {min_required_amplitude:.0f} pts")
+
+    reason = f"Acumulação/Caixote [{range_min:.0f} - {range_max:.0f}] ({', '.join(reason_detail)})"
+    return True, False, reason, range_min, range_max
+
+
 class MT5PyramidOrderManager:
     """
     Gerenciador Institucional de Ordens B3:

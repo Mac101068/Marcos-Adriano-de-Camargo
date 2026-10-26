@@ -19,6 +19,7 @@ from fluxo_atemporal_modulo import (
     RenkoFlowEngine,
     MT5PyramidOrderManager,
     extrair_dados_tick,
+    check_market_accumulation,
 )
 from config import (
     ATIVO_ALVO,
@@ -69,6 +70,9 @@ class RoboFluxoState:
         self.pyramid_manager = None
         self.renko_boxes = []
         self.current_cvd = 0.0
+        self.is_accumulating = False
+        self.accumulation_reason = ""
+        self.accumulation_range = [0.0, 0.0]
         self.sim_resultado = None
 
         # Simulação
@@ -255,6 +259,24 @@ def pipeline_processamento_puro(ativo, tamanho_range):
                         state.chart_footprint[int(new_box['index'])] = fp_levels
 
                     state.log(f"[RENKO 10R] Box #{new_box['index']} {new_box['direction']} fechou em {new_box['close']:.1f} | Delta: {new_box['delta']:+.0f} | CVD: {state.current_cvd:+.0f}")
+
+                    # Monitoramento de Região de Acumulação / Consolidação
+                    if len(state.renko_engine.boxes) >= 6:
+                        is_acc, is_break, acc_reason, r_min, r_max = check_market_accumulation(
+                            state.renko_engine.boxes,
+                            new_box,
+                            window_size=6,
+                            max_alternations=3,
+                            min_range_mult=2.0,
+                            box_points=state.renko_box_pts
+                        )
+                        state.is_accumulating = is_acc
+                        state.accumulation_reason = acc_reason
+                        state.accumulation_range = [r_min, r_max]
+                        if is_acc:
+                            state.log(f"🛡️ [FILTRO ACUMULAÇÃO] Mercado em consolidação: {acc_reason}. Entradas pausadas.")
+                        elif is_break:
+                            state.log(f"🚀 [ROMPIMENTO CONFIRMADO] {acc_reason}! Saída de caixote detectada.")
 
                 if signal and new_box:
                     state.signals_count += 1
@@ -877,6 +899,9 @@ def get_status():
         "queue_size": state.fila_ticks.qsize(),
         "last_signals": state.last_signals[-10:],
         "logs": state.logs[-50:],
+        "is_accumulating": getattr(state, "is_accumulating", False),
+        "accumulation_reason": getattr(state, "accumulation_reason", ""),
+        "accumulation_range": getattr(state, "accumulation_range", [0.0, 0.0]),
         "simulation_mode": state.simulation_mode,
         "simulation_speed": state.simulation_speed,
         "simulation_progress": state.simulation_progress,
