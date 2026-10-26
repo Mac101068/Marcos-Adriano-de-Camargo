@@ -360,14 +360,14 @@ class MT5OrderManager:
             )
             return success, ticket, "MAIN"
         elif pyramid_count < MAX_POSITIONS:
-            # Dispara Pirâmide com TP fixo de 50 pontos
+            # Dispara Pirâmide: saída exclusivamente no TP de +1 box ou na Inversão Total
             pyramid_num = pyramid_count + 1
-            print(f"🔺 [PIRÂMIDE #{pyramid_num}] Disparando {current_dir} ({PYRAMID_CONTRACTS} ct) no Box #{box['index']} | Alvo +{PYRAMID_TP_POINTS} pts")
+            print(f"🔺 [PIRÂMIDE #{pyramid_num}] Disparando {current_dir} ({PYRAMID_CONTRACTS} ct) no Box #{box['index']} | Alvo +{PYRAMID_TP_POINTS} pts (Zeragem por TP ou Inversão)")
             success, ticket = self.execute_market_order(
                 order_type=current_dir,
                 comment=f"PIR_{pyramid_num}_{box['index']}",
                 volume=PYRAMID_CONTRACTS,
-                sl_points=75,
+                sl_points=0,
                 tp_points=PYRAMID_TP_POINTS
             )
             return success, ticket, "PYRAMID"
