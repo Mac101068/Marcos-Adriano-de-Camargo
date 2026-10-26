@@ -226,6 +226,34 @@ def pipeline_processamento_puro(ativo, tamanho_range):
                         if len(state.chart_ohlc) > 200:
                             state.chart_ohlc = state.chart_ohlc[-200:]
 
+                        # Registra footprint dos níveis de preço do box
+                        fp_levels = []
+                        raw_levels = new_box.get('price_levels', {})
+                        for p, v in sorted(raw_levels.items(), key=lambda x: x[0], reverse=True):
+                            fp_levels.append({
+                                'price': float(p),
+                                'buy_vol': float(v['buy_vol']),
+                                'sell_vol': float(v['sell_vol']),
+                                'delta': float(v['buy_vol'] - v['sell_vol'])
+                            })
+                        if not fp_levels:
+                            p_step = 5.0
+                            p_min = round(min(new_box['low'], new_box['open'], new_box['close']) / p_step) * p_step
+                            p_max = round(max(new_box['high'], new_box['open'], new_box['close']) / p_step) * p_step
+                            steps = max(1, int(round((p_max - p_min) / p_step)) + 1)
+                            b_v = round(float(new_box['buy_volume']) / steps, 1)
+                            s_v = round(float(new_box['sell_volume']) / steps, 1)
+                            curr_p = p_max
+                            while curr_p >= p_min - 0.01:
+                                fp_levels.append({
+                                    'price': float(curr_p),
+                                    'buy_vol': b_v,
+                                    'sell_vol': s_v,
+                                    'delta': b_v - s_v
+                                })
+                                curr_p -= p_step
+                        state.chart_footprint[int(new_box['index'])] = fp_levels
+
                     state.log(f"[RENKO 10R] Box #{new_box['index']} {new_box['direction']} fechou em {new_box['close']:.1f} | Delta: {new_box['delta']:+.0f} | CVD: {state.current_cvd:+.0f}")
 
                 if signal and new_box:
@@ -780,6 +808,49 @@ def start_simulation(ativo: str = ATIVO_ALVO, velocidade: int = 10, data: str = 
 def get_chart_data():
     """Retorna dados de gráfico (OHLC range bars + footprint + renko 10R) para o frontend."""
     with state._chart_lock:
+        # Garante que cada barra OHLC tenha seus dados de footprint
+        p_step = 5.0
+        for bar in state.chart_ohlc:
+            b_id = int(bar['bar_id'])
+            if b_id not in state.chart_footprint or not state.chart_footprint[b_id]:
+                p_min = round(bar['low'] / p_step) * p_step
+                p_max = round(bar['high'] / p_step) * p_step
+                steps = max(1, int(round((p_max - p_min) / p_step)) + 1)
+                total_vol = bar.get('volume', 10.0)
+                delta = bar.get('delta', 0.0)
+                buy_vol = max(0.0, (total_vol + delta) / 2.0)
+                sell_vol = max(0.0, total_vol - buy_vol)
+                b_share = round(buy_vol / steps, 1)
+                s_share = round(sell_vol / steps, 1)
+
+                levels = []
+                curr_p = p_max
+                while curr_p >= p_min - 0.01:
+                    levels.append({
+                        'price': float(curr_p),
+                        'buy_vol': b_share,
+                        'sell_vol': s_share,
+                        'delta': b_share - s_share
+                    })
+                    curr_p -= p_step
+                state.chart_footprint[b_id] = levels
+
+        # Atualiza o footprint da barra atual em formação se houver
+        if state.renko_engine and state.renko_engine.current_box:
+            cbox = state.renko_engine.current_box
+            c_id = int(cbox.get('index', 0))
+            raw_levels = cbox.get('price_levels', {})
+            if raw_levels:
+                curr_levels = []
+                for p, v in sorted(raw_levels.items(), key=lambda x: x[0], reverse=True):
+                    curr_levels.append({
+                        'price': float(p),
+                        'buy_vol': float(v['buy_vol']),
+                        'sell_vol': float(v['sell_vol']),
+                        'delta': float(v['buy_vol'] - v['sell_vol'])
+                    })
+                state.chart_footprint[c_id] = curr_levels
+
         return {
             "ohlc": list(state.chart_ohlc),
             "footprint": {str(k): v for k, v in state.chart_footprint.items()},

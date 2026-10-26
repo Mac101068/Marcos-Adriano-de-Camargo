@@ -114,6 +114,10 @@ function initRangeChart() {
             timeVisible: false,
             secondsVisible: false,
             tickMarkFormatter: (time) => `#${time}`,
+            rightOffset: 2,
+            barSpacing: 13,
+            minBarSpacing: 4,
+            fixRightEdge: false,
         },
         handleScroll: { vertTouchDrag: false },
     });
@@ -136,11 +140,20 @@ function initRangeChart() {
         scaleMargins: { top: 0.85, bottom: 0 },
     });
 
-    // Click on chart to select a bar for footprint
+    // Hover or Click on chart to select a bar for footprint
     rangeChart.subscribeCrosshairMove((param) => {
-        if (!param.time) return;
+        if (!param || !param.time) return;
         const barId = param.time;
-        if (barId !== selectedBarId) {
+        if (barId !== selectedBarId && currentFootprint && currentFootprint[String(barId)]) {
+            selectedBarId = barId;
+            renderFootprintForBar(barId);
+        }
+    });
+
+    rangeChart.subscribeClick((param) => {
+        if (!param || !param.time) return;
+        const barId = param.time;
+        if (currentFootprint && currentFootprint[String(barId)]) {
             selectedBarId = barId;
             renderFootprintForBar(barId);
         }
@@ -189,8 +202,8 @@ function updateRangeChart(ohlcData) {
     // Update bar count badge
     document.getElementById('chart-bar-count').textContent = `${candles.length} BARRAS`;
 
-    // Auto-scroll to latest bar if new bars arrived
-    if (ohlcData.length !== lastOhlcLength) {
+    // Auto-scroll to latest bar if new bars arrived or first render
+    if (lastOhlcLength === 0 || ohlcData.length !== lastOhlcLength) {
         rangeChart.timeScale().scrollToRealTime();
         lastOhlcLength = ohlcData.length;
     }
@@ -424,11 +437,12 @@ function fetchChartData() {
             if (currentOhlc.length > 0) {
                 updateRangeChart(currentOhlc);
 
-                // Auto-select last bar if none selected
-                if (selectedBarId === null && currentOhlc.length > 0) {
+                // Auto-select last bar if none selected or if current selection is invalid
+                const hasValidSelection = selectedBarId !== null && currentFootprint && currentFootprint[String(selectedBarId)];
+                if (!hasValidSelection && currentOhlc.length > 0) {
                     selectedBarId = currentOhlc[currentOhlc.length - 1].bar_id;
                     renderFootprintForBar(selectedBarId);
-                } else if (selectedBarId !== null) {
+                } else if (hasValidSelection) {
                     // Refresh the current footprint view
                     renderFootprintForBar(selectedBarId);
                 }

@@ -294,7 +294,8 @@ class RenkoFlowEngine:
             "buy_volume": 0.0,
             "sell_volume": 0.0,
             "delta": 0.0,
-            "cvd_at_close": 0.0
+            "cvd_at_close": 0.0,
+            "price_levels": {}
         }
 
     def process_tick(self, price: float, volume: float, aggressor: str, timestamp: Any = None):
@@ -311,10 +312,22 @@ class RenkoFlowEngine:
 
         curr = self.current_box
         curr["ticks_count"] += 1
+        if "price_levels" not in curr:
+            curr["price_levels"] = {}
+
+        p_level = round(price / 5.0) * 5.0
+        if p_level not in curr["price_levels"]:
+            curr["price_levels"][p_level] = {"buy_vol": 0.0, "sell_vol": 0.0}
+
         if aggressor == "BUY":
             curr["buy_volume"] += volume
+            curr["price_levels"][p_level]["buy_vol"] += volume
         elif aggressor == "SELL":
             curr["sell_volume"] += volume
+            curr["price_levels"][p_level]["sell_vol"] += volume
+        else:
+            curr["price_levels"][p_level]["buy_vol"] += volume / 2.0
+            curr["price_levels"][p_level]["sell_vol"] += volume / 2.0
 
         curr["delta"] = curr["buy_volume"] - curr["sell_volume"]
         curr["high"] = max(curr["high"], price)
@@ -358,7 +371,8 @@ class RenkoFlowEngine:
                 "buy_volume": 0.0,
                 "sell_volume": 0.0,
                 "delta": 0.0,
-                "cvd_at_close": self.cvd
+                "cvd_at_close": self.cvd,
+                "price_levels": {}
             }
 
         return new_box, signal, reason
@@ -376,7 +390,8 @@ class RenkoFlowEngine:
             "sell_volume": curr["sell_volume"],
             "delta": curr["delta"],
             "cvd_at_close": self.cvd,
-            "timestamp": timestamp or datetime.now().strftime("%H:%M:%S")
+            "timestamp": timestamp or datetime.now().strftime("%H:%M:%S"),
+            "price_levels": curr.get("price_levels", {}).copy()
         }
 
     def check_convergence(self, box: Dict[str, Any], min_delta: float = MIN_DELTA_THRESHOLD) -> Tuple[Optional[str], str]:

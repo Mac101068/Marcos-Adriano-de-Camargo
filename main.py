@@ -154,6 +154,14 @@ async def get_deals_today():
         wins = 0
         losses = 0
 
+        # Calcula o offset de fuso horário entre o relógio local (Brasília) e o servidor da corretora MT5
+        now_local = datetime.now()
+        ref_tick = mt5.symbol_info_tick("WINZ26")
+        if ref_tick and ref_tick.time > 0:
+            offset_seconds = round((now_local.timestamp() - ref_tick.time) / 3600.0) * 3600
+        else:
+            offset_seconds = 3 * 3600  # Default 3 horas
+
         # Filtra saídas (entry == 1 ou entry == 2)
         for d in reversed(deals):
             if d.entry in [1, 2]:  # Saída ou Inversão
@@ -179,11 +187,13 @@ async def get_deals_today():
                 tipo_str = "COMPRA" if d.type == 0 else ("VENDA" if d.type == 1 else "SAÍDA")
                 pts = (profit / (0.20 * d.volume)) if d.volume > 0 else 0
 
+                deal_local_time = datetime.fromtimestamp(d.time + offset_seconds).strftime("%H:%M:%S")
+
                 deals_list.append({
                     "ticket": d.ticket,
                     "order": d.order,
                     "position_id": d.position_id,
-                    "time": datetime.fromtimestamp(d.time).strftime("%H:%M:%S"),
+                    "time": deal_local_time,
                     "symbol": d.symbol,
                     "type": tipo_str,
                     "volume": int(d.volume),
