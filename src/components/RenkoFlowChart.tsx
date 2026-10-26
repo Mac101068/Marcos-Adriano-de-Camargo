@@ -94,9 +94,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         return {
-          scaleX: Math.max(0.35, Math.min(3.5, Number(parsed.scaleX) || 1.0)),
-          scaleY: Math.max(0.25, Math.min(4.0, Number(parsed.scaleY) || 1.0)),
-          scaleFlow: Math.max(0.25, Math.min(4.0, Number(parsed.scaleFlow) || 1.0)),
+          scaleX: Math.max(0.5, Math.min(3.5, Number(parsed.scaleX) || 1.0)),
+          scaleY: Math.max(0.3, Math.min(4.0, Number(parsed.scaleY) || 1.0)),
+          scaleFlow: Math.max(0.3, Math.min(4.0, Number(parsed.scaleFlow) || 1.0)),
           flowPaneRatio: Math.max(0.2, Math.min(0.5, Number(parsed.flowPaneRatio) || 0.33)),
           flowPanOffset: Number(parsed.flowPanOffset) || 0,
         };
@@ -340,27 +340,34 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         : isMobile
         ? 12
         : 14;
-    const boxWidth = Math.max(4, Math.min(26, Math.round(baseBoxWidth * Math.sqrt(scaleX))));
+    const boxWidth = Math.max(5, Math.min(28, Math.round(baseBoxWidth * Math.sqrt(scaleX))));
 
-    // Posicionamento X com ajuste contínuo de escala horizontal
+    // Posicionamento X com ancoragem à direita e preenchimento harmônico do viewport
     const baseSpacingStep = isMobile ? 18 : 22;
-    const lastBoxX = chartWidth - effectiveRightMargin + scrollOffset * baseSpacingStep * scaleX;
+    // Garante que o scrollOffset nunca seja negativo (o que jogaria os blocos para a esquerda, deixando o lado direito vazio)
+    const effectiveScroll = Math.max(0, scrollOffset);
+
+    // Auto-fit adaptativo para preencher o canvas harmoniosamente quando há poucos blocos
+    const availableWidth = Math.max(100, chartWidth - effectiveRightMargin - (isMobile ? 16 : 30));
+    const autoFitStep =
+      displayedBoxes.length > 1
+        ? Math.min(isMobile ? 32 : 46, Math.max(baseSpacingStep, availableWidth / (displayedBoxes.length + 1)))
+        : baseSpacingStep;
+
+    const dynamicStep =
+      spacingMode === 'dynamic'
+        ? autoFitStep
+        : Math.max(16, availableWidth / Math.max(1, displayedBoxes.length));
+    const stepX = dynamicStep * scaleX;
+
+    const lastBoxX = chartWidth - effectiveRightMargin + effectiveScroll * stepX;
     const xs: number[] = new Array(displayedBoxes.length);
     let currX = lastBoxX;
 
     for (let i = displayedBoxes.length - 1; i >= 0; i--) {
       xs[i] = currX;
       if (i > 0) {
-        let step = baseSpacingStep;
-        if (spacingMode === 'dynamic') {
-          const recency = displayedBoxes.length - 1 - i;
-          const formationBonus = Math.max(0, (isMobile ? 10 : 15) - recency * 2.0);
-          const smallHistoryBonus = Math.max(0, (20 - displayedBoxes.length) * 0.8);
-          step = (isMobile ? 16 : 20) + formationBonus + smallHistoryBonus;
-        } else {
-          step = Math.max(16, (chartWidth - effectiveRightMargin) / Math.max(1, displayedBoxes.length));
-        }
-        currX -= step * scaleX;
+        currX -= stepX;
       }
     }
 
@@ -430,43 +437,46 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const visibleBoxes = displayedBoxes.filter((_, i) => xs[i] >= -40 && xs[i] <= chartWidth + 40);
     const boxesForScale = visibleBoxes.length > 0 ? visibleBoxes : displayedBoxes;
 
-    let minPrice = Infinity;
-    let maxPrice = -Infinity;
+    let boxMin = Infinity;
+    let boxMax = -Infinity;
     boxesForScale.forEach((b) => {
-      minPrice = Math.min(minPrice, b.low, b.open, b.close);
-      maxPrice = Math.max(maxPrice, b.high, b.open, b.close);
+      boxMin = Math.min(boxMin, b.low, b.open, b.close);
+      boxMax = Math.max(boxMax, b.high, b.open, b.close);
     });
 
+    if (!isFinite(boxMin) || !isFinite(boxMax) || boxMin >= boxMax) {
+      const fallbackCenter = currentPrice > 0 ? currentPrice : 128500;
+      boxMin = fallbackCenter - 100;
+      boxMax = fallbackCenter + 100;
+    }
+
+    let minPrice = boxMin;
+    let maxPrice = boxMax;
+
+    // Apenas expande a escala para ordens abertas se estiverem a até 350 pontos do preço atual,
+    // evitando que ordens antigas ou distantes esmaguem os boxes visíveis no canto do gráfico
+    const maxAllowedOrderDist = 350;
     openOrders.forEach((o) => {
       const isPending = o.status === 'PENDING_LIMIT';
       const effPrice = isPending && o.limitPrice ? o.limitPrice : o.entryPrice;
-      if (effPrice > 0) {
+      if (effPrice > 0 && Math.abs(effPrice - currentPrice) <= maxAllowedOrderDist) {
         minPrice = Math.min(minPrice, effPrice);
         maxPrice = Math.max(maxPrice, effPrice);
       }
-      // CRÍTICO: Ordens da estratégia de pirâmide não têm stop fixo (stopLoss = 0).
-      // Apenas consideramos stopLoss e takeProfit se forem estritamente maiores que zero!
-      if (o.stopLoss > 0) {
+      if (o.stopLoss > 0 && Math.abs(o.stopLoss - currentPrice) <= maxAllowedOrderDist) {
         minPrice = Math.min(minPrice, o.stopLoss);
       }
-      if (o.takeProfit > 0) {
+      if (o.takeProfit > 0 && Math.abs(o.takeProfit - currentPrice) <= maxAllowedOrderDist) {
         maxPrice = Math.max(maxPrice, o.takeProfit);
       }
-      if (enablePartialExit && !o.partialExecuted && o.contracts > 1 && !isPending && effPrice > 0) {
+      if (enablePartialExit && o.role !== 'MAIN' && o.role !== 'PYRAMID' && !o.partialExecuted && o.contracts > 1 && !isPending && effPrice > 0) {
         const pTarget = o.type === 'BUY' ? effPrice + partialPoints : effPrice - partialPoints;
-        if (pTarget > 0) {
+        if (pTarget > 0 && Math.abs(pTarget - currentPrice) <= maxAllowedOrderDist) {
           minPrice = Math.min(minPrice, pTarget);
           maxPrice = Math.max(maxPrice, pTarget);
         }
       }
     });
-
-    // Proteção contra valores nulos, infinitos ou escala corrompida
-    if (!isFinite(minPrice) || !isFinite(maxPrice) || minPrice >= maxPrice || minPrice <= 1000) {
-      const fallbackCenter = currentPrice > 0 ? currentPrice : 128500;
-      minPrice = fallbackCenter - 150;
-      maxPrice = fallbackCenter + 150;
-    }
 
     const priceRange = Math.max(50, maxPrice - minPrice);
     const pricePadding = scaleY === 1.0 ? Math.max(10, priceRange * 0.04) : Math.max(30, priceRange * 0.12);
@@ -602,23 +612,33 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // ESCALA E NÍVEIS DA JANELA DE FLUXO (EIXO LATERAL & GRADE ADAPTATIVA)
     // =======================================================================
     if (flowViewMode === 'heikin_ashi' || flowViewMode === 'hybrid') {
-      const haStep =
-        effectiveHaRange > 3000
-          ? 1000
-          : effectiveHaRange > 1600
-          ? 500
-          : effectiveHaRange > 700
-          ? 250
-          : effectiveHaRange > 300
-          ? 100
-          : 50;
+      const lastHa = flowHaData[flowHaData.length - 1];
+      const lastHaY = lastHa ? flowHaToY(lastHa.close) : null;
+
+      // Calcula haStep dinamicamente para garantir no máximo 1 linha a cada 24px de altura utilizável
+      const maxHaTicks = Math.max(2, Math.floor(usableFlowHeight / 24));
+      const rawHaStep = Math.max(50, effectiveHaRange / maxHaTicks);
+
+      // Arredonda para um passo limpo (50, 100, 250, 500, 1000, 2500, 5000, 10000, etc.)
+      const pow10 = Math.pow(10, Math.floor(Math.log10(rawHaStep)));
+      const rel = rawHaStep / pow10;
+      let stepFactor = 1;
+      if (rel > 5) stepFactor = 10;
+      else if (rel > 2.2) stepFactor = 5;
+      else if (rel > 1.2) stepFactor = 2.5;
+      const haStep = Math.max(50, Math.round(stepFactor * pow10));
 
       const startHaVal = Math.ceil(effectiveMinFlowHa / haStep) * haStep;
       ctx.font = isMobile ? '7.5px "JetBrains Mono", monospace' : '8.5px "JetBrains Mono", monospace';
 
+      let lastDrawnFlowY = -999;
       for (let v = startHaVal; v <= effectiveMaxFlowHa; v += haStep) {
         const y = flowHaToY(v);
         if (y >= pricePaneHeight + 14 && y <= height - 16) {
+          // Evita colisão vertical com rótulo anterior ou com o badge do último valor
+          if (Math.abs(y - lastDrawnFlowY) < 18) continue;
+          if (lastHaY !== null && Math.abs(y - lastHaY) < 14) continue;
+
           const isZero = Math.abs(v) < 1;
           ctx.strokeStyle = isZero ? '#334155' : 'rgba(30, 41, 59, 0.55)';
           ctx.setLineDash(isZero ? [4, 4] : [1, 4]);
@@ -633,13 +653,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           const sign = v > 0 ? '+' : '';
           const formatted = Math.abs(v) >= 1000 ? `${sign}${(v / 1000).toFixed(1)}k` : `${sign}${v}`;
           ctx.fillText(formatted, chartWidth + (isMobile ? 3 : 6), y + 3);
+          lastDrawnFlowY = y;
         }
       }
 
       // Badge com o valor do último candle Heikin-Ashi na régua lateral
-      const lastHa = flowHaData[flowHaData.length - 1];
-      if (lastHa) {
-        const lastHaY = flowHaToY(lastHa.close);
+      if (lastHa && lastHaY !== null) {
         if (lastHaY >= pricePaneHeight + 8 && lastHaY <= height - 12) {
           const badgeFill =
             lastHa.state === 'UP' ? '#059669' : lastHa.state === 'DOWN' ? '#dc2626' : '#475569';
@@ -737,33 +756,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     }
 
     // Título dos painéis
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = isMobile ? '9px "Plus Jakarta Sans", sans-serif' : '11px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(
-      isMobile
-        ? 'RENKO 10R · WIN$'
-        : `RENKO ATEMPORAL 10R (50 PONTOS) · ESCALA Y: ${Math.round(scaleY * 100)}% | X: ${Math.round(
-            scaleX * 100
-          )}%`,
-      8,
-      16
-    );
-
-    // Título do Painel de Fluxo dependente do modo e exibindo escala do fluxo
-    const flowTitle =
-      flowViewMode === 'heikin_ashi'
-        ? isMobile
-          ? `FLUXO HEIKIN-ASHI (${Math.round(scaleFlow * 100)}%)`
-          : `FLUXO HEIKIN-ASHI · ESCALA: ${Math.round(scaleFlow * 100)}% (🟢 SUBIDA · 🔴 DESCIDA · ⚪ REVERSÃO)`
-        : flowViewMode === 'hybrid'
-        ? isMobile
-          ? `FLUXO HÍBRIDO (${Math.round(scaleFlow * 100)}%)`
-          : `FLUXO HÍBRIDO: HEIKIN-ASHI & HISTOGRAMA DE DELTA · ESCALA: ${Math.round(scaleFlow * 100)}%`
-        : isMobile
-        ? `FLUXO · DELTA & CVD (${Math.round(scaleFlow * 100)}%)`
-        : `FLUXO ATEMPORAL · DELTA TICK-A-TICK & CVD · ESCALA: ${Math.round(scaleFlow * 100)}%`;
-    ctx.fillText(flowTitle, 8, pricePaneHeight + 14);
-
     // Salva posições dos boxes para hit-testing
     const boxPositions: { x: number; box: RenkoBox; index: number; haState?: 'UP' | 'DOWN' | 'REVERSAL' }[] = [];
 
@@ -788,6 +780,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // =======================================================================
     // DESENHO DOS TIJOLOS RENKO 10R (PAINEL SUPERIOR)
     // =======================================================================
+    let lastBuySignalX = -999;
+    let lastSellSignalX = -999;
+
     displayedBoxes.forEach((b, i) => {
       const centerX = xs[i];
       if (centerX < -30 || centerX > chartWidth + 30) return;
@@ -866,17 +861,51 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.stroke();
       }
 
-      // Sinais de Convergência no Gráfico de Preço
-      if (b.orderDispatched === 'BUY' || b.convergenceType === 'BUY_CONVERGENCE') {
+      // Sinais de Entrada e Convergência no Gráfico de Preço (sem poluição visual repetitiva)
+      const prevBox = i > 0 ? displayedBoxes[i - 1] : null;
+      const isFirstBuyConvergence =
+        b.convergenceType === 'BUY_CONVERGENCE' &&
+        (!prevBox || prevBox.convergenceType !== 'BUY_CONVERGENCE');
+      const isFirstSellConvergence =
+        b.convergenceType === 'SELL_CONVERGENCE' &&
+        (!prevBox || prevBox.convergenceType !== 'SELL_CONVERGENCE');
+
+      const shouldDrawBuy =
+        b.orderDispatched === 'BUY' ||
+        isFirstBuyConvergence ||
+        (b.convergenceType === 'BUY_CONVERGENCE' && centerX - lastBuySignalX >= 65);
+
+      const shouldDrawSell =
+        b.orderDispatched === 'SELL' ||
+        isFirstSellConvergence ||
+        (b.convergenceType === 'SELL_CONVERGENCE' && centerX - lastSellSignalX >= 65);
+
+      if (shouldDrawBuy) {
         ctx.fillStyle = '#10b981';
         ctx.font = isMobile ? 'bold 8.5px "Plus Jakarta Sans"' : 'bold 10px "Plus Jakarta Sans"';
         ctx.textAlign = 'center';
-        ctx.fillText(isMobile ? '▲ C' : '▲ COMPRA', centerX, lowY + (isMobile ? 12 : 16));
-      } else if (b.orderDispatched === 'SELL' || b.convergenceType === 'SELL_CONVERGENCE') {
+        const label = isMobile ? '▲ C' : b.orderDispatched === 'BUY' ? '▲ MÃE' : '▲ COMPRA';
+        ctx.fillText(label, centerX, lowY + (isMobile ? 12 : 16));
+        lastBuySignalX = centerX;
+      } else if (b.convergenceType === 'BUY_CONVERGENCE' && !isMobile && centerX - lastBuySignalX >= 22) {
+        ctx.fillStyle = '#059669';
+        ctx.font = '8px "Plus Jakarta Sans"';
+        ctx.textAlign = 'center';
+        ctx.fillText('▲', centerX, lowY + 11);
+      }
+
+      if (shouldDrawSell) {
         ctx.fillStyle = '#ef4444';
         ctx.font = isMobile ? 'bold 8.5px "Plus Jakarta Sans"' : 'bold 10px "Plus Jakarta Sans"';
         ctx.textAlign = 'center';
-        ctx.fillText(isMobile ? '▼ V' : '▼ VENDA', centerX, highY - (isMobile ? 6 : 10));
+        const label = isMobile ? '▼ V' : b.orderDispatched === 'SELL' ? '▼ MÃE' : '▼ VENDA';
+        ctx.fillText(label, centerX, highY - (isMobile ? 6 : 10));
+        lastSellSignalX = centerX;
+      } else if (b.convergenceType === 'SELL_CONVERGENCE' && !isMobile && centerX - lastSellSignalX >= 22) {
+        ctx.fillStyle = '#dc2626';
+        ctx.font = '8px "Plus Jakarta Sans"';
+        ctx.textAlign = 'center';
+        ctx.fillText('▼', centerX, highY - 5);
       }
 
       // =======================================================================
@@ -1038,12 +1067,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             : o.type === 'BUY'
             ? 'rgba(5, 150, 105, 0.92)'
             : 'rgba(220, 38, 38, 0.92)';
+          const tagLeftX = entryY <= 56 ? 245 : 8;
           ctx.beginPath();
-          ctx.roundRect(8, entryY - 8.5, leftTagWidth, 17, 3);
+          ctx.roundRect(tagLeftX, entryY - 8.5, leftTagWidth, 17, 3);
           ctx.fill();
           ctx.fillStyle = '#ffffff';
           ctx.textAlign = 'left';
-          ctx.fillText(leftTagText, 14, entryY + 3.5);
+          ctx.fillText(leftTagText, tagLeftX + 6, entryY + 3.5);
 
           // Badge no eixo Y lateral direito
           ctx.fillStyle = isPending
@@ -1072,8 +1102,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           );
         }
 
-        // 2. Linha de Saída Parcial (+50 pts)
-        if (enablePartialExit && o.role !== 'PYRAMID' && !o.partialExecuted && o.contracts > 1 && !isPending) {
+        // 2. Linha de Saída Parcial (+50 pts, apenas em estratégias clássicas, nunca na ordem mãe da pirâmide)
+        if (enablePartialExit && o.role !== 'MAIN' && o.role !== 'PYRAMID' && !o.partialExecuted && o.contracts > 1 && !isPending) {
           const partialTarget =
             o.type === 'BUY' ? o.entryPrice + partialPoints : o.entryPrice - partialPoints;
           const partialY = priceToY(partialTarget);
@@ -1093,13 +1123,14 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
             const parcTagWidth = ctx.measureText(parcTagText).width + 12;
 
+            const parcTagX = partialY <= 56 ? 245 : 8;
             ctx.fillStyle = 'rgba(6, 182, 212, 0.92)';
             ctx.beginPath();
-            ctx.roundRect(8, partialY - 8.5, parcTagWidth, 17, 3);
+            ctx.roundRect(parcTagX, partialY - 8.5, parcTagWidth, 17, 3);
             ctx.fill();
             ctx.fillStyle = '#083344';
             ctx.textAlign = 'left';
-            ctx.fillText(parcTagText, 14, partialY + 3.5);
+            ctx.fillText(parcTagText, parcTagX + 6, partialY + 3.5);
 
             // Badge no eixo Y
             ctx.fillStyle = '#0891b2';
@@ -1134,14 +1165,15 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               : `🛑 STOP LOSS (-${Math.abs(o.entryPrice - o.stopLoss)}p) @ ${o.stopLoss.toLocaleString('pt-BR')}`;
             ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
             const slTagWidth = ctx.measureText(slTagText).width + 12;
+            const slTagX = slY <= 56 ? 245 : 8;
 
             ctx.fillStyle = isProtected ? 'rgba(217, 119, 6, 0.92)' : 'rgba(220, 38, 38, 0.92)';
             ctx.beginPath();
-            ctx.roundRect(8, slY - 8.5, slTagWidth, 17, 3);
+            ctx.roundRect(slTagX, slY - 8.5, slTagWidth, 17, 3);
             ctx.fill();
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'left';
-            ctx.fillText(slTagText, 14, slY + 3.5);
+            ctx.fillText(slTagText, slTagX + 6, slY + 3.5);
 
             // Badge no eixo Y
             ctx.fillStyle = isProtected ? '#d97706' : '#dc2626';
@@ -1188,14 +1220,15 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               : `🏁 TAKE PROFIT (+${Math.abs(o.takeProfit - o.entryPrice)}p) @ ${o.takeProfit.toLocaleString('pt-BR')}`;
             ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
             const tpTagWidth = ctx.measureText(tpTagText).width + 12;
+            const tpTagX = tpY <= 56 ? 245 : 8;
 
             ctx.fillStyle = o.role === 'PYRAMID' ? 'rgba(14, 165, 233, 0.95)' : 'rgba(5, 150, 105, 0.92)';
             ctx.beginPath();
-            ctx.roundRect(8, tpY - 8.5, tpTagWidth, 17, 3);
+            ctx.roundRect(tpTagX, tpY - 8.5, tpTagWidth, 17, 3);
             ctx.fill();
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'left';
-            ctx.fillText(tpTagText, 14, tpY + 3.5);
+            ctx.fillText(tpTagText, tpTagX + 6, tpY + 3.5);
 
             // Badge no eixo Y
             ctx.fillStyle = o.role === 'PYRAMID' ? '#0284c7' : '#059669';
@@ -1432,12 +1465,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       } else if (dragMode === 'X_AXIS') {
         const deltaX = e.clientX - dragStartX;
         const factor = Math.exp(deltaX * 0.006);
-        const newScaleX = Math.max(0.35, Math.min(3.5, dragStartScaleX * factor));
+        const newScaleX = Math.max(0.5, Math.min(3.5, dragStartScaleX * factor));
         setScaleX(newScaleX);
       } else if (dragMode === 'CHART') {
         const deltaX = e.clientX - dragStartX;
         const offsetDelta = deltaX / (22 * scaleX);
-        setScrollOffset(dragStartScroll + offsetDelta);
+        const maxScroll = Math.max(0, allBoxes.length - 2);
+        setScrollOffset(Math.max(0, Math.min(maxScroll, dragStartScroll + offsetDelta)));
 
         if (e.shiftKey) {
           const deltaY = e.clientY - dragStartY;
@@ -1526,18 +1560,18 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }
     } else if (e.shiftKey) {
       // Shift + roda: pan horizontal
-      setScrollOffset((prev) => prev - (e.deltaY > 0 ? 2 : -2));
+      setScrollOffset((prev) => Math.max(0, prev - (e.deltaY > 0 ? 2 : -2)));
     } else if (e.ctrlKey) {
       // Ctrl + roda: zoom fino na escala X
       const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
-      setScaleX((prev) => Math.max(0.35, Math.min(3.5, prev * zoomFactor)));
+      setScaleX((prev) => Math.max(0.5, Math.min(3.5, prev * zoomFactor)));
     } else {
       // Roda normal no gráfico: ajusta zoom horizontal e densidade dos blocos
       if (e.deltaY < 0) {
         setScaleX((prev) => Math.min(3.5, prev * 1.05));
         setVisibleCount((prev) => Math.max(14, prev - 2));
       } else {
-        setScaleX((prev) => Math.max(0.35, prev * 0.95));
+        setScaleX((prev) => Math.max(0.5, prev * 0.95));
         setVisibleCount((prev) => Math.min(100, prev + 2));
       }
     }
@@ -1586,7 +1620,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const touch = e.touches[0];
       const deltaX = touch.clientX - touchStartRef.current.x;
       const offsetDelta = deltaX / (20 * scaleX);
-      setScrollOffset(touchStartRef.current.scroll + offsetDelta);
+      const maxScroll = Math.max(0, allBoxes.length - 2);
+      setScrollOffset(Math.max(0, Math.min(maxScroll, touchStartRef.current.scroll + offsetDelta)));
 
       const rect = e.currentTarget.getBoundingClientRect();
       const x = touch.clientX - rect.left;
@@ -1869,7 +1904,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           >
             <span className="text-[10px] font-bold text-slate-500 mr-0.5">X</span>
             <button
-              onClick={() => setScaleX((prev) => Math.max(0.35, Number((prev - 0.15).toFixed(2))))}
+              onClick={() => setScaleX((prev) => Math.max(0.5, Number((prev - 0.15).toFixed(2))))}
               className="px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
               title="Comprimir Escala X (boxes mais compactos)"
             >
@@ -2422,7 +2457,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 setScaleFlow(1.0);
                 setFlowPanOffset(0);
               }}
-              className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9.5px] cursor-pointer"
+              className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9.5px] cursor-pointer shrink-0 whitespace-nowrap"
               title="Clique para resetar escala do fluxo para 100%"
             >
               <span>Escala Fluxo:</span>
@@ -2431,14 +2466,14 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           </div>
         </div>
 
-        <div className="text-slate-500 text-[9px] sm:text-[10px] shrink-0 flex items-center gap-2">
-          <span className="hidden lg:inline">
-            💡 Arraste a régua lateral para esticar Preço/Fluxo · Arraste o divisor para redimensionar a janela · Duplo clique para auto-escala
+        <div className="text-slate-500 text-[9px] sm:text-[10px] min-w-0 truncate flex items-center justify-end gap-2 pl-2">
+          <span className="hidden lg:inline truncate">
+            💡 Arraste régua lateral para esticar Preço/Fluxo · Divisor para altura · Duplo clique para auto-escala
           </span>
-          <span className="hidden sm:inline lg:hidden">
-            💡 Arraste réguas laterais para zoom Y/Fluxo · Arraste divisor para altura
+          <span className="hidden sm:inline lg:hidden truncate">
+            💡 Arraste réguas para zoom Y/Fluxo · Divisor para altura
           </span>
-          <span className="sm:hidden">Arraste réguas para zoom Y/Fluxo</span>
+          <span className="sm:hidden truncate">Arraste réguas para zoom</span>
         </div>
       </div>
     </div>

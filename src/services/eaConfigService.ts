@@ -1,49 +1,49 @@
 import { AutomationConfig, ConfigPreset } from '../types/trading';
 
-const STORAGE_KEY_CONFIG = 'fluxo_renko_ea_config_v2';
-const STORAGE_KEY_PROFILES = 'fluxo_renko_ea_profiles_v2';
+const STORAGE_KEY_CONFIG = 'fluxo_renko_ea_config_v3';
+const STORAGE_KEY_PROFILES = 'fluxo_renko_ea_profiles_v3';
 
 export const DEFAULT_EA_CONFIG: AutomationConfig = {
   active: true,
   symbol: 'WIN$N',
   boxPoints: 50, // 10R no Mini-Índice
-  contracts: 2,
-  minDeltaThreshold: 250, // Delta mínimo de agressão líquida
-  requireCvdNewExtreme: true,
+  contracts: 1, // 1 contrato padrão na Ordem Mãe
+  minDeltaThreshold: 100, // Delta mínimo de agressão líquida
+  requireCvdNewExtreme: false,
   confirmationMode: 'BOX_CLOSE',
-  stopLossPoints: 100, // 2 boxes = 100 pts
-  takeProfitPoints: 150, // 3 boxes = 150 pts
-  enablePartialExit: true, // Realização parcial habilitada
-  partialPoints: 50, // 1 box 10R a favor (50 pts)
-  partialContracts: 1, // Realiza 1 contrato
-  moveStopToBreakevenOnPartial: true, // Move SL para o Breakeven ao bater a parcial
-  breakevenOffsetPoints: 5, // +5 pts para cobrir emolumentos da B3
-  trailingStop: true, // Trailing stop dinâmico ativo
-  trailingActivationPoints: 60, // Ativa trailing a partir de 60 pts
-  trailingDistancePoints: 50, // Mantém Stop a 50 pts atrás da máxima/mínima
-  maxDailyLoss: 500,
-  maxDailyProfit: 1000,
-  maxDailyTrades: 10,
+  stopLossPoints: 0, // Sem Stop Loss fixo (zeragem pela virada do fluxo)
+  takeProfitPoints: 0, // Sem TP fixo na mãe (surfe contínuo)
+  enablePartialExit: false, // Desabilitado na pirâmide
+  partialPoints: 50,
+  partialContracts: 1,
+  moveStopToBreakevenOnPartial: false,
+  breakevenOffsetPoints: 5,
+  trailingStop: false,
+  trailingActivationPoints: 60,
+  trailingDistancePoints: 50,
+  maxDailyLoss: 1000,
+  maxDailyProfit: 2500,
+  maxDailyTrades: 0, // 0 = sem limite para permitir piramidação contínua a cada box
   mt5Host: 'localhost',
   mt5Port: 8765,
   dataSourceMode: 'SIMULATION',
   accountMode: 'HEDGE',
-  maxSimultaneousPositions: 2,
-  hedgeOppositeAction: 'ALLOW_SIMULTANEOUS',
+  maxSimultaneousPositions: 15,
+  hedgeOppositeAction: 'CLOSE_OPPOSITE', // Zera imediatamente o lado oposto na virada
   orderFillingMode: 'ORDER_FILLING_RETURN',
   magicNumber: 102030,
-  orderComment: 'Renko10R_Flow',
-  entryTriggerType: 'PULLBACK_ENTRY',
+  orderComment: 'Pyramid10R_Flow',
+  entryTriggerType: 'MARKET_ON_CLOSE',
   pullbackTarget: 'BOX_OPEN',
   pullbackCustomPoints: 25,
   pullbackMaxBoxesWait: 2,
-  tradingHoursEnabled: true,
+  tradingHoursEnabled: false,
   tradingStartTime: '09:05',
   tradingStopEntriesTime: '17:00',
   tradingCloseAllTime: '17:45',
   strategyMode: 'PYRAMID_FLOW_CONFLUENCE',
-  pyramidTpPoints: 50,
-  pyramidContracts: 1,
+  pyramidTpPoints: 50, // TP de 50 pontos para as ordens da pirâmide
+  pyramidContracts: 1, // 1 contrato por pirâmide
   holdMainUntilFlip: true,
   closeAllOnFlowFlip: true,
   noFixedStopLoss: true,
@@ -186,16 +186,18 @@ export class EaConfigService {
       const saved = localStorage.getItem(STORAGE_KEY_CONFIG);
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Garante que campos novos sempre recebam os valores de fallback
+        const stratMode = parsed.strategyMode || DEFAULT_EA_CONFIG.strategyMode;
         return {
           ...DEFAULT_EA_CONFIG,
           ...parsed,
-          strategyMode: parsed.strategyMode || DEFAULT_EA_CONFIG.strategyMode,
+          strategyMode: stratMode,
+          contracts: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? (parsed.contracts || 1) : (parsed.contracts || 2),
           pyramidTpPoints: parsed.pyramidTpPoints ?? DEFAULT_EA_CONFIG.pyramidTpPoints,
           pyramidContracts: parsed.pyramidContracts ?? DEFAULT_EA_CONFIG.pyramidContracts,
           holdMainUntilFlip: parsed.holdMainUntilFlip ?? DEFAULT_EA_CONFIG.holdMainUntilFlip,
           closeAllOnFlowFlip: parsed.closeAllOnFlowFlip ?? DEFAULT_EA_CONFIG.closeAllOnFlowFlip,
           noFixedStopLoss: parsed.noFixedStopLoss ?? DEFAULT_EA_CONFIG.noFixedStopLoss,
+          enablePartialExit: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? false : (parsed.enablePartialExit ?? true),
           lastSavedTimestamp: parsed.lastSavedTimestamp || Date.now(),
         };
       }

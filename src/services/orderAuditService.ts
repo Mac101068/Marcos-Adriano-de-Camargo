@@ -1,6 +1,6 @@
 import { TradeOrder, OrderAuditEvent, IntradayAuditSummary } from '../types/trading';
 
-const AUDIT_STORAGE_KEY = 'fluxo_renko_intraday_audit_v1';
+const AUDIT_STORAGE_KEY = 'fluxo_renko_intraday_audit_v3';
 
 export class OrderAuditService {
   /**
@@ -46,7 +46,21 @@ export class OrderAuditService {
     try {
       const raw = localStorage.getItem(AUDIT_STORAGE_KEY);
       if (raw) {
-        return JSON.parse(raw) as TradeOrder[];
+        const parsed = JSON.parse(raw) as TradeOrder[];
+        if (Array.isArray(parsed)) {
+          // Sanitiza ordens abertas muito distantes (> 400 pts do baseline 128.500)
+          return parsed.map((o) => {
+            if (o.status === 'OPEN' && Math.abs(o.entryPrice - 128500) > 400) {
+              return {
+                ...o,
+                status: 'CLOSED_MANUAL' as const,
+                exitPrice: o.entryPrice,
+                exitReason: 'MANUAL' as const,
+              };
+            }
+            return o;
+          });
+        }
       }
     } catch {
       // Fallback

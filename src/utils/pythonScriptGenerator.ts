@@ -197,6 +197,12 @@ class RenkoFlowEngine:
         delta = box["delta"]
         direction = box["direction"]
 
+        if STRATEGY_MODE == "PYRAMID_FLOW_CONFLUENCE":
+            if direction == "UP":
+                return "BUY", f"Pirâmide Confluência Alta: Bloco Verde #{box['index']}"
+            elif direction == "DOWN":
+                return "SELL", f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']}"
+
         if direction == "UP" and delta >= MIN_DELTA_THRESHOLD:
             reason = f"Convergência COMPRA: Box 10R Alta + Delta +{delta} ctros"
             return "BUY", reason

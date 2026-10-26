@@ -39,7 +39,11 @@ export default function App() {
     const saved = OrderAuditService.loadIntradayOrders();
     // Se já existem ordens salvas e alguma delas é da estratégia de pirâmide, preserva
     if (saved && saved.length > 0 && saved.some((o) => o.role === 'PYRAMID' || o.role === 'MAIN')) {
-      return saved;
+      // Descarta se houver ordens abertas presas em preços bizarros (> 350 pts do baseline inicial 128.500)
+      const hasStale = saved.some((o) => o.status === 'OPEN' && Math.abs(o.entryPrice - 128500) > 350);
+      if (!hasStale) {
+        return saved;
+      }
     }
 
     const defaultPyramidOrders: TradeOrder[] = [
@@ -352,95 +356,94 @@ export default function App() {
       if (result.newBoxClosed && result.closedBox) {
         setBoxes([...engine.getBoxes()]);
 
-          // Se gerou sinal de convergência e o robô está ativo
-          if (result.signal && config.active && result.closedBox) {
-            // Checa trava de quantidade máxima de trades no dia
-            if (config.maxDailyTrades && orders.length >= config.maxDailyTrades) {
-              return;
-            }
+        // Se gerou sinal de fechamento de box
+        if (result.signal && result.closedBox) {
+          const signalType = result.signal; // 'BUY' (bloco verde) ou 'SELL' (bloco vermelho)
+          const oppositeType = signalType === 'BUY' ? 'SELL' : 'BUY';
 
-            // Checa janela de horários configurada pelo operador
-            if (config.tradingHoursEnabled) {
-              const nowHM = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-              if (nowHM < config.tradingStartTime || nowHM >= config.tradingStopEntriesTime) {
-                return;
-              }
-            }
+          // =========================================================================
+          // ESTRATÉGIA 1: PIRÂMIDE COM CONFLUÊNCIA DE FLUXO & RENKO 10R
+          // (Compre no fechamento de cada bloco verde com TP de 50p, mantendo a principal
+          // aberta até a virada de fluxo. Zeragem total por inversão sem SL fixo).
+          // =========================================================================
+          if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
+            setOrders((prev) => {
+              let updatedPrev = [...prev];
 
-            const signalType = result.signal;
-            // =========================================================================
-            // ESTRATÉGIA 1: PIRÂMIDE COM CONFLUÊNCIA DE FLUXO & RENKO 10R
-            // (Compre no fechamento de cada bloco verde com TP de 50p, mantendo a principal
-            // aberta até a virada de fluxo. Zeragem total por inversão sem SL fixo).
-            // =========================================================================
-            if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
-              const signalType = result.signal; // 'BUY' (bloco verde) ou 'SELL' (bloco vermelho)
-              const oppositeType = signalType === 'BUY' ? 'SELL' : 'BUY';
+              // 1. SAÍDA COMPULSÓRIA POR INVERSÃO DE MERCADO:
+              // Se o fluxo virou de VENDA para COMPRA (ou vice-versa),
+              // encerra a entrada principal oposta e qualquer ordem da pirâmide oposta ainda aberta.
+              // Isso ocorre incondicionalmente para proteger o capital!
+              const hasOppositeOpen = updatedPrev.some(
+                (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType
+              );
 
-              setOrders((prev) => {
-                let updatedPrev = [...prev];
+              if (hasOppositeOpen) {
+                let totalClosedPnL = 0;
+                updatedPrev = updatedPrev.map((o) => {
+                  if ((o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType) {
+                    const pts = o.type === 'BUY' ? tick.price - o.entryPrice : o.entryPrice - tick.price;
+                    const activeCtros = o.remainingContracts || o.contracts;
+                    const fin = pts * 0.2 * activeCtros + (o.partialFinancial || 0);
+                    totalClosedPnL += fin;
 
-                // 1. SAÍDA COMPULSÓRIA POR INVERSÃO DE MERCADO:
-                // Se o fluxo virou de VENDA para COMPRA (ou vice-versa),
-                // encerra a entrada principal oposta e qualquer ordem da pirâmide oposta ainda aberta.
-                const hasOppositeOpen = updatedPrev.some(
-                  (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType
-                );
+                    const flipEvt = OrderAuditService.createEvent(
+                      'FLIP_REVERSAL_CLOSED',
+                      `Zeragem por Inversão de Mercado (${oppositeType} ➔ ${signalType})`,
+                      `Virada do fluxo para ${signalType === 'BUY' ? 'ALTA (Bloco Verde)' : 'BAIXA (Bloco Vermelho)'}. Posição ${
+                        o.role === 'MAIN' ? 'Principal (Surfe)' : `Pirâmide #${o.pyramidLevel || 1}`
+                      } liquidada a mercado a ${tick.price} pts. Resultado: ${pts >= 0 ? '+' : ''}${pts} pts (R$ ${fin.toFixed(2)}).`,
+                      tick.price,
+                      activeCtros
+                    );
 
-                if (hasOppositeOpen) {
-                  let totalClosedPnL = 0;
-                  updatedPrev = updatedPrev.map((o) => {
-                    if ((o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType) {
-                      const pts = o.type === 'BUY' ? tick.price - o.entryPrice : o.entryPrice - tick.price;
-                      const activeCtros = o.remainingContracts || o.contracts;
-                      const fin = pts * 0.2 * activeCtros + (o.partialFinancial || 0);
-                      totalClosedPnL += fin;
-
-                      const flipEvt = OrderAuditService.createEvent(
-                        'FLIP_REVERSAL_CLOSED',
-                        `Zeragem por Inversão de Mercado (${oppositeType} ➔ ${signalType})`,
-                        `Virada do fluxo para ${signalType === 'BUY' ? 'ALTA (Bloco Verde)' : 'BAIXA (Bloco Vermelho)'}. Posição ${
-                          o.role === 'MAIN' ? 'Principal (Surfe)' : `Pirâmide #${o.pyramidLevel || 1}`
-                        } liquidada a mercado a ${tick.price} pts. Resultado: ${pts >= 0 ? '+' : ''}${pts} pts (R$ ${fin.toFixed(2)}).`,
-                        tick.price,
-                        activeCtros
-                      );
-
-                      return {
-                        ...o,
-                        status: 'CLOSED_MANUAL' as const,
-                        exitPrice: tick.price,
-                        exitTimestamp: Date.now(),
-                        exitTimeStr: new Date().toTimeString().split(' ')[0],
-                        exitReason: 'FLIP_REVERSAL' as const,
-                        pointsResult: pts,
-                        financialResult: fin,
-                        auditTrail: o.auditTrail ? [...o.auditTrail, flipEvt] : [flipEvt],
-                      };
-                    }
-                    return o;
-                  });
-
-                  setLatestToast({
-                    id: `flip-toast-${Date.now()}`,
-                    type: signalType,
-                    title: `🔄 INVERSÃO DE MERCADO: POSIÇÕES ANTERIORES ZERADAS!`,
-                    description: `Virada do fluxo para ${signalType === 'BUY' ? 'ALTA' : 'BAIXA'}. Entrada mãe e ordens da pirâmide encerradas (R$ ${totalClosedPnL.toFixed(2)}).`,
-                    timestamp: Date.now(),
-                  });
-
-                  if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                    wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS' }));
+                    return {
+                      ...o,
+                      status: fin >= 0 ? ('CLOSED_PROFIT' as const) : ('CLOSED_LOSS' as const),
+                      exitPrice: tick.price,
+                      exitTimestamp: Date.now(),
+                      exitTimeStr: new Date().toTimeString().split(' ')[0],
+                      exitReason: 'FLIP_REVERSAL' as const,
+                      pointsResult: pts,
+                      financialResult: fin,
+                      auditTrail: o.auditTrail ? [...o.auditTrail, flipEvt] : [flipEvt],
+                    };
                   }
-                }
+                  return o;
+                });
 
-                // 2. DISPARO NA DIREÇÃO ATUAL:
-                // Se não há ordem MAIN aberta nesta direção: cria a Entrada Principal (Surfe sem TP/SL fixo)
-                // Se já há ordem MAIN aberta nesta direção: cria uma nova Ordem da Pirâmide com TP de 50 pts!
-                const openSameSide = updatedPrev.filter(
-                  (o) => o.status === 'OPEN' && o.type === signalType
-                );
-                const hasMainOrder = openSameSide.some((o) => o.role === 'MAIN');
+                setLatestToast({
+                  id: `flip-toast-${Date.now()}`,
+                  type: signalType,
+                  title: `🔄 INVERSÃO DE MERCADO: POSIÇÕES ANTERIORES ZERADAS!`,
+                  description: `Virada do fluxo para ${signalType === 'BUY' ? 'ALTA' : 'BAIXA'}. Entrada mãe e ordens da pirâmide encerradas (R$ ${totalClosedPnL.toFixed(2)}).`,
+                  timestamp: Date.now(),
+                });
+
+                if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS' }));
+                }
+              }
+
+              // 2. DISPARO NA DIREÇÃO ATUAL:
+              // Apenas se o robô estiver ativo e dentro do horário configurado
+              if (!config.active) {
+                return updatedPrev;
+              }
+
+              if (config.tradingHoursEnabled) {
+                const nowHM = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                if (nowHM < config.tradingStartTime || nowHM >= config.tradingStopEntriesTime) {
+                  return updatedPrev;
+                }
+              }
+
+              // Se não há ordem MAIN aberta nesta direção: cria a Entrada Principal (Surfe sem TP/SL fixo)
+              // Se já há ordem MAIN aberta nesta direção: cria uma nova Ordem da Pirâmide com TP de 50 pts!
+              const openSameSide = updatedPrev.filter(
+                (o) => o.status === 'OPEN' && o.type === signalType
+              );
+              const hasMainOrder = openSameSide.some((o) => o.role === 'MAIN');
 
                 let newOrder: TradeOrder;
 
@@ -1590,7 +1593,7 @@ export default function App() {
           )}
 
           <div className="flex items-center gap-1.5 sm:gap-2">
-            <span className="text-slate-400 text-[10px] sm:text-xs">PnL:</span>
+            <span className="text-slate-400 text-[10px] sm:text-xs">PnL Fechado:</span>
             <span
               className={`font-bold ${
                 stats.netFinancial >= 0 ? 'text-emerald-400' : 'text-rose-400'
