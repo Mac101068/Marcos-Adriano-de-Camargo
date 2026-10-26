@@ -453,7 +453,12 @@ function updateStatus() {
             const badgeMt5Text = document.getElementById('badge-mt5-text');
             const badgeMode = document.getElementById('badge-mode');
             const badgeModeText = document.getElementById('badge-mode-text');
+            const badgeRenkoText = document.getElementById('badge-renko-text');
             const btnConnect = document.getElementById('btn-connect');
+
+            if (data.renko_r && badgeRenkoText) {
+                badgeRenkoText.textContent = `${data.renko_r}R (${data.renko_box_pts}p)`;
+            }
 
             // MT5 Connection
             if (data.mt5_connected) {
@@ -626,15 +631,45 @@ function updateStatus() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SPEED PILLS & SIMULATION STATE
+// SPEED PILLS & RENKO PILLS
 // ═══════════════════════════════════════════════════════════════
 let selectedSpeed = 10;
+let selectedRenkoR = 10;
+let selectedRenkoPts = 50;
 
-document.querySelectorAll('.speed-pill').forEach(pill => {
+document.querySelectorAll('.speed-pill:not(.renko-pill)').forEach(pill => {
     pill.addEventListener('click', () => {
-        document.querySelectorAll('.speed-pill').forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.speed-pill:not(.renko-pill)').forEach(p => p.classList.remove('active'));
         pill.classList.add('active');
         selectedSpeed = parseInt(pill.dataset.speed, 10);
+    });
+});
+
+document.querySelectorAll('.renko-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+        document.querySelectorAll('.renko-pill').forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        selectedRenkoR = parseInt(pill.dataset.renko, 10);
+        selectedRenkoPts = parseInt(pill.dataset.pts, 10);
+
+        const badgeRenko = document.getElementById('badge-renko-text');
+        if (badgeRenko) {
+            badgeRenko.textContent = `${selectedRenkoR}R (${selectedRenkoPts}p)`;
+        }
+
+        fetch('/api/renko/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ renko_r: selectedRenkoR, box_points: selectedRenkoPts })
+        })
+            .then(res => res.json())
+            .then(data => {
+                showToast(data.message, data.success ? 'success' : 'error');
+                updateStatus();
+            })
+            .catch(err => {
+                console.error('Erro ao ajustar Renko:', err);
+            });
     });
 });
 
@@ -702,7 +737,11 @@ document.getElementById('btn-start').addEventListener('click', () => {
     fetch('/api/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ativo: ativo })
+        body: JSON.stringify({
+            ativo: ativo,
+            renko_r: selectedRenkoR,
+            box_points: selectedRenkoPts
+        })
     })
         .then(response => response.json())
         .then(data => {

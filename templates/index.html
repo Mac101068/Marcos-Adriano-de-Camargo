@@ -40,6 +40,10 @@
                     <span class="badge-dot"></span>
                     <span id="badge-mt5-text">MT5: DESCONECTADO</span>
                 </div>
+                <div class="badge" id="badge-renko" style="border-color: rgba(24, 255, 255, 0.3);">
+                    <i class="bi bi-grid-3x3" style="font-size: 0.75rem; color: var(--cyan);"></i>
+                    <span id="badge-renko-text" style="color: var(--cyan); font-weight: 700;">10R (50p)</span>
+                </div>
                 <div class="badge">
                     <i class="bi bi-clock" style="font-size: 0.75rem; color: var(--text-muted);"></i>
                     <span id="current-time" style="font-family: 'JetBrains Mono', monospace;">--:--:--</span>
@@ -112,6 +116,15 @@
                                 <label class="form-label" for="input-ativo">Ativo B3</label>
                                 <input type="text" id="input-ativo" class="form-input" value="WINZ26" maxlength="10"
                                     placeholder="Ex: WINZ26">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Tamanho do Renko (Box)</label>
+                                <div class="sim-speed-pills" id="renko-pills">
+                                    <button type="button" class="speed-pill renko-pill active" data-renko="10" data-pts="50">10R (50p)</button>
+                                    <button type="button" class="speed-pill renko-pill" data-renko="15" data-pts="75">15R (75p)</button>
+                                    <button type="button" class="speed-pill renko-pill" data-renko="20" data-pts="100">20R (100p)</button>
+                                    <button type="button" class="speed-pill renko-pill" data-renko="25" data-pts="125">25R (125p)</button>
+                                </div>
                             </div>
                             <div class="btn-group">
                                 <button class="btn btn-connect" id="btn-connect">

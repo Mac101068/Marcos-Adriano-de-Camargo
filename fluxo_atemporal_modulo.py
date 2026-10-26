@@ -256,10 +256,12 @@ def get_filling_mode_b3(ativo: str) -> int:
     """Detecta modo de preenchimento suportado pela corretora na B3."""
     sym_info = mt5.symbol_info(ativo)
     if sym_info is None:
+        return mt5.ORDER_FILLING_RETURN
+    fill = sym_info.filling_mode
+    # bit 1 (2) = IOC, bit 0 (1) = FOK, bit 2 (4) = RETURN
+    if fill & 2:
         return mt5.ORDER_FILLING_IOC
-    if sym_info.filling_mode & mt5.SYMBOL_FILLING_IOC:
-        return mt5.ORDER_FILLING_IOC
-    elif sym_info.filling_mode & mt5.SYMBOL_FILLING_FOK:
+    elif fill & 1:
         return mt5.ORDER_FILLING_FOK
     return mt5.ORDER_FILLING_RETURN
 

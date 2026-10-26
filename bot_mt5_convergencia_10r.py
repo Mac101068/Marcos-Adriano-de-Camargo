@@ -35,9 +35,19 @@ SYMBOL = "WINZ26"
 MAGIC_NUMBER = 101010
 ORDER_COMMENT = "Renko10R_Flow"
 
-# ESTRATÉGIA PIRÂMIDE & CONFLUÊNCIA
-BOX_POINTS = 50                 # 10R = 50 pontos no Mini-Índice
-PYRAMID_TP_POINTS = 50          # TP de cada ordem da pirâmide (+50 pts)
+# ==============================================================================
+# CONFIGURAÇÃO DE RENKO DINÂMICO (10R, 15R, 20R, etc.)
+# ==============================================================================
+# No Mini-Índice B3 (WIN): 1R = 5 pontos.
+# Exemplos:
+#   10R = 50 pontos  (Scalp rápido, mais caixas)
+#   15R = 75 pontos  (Tendência média, bom equilíbrio)
+#   20R = 100 pontos (Tendência longa, menos ruído)
+#   25R = 125 pontos (Filtro anti-ruído)
+# ==============================================================================
+RENKO_R = 10                     # Valor R do Renko (10, 15, 20, etc.)
+BOX_POINTS = RENKO_R * 5         # Calculado automaticamente a partir do R
+PYRAMID_TP_POINTS = BOX_POINTS   # Alvo de cada pirâmide (+1 box do Renko selecionado)
 PYRAMID_CONTRACTS = 1.0         # Lote das ordens de pirâmide
 MAIN_CONTRACTS = 1.0            # Lote da ordem mãe de surfe
 MAX_POSITIONS = 5               # Limite máximo de ordens simultâneas
@@ -59,7 +69,7 @@ ORDER_MANAGER = None
 
 
 # ==============================================================================
-# MOTOR RENKO 10R E FLUXO ATEMPORAL (DELTA E CVD)
+# MOTOR RENKO E FLUXO ATEMPORAL (DELTA E CVD)
 # ==============================================================================
 class RenkoFlowEngine:
     def __init__(self, box_points=50):
@@ -67,6 +77,11 @@ class RenkoFlowEngine:
         self.boxes = []
         self.current_box = None
         self.cvd = 0.0
+
+    def set_box_points(self, points):
+        old_points = self.box_points
+        self.box_points = int(points)
+        print(f"🔄 [MOTOR RENKO] Tamanho do box alterado de {old_points}p para {self.box_points}p ({self.box_points // 5}R)")
 
     def init_engine(self, initial_price, timestamp):
         base_price = round(initial_price / 5.0) * 5.0
@@ -359,6 +374,7 @@ class MT5OrderManager:
 # WEBSOCKET SERVER & STREAM EM TEMPO REAL
 # ==============================================================================
 async def ws_handler(websocket):
+    global RENKO_R, BOX_POINTS, PYRAMID_TP_POINTS
     CONNECTED_CLIENTS.add(websocket)
     try:
         acc = mt5.account_info()
@@ -384,6 +400,9 @@ async def ws_handler(websocket):
                 "bid": tick.bid if tick else current_price,
                 "ask": tick.ask if tick else current_price,
                 "cvd": RENKO_ENGINE.cvd if RENKO_ENGINE else 0.0,
+                "renko_r": RENKO_R,
+                "box_points": BOX_POINTS,
+                "pyramid_tp": PYRAMID_TP_POINTS,
                 "boxes": RENKO_ENGINE.boxes[-50:] if (RENKO_ENGINE and RENKO_ENGINE.boxes) else [],
                 "currentBox": RENKO_ENGINE.current_box if RENKO_ENGINE else None,
             }
@@ -403,6 +422,26 @@ async def ws_handler(websocket):
                 )
             elif action == "CLOSE_POSITIONS":
                 ORDER_MANAGER.close_all_positions()
+            elif action == "SET_RENKO_CONFIG":
+                if "renko_r" in data:
+                    RENKO_R = int(data["renko_r"])
+                    BOX_POINTS = RENKO_R * 5
+                elif "box_points" in data:
+                    BOX_POINTS = int(data["box_points"])
+                    RENKO_R = max(1, BOX_POINTS // 5)
+                
+                PYRAMID_TP_POINTS = BOX_POINTS
+                if RENKO_ENGINE:
+                    RENKO_ENGINE.set_box_points(BOX_POINTS)
+                print(f"⚡ [AJUSTE RENKO] Parâmetro atualizado: {RENKO_R}R ({BOX_POINTS} pts) | TP Pirâmide: +{PYRAMID_TP_POINTS} pts")
+                await broadcast_to_web({
+                    "type": "RENKO_CONFIG_UPDATED",
+                    "data": {
+                        "renko_r": RENKO_R,
+                        "box_points": BOX_POINTS,
+                        "pyramid_tp": PYRAMID_TP_POINTS
+                    }
+                })
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:

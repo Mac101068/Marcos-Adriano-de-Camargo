@@ -61,9 +61,11 @@ class RoboFluxoState:
         self.chart_footprint = {}
         self._chart_lock = threading.Lock()
         
-        # Estratégia Renko 10R & Pirâmide de Confluência
+        # Estratégia Renko & Pirâmide de Confluência (10R, 15R, 20R, etc.)
         self.strategy_mode = MODO_ESTRATEGIA
-        self.renko_engine = RenkoFlowEngine(box_points=RENKO_BOX_PTS)
+        self.renko_r = 10
+        self.renko_box_pts = RENKO_BOX_PTS
+        self.renko_engine = RenkoFlowEngine(box_points=self.renko_box_pts)
         self.pyramid_manager = None
         self.renko_boxes = []
         self.current_cvd = 0.0
@@ -318,7 +320,7 @@ def pipeline_processamento_puro(ativo, tamanho_range):
         except Exception as e:
             state.log(f"Erro inesperado: {e}")
 
-def start_robot(ativo: str = ATIVO_ALVO):
+def start_robot(ativo: str = ATIVO_ALVO, renko_r: int = None, box_points: int = None):
     if state.running:
         stop_robot()
         time.sleep(0.3)
@@ -326,6 +328,13 @@ def start_robot(ativo: str = ATIVO_ALVO):
         if not validar_e_conectar():
             return False, state.error
     try:
+        if box_points is not None:
+            state.renko_box_pts = int(box_points)
+            state.renko_r = max(1, state.renko_box_pts // 5)
+        elif renko_r is not None:
+            state.renko_r = int(renko_r)
+            state.renko_box_pts = state.renko_r * 5
+
         state.running = False
         time.sleep(0.2)
         state.running = True
@@ -334,8 +343,8 @@ def start_robot(ativo: str = ATIVO_ALVO):
         state.signals_count = 0
         state.orders_count = 0
         
-        # Inicializa o motor de Renko 10R e o gerenciador de pirâmide
-        state.renko_engine = RenkoFlowEngine(box_points=RENKO_BOX_PTS)
+        # Inicializa o motor de Renko (10R, 15R, 20R...) e o gerenciador de pirâmide
+        state.renko_engine = RenkoFlowEngine(box_points=state.renko_box_pts)
         state.pyramid_manager = MT5PyramidOrderManager(
             symbol=ativo,
             contracts_mae=CONTRATOS_MAE,
@@ -349,8 +358,8 @@ def start_robot(ativo: str = ATIVO_ALVO):
         state.thread_process = threading.Thread(target=pipeline_processamento_puro, args=(ativo, TAMANHO_RANGE_PTS), daemon=True)
         state.thread_capture.start()
         state.thread_process.start()
-        state.log(f"Robô iniciado - Ativo: {ativo} | Estratégia: {state.strategy_mode}")
-        return True, f"Robô iniciado com sucesso ({state.strategy_mode})"
+        state.log(f"Robô iniciado - Ativo: {ativo} | Renko: {state.renko_r}R ({state.renko_box_pts} pts) | Modo: {state.strategy_mode}")
+        return True, f"Robô iniciado com sucesso ({state.renko_r}R - {state.renko_box_pts} pts)"
     except Exception as e:
         state.running = False
         state.log(f"Erro ao iniciar: {e}")
@@ -792,7 +801,8 @@ def get_status():
         "error": state.error,
         "strategy_mode": state.strategy_mode,
         "cvd": float(state.current_cvd),
-        "renko_box_pts": RENKO_BOX_PTS,
+        "renko_r": getattr(state, "renko_r", 10),
+        "renko_box_pts": getattr(state, "renko_box_pts", RENKO_BOX_PTS),
         "min_delta": MIN_DELTA_THRESHOLD,
         "sim_resultado": state.sim_resultado,
         "signals_count": state.signals_count,

@@ -36,6 +36,12 @@ env = Environment(loader=FileSystemLoader("templates"))
 
 class StartRequest(BaseModel):
     ativo: str = "WINZ26"
+    renko_r: Optional[int] = 10
+    box_points: Optional[int] = None
+
+class RenkoConfigRequest(BaseModel):
+    renko_r: Optional[int] = None
+    box_points: Optional[int] = None
 
 class SimulationRequest(BaseModel):
     ativo: str = "WINZ26"
@@ -43,6 +49,7 @@ class SimulationRequest(BaseModel):
     data: Optional[str] = None
     num_ticks: int = 25000
     posicao: str = "inicio"
+    renko_r: Optional[int] = 10
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
@@ -56,6 +63,30 @@ async def home(request: Request):
 @app.get("/api/status")
 async def status():
     return JSONResponse(content=get_status())
+
+@app.post("/api/renko/config")
+async def renko_config(req: RenkoConfigRequest):
+    from web_app import state
+    if req.box_points is not None:
+        pts = int(req.box_points)
+        r = max(1, pts // 5)
+    elif req.renko_r is not None:
+        r = int(req.renko_r)
+        pts = r * 5
+    else:
+        return JSONResponse(content={"success": False, "message": "Parâmetro inválido"})
+
+    state.renko_r = r
+    state.renko_box_pts = pts
+    if state.renko_engine:
+        state.renko_engine.box_points = pts
+    state.log(f"Parâmetro Renko ajustado para {r}R ({pts} pontos)")
+    return JSONResponse(content={
+        "success": True,
+        "message": f"Renko ajustado para {r}R ({pts} pontos)",
+        "renko_r": r,
+        "box_points": pts
+    })
 
 @app.get("/api/initial_data")
 async def get_initial_data():
@@ -81,7 +112,7 @@ async def connect():
 
 @app.post("/api/start")
 async def start(req: StartRequest):
-    success, message = start_robot(req.ativo)
+    success, message = start_robot(req.ativo, renko_r=req.renko_r, box_points=req.box_points)
     return JSONResponse(content={"success": success, "message": message})
 
 @app.post("/api/stop")
