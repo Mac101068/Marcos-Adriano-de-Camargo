@@ -17,6 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        validar_e_conectar()
+        start_robot("WINZ26")
+        print("✅ [LOCALHOST:8000] MetaTrader 5 conectado e captura de ticks ao vivo iniciada para WINZ26!")
+    except Exception as e:
+        print(f"Aviso no auto-start de ticks: {e}")
     yield
 
 app = FastAPI(title="RoboFluxoB3", description="Painel de Controle do Robo de Trading B3", lifespan=lifespan)
@@ -288,5 +294,5 @@ async def chart_data():
     return JSONResponse(content=get_chart_data())
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 

@@ -502,6 +502,7 @@ async def mt5_stream_loop():
         RENKO_ENGINE.init_engine(price, ref_tick.time_msc)
         print(f"📡 Monitorando Times & Trades ao vivo em '{SYMBOL}' a partir de {price:.0f} pts...")
 
+    last_mirror_broadcast = 0.0
     while True:
         try:
             ref = mt5.symbol_info_tick(SYMBOL)
@@ -556,6 +557,34 @@ async def mt5_stream_loop():
                                     "orderType": signal,
                                     "status": "DONE"
                                 })
+            # Espelhamento em tempo real das posições MT5 ao vivo para o terminal web (a cada 1 segundo)
+            now_sec = time.time()
+            if now_sec - last_mirror_broadcast > 1.0:
+                last_mirror_broadcast = now_sec
+                positions = mt5.positions_get(symbol=SYMBOL)
+                pos_list = []
+                if positions:
+                    for p in positions:
+                        if p.magic == MAGIC_NUMBER:
+                            pts = (p.price_current - p.price_open) if p.type == 0 else (p.price_open - p.price_current)
+                            pos_list.append({
+                                "ticket": p.ticket,
+                                "type": "BUY" if p.type == mt5.ORDER_TYPE_BUY else "SELL",
+                                "volume": p.volume,
+                                "price_open": p.price_open,
+                                "price_current": p.price_current,
+                                "profit": round(p.profit, 2),
+                                "points": round(pts, 0),
+                                "comment": p.comment
+                            })
+                await broadcast_to_web({
+                    "type": "LIVE_MIRROR",
+                    "data": {
+                        "positions": pos_list,
+                        "openCount": len(pos_list)
+                    }
+                })
+
             await asyncio.sleep(0.02)
         except Exception as e:
             await asyncio.sleep(0.1)
