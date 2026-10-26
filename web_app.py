@@ -343,14 +343,10 @@ def start_robot(ativo: str = ATIVO_ALVO, renko_r: int = None, box_points: int = 
         state.signals_count = 0
         state.orders_count = 0
         
-        # Inicializa o motor de Renko (10R, 15R, 20R...) e o gerenciador de pirâmide
+        # Inicializa o motor de Renko (10R, 15R, 20R...)
         state.renko_engine = RenkoFlowEngine(box_points=state.renko_box_pts)
-        state.pyramid_manager = MT5PyramidOrderManager(
-            symbol=ativo,
-            contracts_mae=CONTRATOS_MAE,
-            contracts_piramide=CONTRATOS_PIRAMIDE,
-            magic_number=MAGIC_NUMBER
-        )
+        # Modo Monitoramento / Leitura Pura: Não envia ordens pelo web_app para não conflitar com o robô oficial
+        state.pyramid_manager = None
         state.renko_boxes = []
         state.current_cvd = 0.0
 
