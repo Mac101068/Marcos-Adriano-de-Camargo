@@ -454,10 +454,15 @@ function updateStatus() {
             const badgeMode = document.getElementById('badge-mode');
             const badgeModeText = document.getElementById('badge-mode-text');
             const badgeRenkoText = document.getElementById('badge-renko-text');
+            const badgeStrategyName = document.getElementById('badge-strategy-name');
             const btnConnect = document.getElementById('btn-connect');
 
-            if (data.renko_r && badgeRenkoText) {
-                badgeRenkoText.textContent = `${data.renko_r}R (${data.renko_box_pts}p)`;
+            const currentR = data.renko_r || selectedRenkoR || 10;
+            if (badgeRenkoText) {
+                badgeRenkoText.textContent = `${currentR}R (${currentR * 5}p)`;
+            }
+            if (badgeStrategyName) {
+                badgeStrategyName.textContent = `PIRÂMIDE & CONFLUÊNCIA ${currentR}R`;
             }
 
             // MT5 Connection
@@ -655,6 +660,10 @@ document.querySelectorAll('.renko-pill').forEach(pill => {
         const badgeRenko = document.getElementById('badge-renko-text');
         if (badgeRenko) {
             badgeRenko.textContent = `${selectedRenkoR}R (${selectedRenkoPts}p)`;
+        }
+        const badgeStrat = document.getElementById('badge-strategy-name');
+        if (badgeStrat) {
+            badgeStrat.textContent = `PIRÂMIDE & CONFLUÊNCIA ${selectedRenkoR}R`;
         }
 
         fetch('/api/renko/config', {

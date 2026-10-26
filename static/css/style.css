@@ -220,6 +220,25 @@ body::before {
     animation: pulse 1.5s ease-in-out infinite;
 }
 
+.badge.badge-strategy {
+    background: linear-gradient(135deg, rgba(0, 230, 118, 0.12) 0%, rgba(24, 255, 255, 0.08) 100%);
+    border: 1px solid rgba(0, 230, 118, 0.35);
+    color: #e8eaed;
+    box-shadow: 0 0 12px rgba(0, 230, 118, 0.12);
+}
+
+.badge.badge-strategy .badge-dot {
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green-glow);
+    animation: pulse 1.8s ease-in-out infinite;
+}
+
+.badge.badge-strategy .strategy-tag {
+    color: var(--cyan);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
 @keyframes pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.5; transform: scale(0.85); }
