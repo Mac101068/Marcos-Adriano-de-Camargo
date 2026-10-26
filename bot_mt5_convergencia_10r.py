@@ -177,6 +177,8 @@ class RenkoFlowEngine:
         return direction, f"Fechamento Box 10R {direction} (Delta: {delta})"
 
 
+STRATEGY_ACTIVE = True
+
 # ==============================================================================
 # GERENCIADOR DE ORDENS MT5 (PIRÂMIDE + CONFLUÊNCIA DE FLUXO)
 # ==============================================================================
@@ -190,9 +192,11 @@ class MT5OrderManager:
         sym_info = mt5.symbol_info(self.symbol)
         if sym_info is None:
             return mt5.ORDER_FILLING_RETURN
-        if sym_info.filling_mode & mt5.SYMBOL_FILLING_IOC:
+        fill = sym_info.filling_mode
+        # B3 MT5: bit 1 (2) = IOC, bit 2 (4) = RETURN, bit 0 (1) = FOK
+        if fill & 2:
             return mt5.ORDER_FILLING_IOC
-        elif sym_info.filling_mode & mt5.SYMBOL_FILLING_FOK:
+        elif fill & 1:
             return mt5.ORDER_FILLING_FOK
         return mt5.ORDER_FILLING_RETURN
 
@@ -221,7 +225,8 @@ class MT5OrderManager:
             return False, 0
 
         use_volume = float(volume) if volume is not None else self.contracts
-        is_buy = order_type == "BUY"
+        is_buy = order_type.upper() in ["BUY", "UP", "COMPRA"]
+        order_type_str = "BUY" if is_buy else "SELL"
         entry_price = tick.ask if is_buy else tick.bid
 
         # Stop Loss e Take Profit
@@ -243,7 +248,7 @@ class MT5OrderManager:
             "price": entry_price,
             "sl": sl_price,
             "tp": tp_price,
-            "deviation": 20,
+            "deviation": 25,
             "magic": self.magic_number,
             "comment": order_tag,
             "type_time": mt5.ORDER_TIME_GTC,
@@ -251,20 +256,28 @@ class MT5OrderManager:
         }
 
         res = mt5.order_send(request)
-        if res.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✅ ORDEM EXECUTADA: {order_type} {use_volume} ctros @ {entry_price:.0f} | SL: {sl_price:.0f} | TP: {tp_price:.0f} | Ticket #{res.order}")
+        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"✅ ORDEM EXECUTADA: {order_type_str} {use_volume} ctros @ {entry_price:.0f} | SL: {sl_price:.0f} | TP: {tp_price:.0f} | Ticket #{res.order}")
             return True, res.order
         else:
-            print(f"[ERRO MT5] RetCode={res.retcode}, Desc={res.comment}")
+            ret = res.retcode if res else "Nenhum resultado"
+            desc = res.comment if res else "Sem detalhes"
+            print(f"[ERRO MT5] RetCode={ret}, Desc={desc}")
             return False, 0
 
     def execute_pyramid_confluence(self, signal, box):
+        # Normaliza a direção da ordem para BUY ou SELL
+        if signal in ["BUY", "UP", "COMPRA"]:
+            current_dir = "BUY"
+        elif signal in ["SELL", "DOWN", "VENDA"]:
+            current_dir = "SELL"
+        else:
+            return False, 0, "NONE"
+
         positions = mt5.positions_get(symbol=self.symbol)
         active_positions = [p for p in positions if p.magic == self.magic_number] if positions else []
 
-        current_dir = signal # "BUY" ou "SELL"
         has_opposite = False
-
         for pos in active_positions:
             is_pos_buy = pos.type == mt5.ORDER_TYPE_BUY
             if (current_dir == "BUY" and not is_pos_buy) or (current_dir == "SELL" and is_pos_buy):
