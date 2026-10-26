@@ -364,6 +364,69 @@
             </div>
         </div>
 
+        <!-- OPERAÇÕES REALIZADAS HOJE (METATRADER 5 AO VIVO) -->
+        <div class="card" id="card-deals-today">
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                <div class="card-title">
+                    <i class="bi bi-journal-check card-icon" style="color: var(--cyan);"></i>
+                    Operações Realizadas Hoje (MetaTrader 5 Live)
+                </div>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <span class="card-badge" id="deals-count-badge" style="background: rgba(14, 165, 233, 0.15); color: #38bdf8;">0 OPERAÇÕES</span>
+                    <button id="btn-refresh-deals" class="btn-clear" title="Atualizar operações agora">
+                        <i class="bi bi-arrow-clockwise"></i> Atualizar
+                    </button>
+                </div>
+            </div>
+            <div class="card-body" style="padding: 1rem;">
+                <!-- Mini Dashboard de Métricas de Hoje -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem; margin-bottom: 1rem;">
+                    <div style="background: rgba(15, 23, 42, 0.6); padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                        <span style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Total Trades</span>
+                        <div id="stat-total-trades" style="font-size: 1.15rem; font-weight: 700; color: #fff; font-family: monospace;">-</div>
+                    </div>
+                    <div style="background: rgba(15, 23, 42, 0.6); padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                        <span style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Taxa de Acerto</span>
+                        <div id="stat-win-rate" style="font-size: 1.15rem; font-weight: 700; color: #38bdf8; font-family: monospace;">-</div>
+                    </div>
+                    <div style="background: rgba(15, 23, 42, 0.6); padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                        <span style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Lucro Líquido</span>
+                        <div id="stat-net-profit" style="font-size: 1.15rem; font-weight: 700; color: #22c55e; font-family: monospace;">R$ 0,00</div>
+                    </div>
+                    <div style="background: rgba(15, 23, 42, 0.6); padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                        <span style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase;">Fator de Lucro</span>
+                        <div id="stat-profit-factor" style="font-size: 1.15rem; font-weight: 700; color: #f59e0b; font-family: monospace;">-</div>
+                    </div>
+                </div>
+
+                <!-- Tabela de Operações -->
+                <div style="max-height: 280px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.06); border-radius: 6px;">
+                    <table class="signals-table" style="margin: 0; width: 100%;">
+                        <thead style="position: sticky; top: 0; background: #0f172a; z-index: 2;">
+                            <tr>
+                                <th>Horário</th>
+                                <th>Ticket</th>
+                                <th>Tipo</th>
+                                <th>Estratégia</th>
+                                <th>Qtd</th>
+                                <th>Preço Saída</th>
+                                <th>Pontos</th>
+                                <th style="text-align: right;">Resultado (R$)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="deals-table-body">
+                            <tr>
+                                <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                                    <i class="bi bi-arrow-repeat spin" style="font-size: 1.2rem; display: block; margin-bottom: 0.3rem;"></i>
+                                    Carregando operações do MetaTrader 5...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- LOGS -->
         <div class="card">
             <div class="card-header">

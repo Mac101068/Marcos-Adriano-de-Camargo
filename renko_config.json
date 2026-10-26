@@ -1,0 +1,8 @@
+{
+  "renko_r": 20,
+  "box_points": 100,
+  "min_delta_threshold": 50,
+  "min_reversal_delta": 75,
+  "pyramid_tp_points": 100,
+  "last_updated": "2026-10-26T11:55:00"
+}

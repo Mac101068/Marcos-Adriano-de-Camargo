@@ -17,6 +17,7 @@ Regras de Execução ao Vivo:
 """
 
 import sys
+import os
 import time
 import json
 import asyncio
@@ -45,18 +46,42 @@ ORDER_COMMENT = "Renko10R_Flow"
 #   20R = 100 pontos (Tendência longa, menos ruído)
 #   25R = 125 pontos (Filtro anti-ruído)
 # ==============================================================================
-RENKO_R = 10                     # Valor R do Renko (10, 15, 20, etc.)
+RENKO_R = 20                     # Valor R do Renko (10, 15, 20, etc.)
 BOX_POINTS = RENKO_R * 5         # Calculado automaticamente a partir do R
 PYRAMID_TP_POINTS = BOX_POINTS   # Alvo de cada pirâmide (+1 box do Renko selecionado)
 PYRAMID_CONTRACTS = 1.0         # Lote das ordens de pirâmide
 MAIN_CONTRACTS = 1.0            # Lote da ordem mãe de surfe
 MAX_POSITIONS = 5               # Limite máximo de ordens simultâneas
-MIN_DELTA_THRESHOLD = 150.0     # Delta mínimo institucional
+MIN_DELTA_THRESHOLD = 50.0      # Delta mínimo para entrada comum
+MIN_REVERSAL_DELTA = 75.0       # Delta mínimo obrigatório para autorizar reversão de mão (Filtro Anti-Whipsaw)
+
+def load_renko_config():
+    global RENKO_R, BOX_POINTS, PYRAMID_TP_POINTS, MIN_DELTA_THRESHOLD, MIN_REVERSAL_DELTA
+    cfg_file = os.path.join(os.path.dirname(__file__), "renko_config.json")
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "renko_r" in data:
+                    RENKO_R = int(data["renko_r"])
+                    BOX_POINTS = RENKO_R * 5
+                elif "box_points" in data:
+                    BOX_POINTS = int(data["box_points"])
+                    RENKO_R = max(1, BOX_POINTS // 5)
+                PYRAMID_TP_POINTS = int(data.get("pyramid_tp_points", BOX_POINTS))
+                MIN_DELTA_THRESHOLD = float(data.get("min_delta_threshold", 50.0))
+                MIN_REVERSAL_DELTA = float(data.get("min_reversal_delta", 75.0))
+                print(f"⚙️ [CONFIG CARREGADA] Renko: {RENKO_R}R ({BOX_POINTS} pts) | TP Pirâmide: +{PYRAMID_TP_POINTS} pts | Filtro Reversão Delta: {MIN_REVERSAL_DELTA}")
+        except Exception as e:
+            print(f"Erro ao carregar renko_config.json: {e}")
+
+load_renko_config()
 
 # JANELA OPERACIONAL (HORÁRIO DE BRASÍLIA)
 TRADING_HOURS_ENABLED = True
 START_TIME = "09:05"
 STOP_ENTRIES_TIME = "17:40"
+
 CLOSE_ALL_TIME = "17:50"
 
 # WEBSOCKET BRIDGE
@@ -182,14 +207,14 @@ class RenkoFlowEngine:
         direction = box["direction"]
 
         if direction == "UP" and delta >= MIN_DELTA_THRESHOLD:
-            reason = f"Convergência COMPRA: Box 10R Alta + Delta +{delta} ctros"
+            reason = f"Convergência COMPRA: Box {RENKO_R}R Alta + Delta +{delta} ctros"
             return "BUY", reason
         elif direction == "DOWN" and delta <= -MIN_DELTA_THRESHOLD:
-            reason = f"Convergência VENDA: Box 10R Baixa + Delta {delta} ctros"
+            reason = f"Convergência VENDA: Box {RENKO_R}R Baixa + Delta {delta} ctros"
             return "SELL", reason
 
         # Em ausência de filtro extremo, o fechamento do box conduz a direção
-        return direction, f"Fechamento Box 10R {direction} (Delta: {delta})"
+        return direction, f"Fechamento Box {RENKO_R}R {direction} (Delta: {delta})"
 
 
 STRATEGY_ACTIVE = True
@@ -299,9 +324,17 @@ class MT5OrderManager:
                 has_opposite = True
                 break
 
-        # 1. Se o fluxo inverteu, liquida posições opostas imediatamente
+        # 1. Se o fluxo inverteu, aplica o FILTRO DE DELTA MÍNIMO NA REVERSÃO (Anti-Whipsaw)
         if has_opposite:
-            print(f"\n🔄 [INVERSÃO DE FLUXO] Zerando posições anteriores para virar a mão para {current_dir}!")
+            box_delta = box.get("delta", 0)
+            if current_dir == "BUY" and box_delta < MIN_REVERSAL_DELTA:
+                print(f"🛡️ [FILTRO REVERSÃO] Box virou ALTA, mas Delta ({box_delta}) < +{MIN_REVERSAL_DELTA}. Reversão bloqueada (ruído/pullback evitado)!")
+                return False, 0, "BLOCKED_DELTA"
+            elif current_dir == "SELL" and box_delta > -MIN_REVERSAL_DELTA:
+                print(f"🛡️ [FILTRO REVERSÃO] Box virou BAIXA, mas Delta ({box_delta}) > -{MIN_REVERSAL_DELTA}. Reversão bloqueada (ruído/pullback evitado)!")
+                return False, 0, "BLOCKED_DELTA"
+
+            print(f"\n🔄 [INVERSÃO DE FLUXO CONFIRMADA] Delta ({box_delta}) confirmou virada! Zerando posições anteriores para virar a mão para {current_dir}!")
             self.close_all_positions()
             time.sleep(0.05)
             active_positions = []
@@ -510,7 +543,7 @@ async def mt5_stream_loop():
                     new_box, signal, reason = RENKO_ENGINE.process_tick(price, vol, aggressor, tick_msc)
 
                     if new_box:
-                        print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box 10R #{new_box['index']}: {new_box['direction']} | {new_box['open']:.0f} -> {new_box['close']:.0f} | Delta: {new_box['delta']}")
+                        print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box {RENKO_R}R #{new_box['index']}: {new_box['direction']} | {new_box['open']:.0f} -> {new_box['close']:.0f} | Delta: {new_box['delta']}")
                         await broadcast_to_web({"type": "BOX_CLOSED", "data": new_box})
 
                         if signal:

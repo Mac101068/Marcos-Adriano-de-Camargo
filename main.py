@@ -64,8 +64,29 @@ async def home(request: Request):
 async def status():
     return JSONResponse(content=get_status())
 
+@app.get("/api/renko/config")
+async def get_renko_config():
+    import json
+    config_path = os.path.join(os.path.dirname(__file__), "renko_config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return JSONResponse(content=json.load(f))
+        except Exception:
+            pass
+    from web_app import state
+    return JSONResponse(content={
+        "renko_r": getattr(state, "renko_r", 20),
+        "box_points": getattr(state, "renko_box_pts", 100),
+        "min_delta_threshold": 50,
+        "min_reversal_delta": 75,
+        "pyramid_tp_points": 100
+    })
+
 @app.post("/api/renko/config")
 async def renko_config(req: RenkoConfigRequest):
+    import json
+    from datetime import datetime
     from web_app import state
     if req.box_points is not None:
         pts = int(req.box_points)
@@ -81,12 +102,117 @@ async def renko_config(req: RenkoConfigRequest):
     if state.renko_engine:
         state.renko_engine.box_points = pts
     state.log(f"Parâmetro Renko ajustado para {r}R ({pts} pontos)")
+
+    # Salva em renko_config.json para persistência e sincronização com o bot
+    cfg = {
+        "renko_r": r,
+        "box_points": pts,
+        "min_delta_threshold": 50,
+        "min_reversal_delta": 75,
+        "pyramid_tp_points": pts,
+        "last_updated": datetime.now().isoformat()
+    }
+    config_path = os.path.join(os.path.dirname(__file__), "renko_config.json")
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        print(f"Erro ao salvar renko_config.json: {e}")
+
     return JSONResponse(content={
         "success": True,
-        "message": f"Renko ajustado para {r}R ({pts} pontos)",
+        "message": f"Renko ajustado com sucesso para {r}R ({pts} pontos) e salvo na estratégia!",
         "renko_r": r,
         "box_points": pts
     })
+
+@app.get("/api/deals/today")
+async def get_deals_today():
+    import MetaTrader5 as mt5
+    from datetime import datetime
+    try:
+        if not mt5.initialize():
+            return JSONResponse(content={"success": False, "message": "MT5 não inicializado", "deals": [], "summary": {}})
+        
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        deals = mt5.history_deals_get(today_start, datetime.now())
+        if deals is None or len(deals) == 0:
+            return JSONResponse(content={"success": True, "deals": [], "summary": {
+                "total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0, "net_profit": 0,
+                "gross_profit": 0, "gross_loss": 0, "profit_factor": 0
+            }})
+
+        deals_list = []
+        gross_profit = 0.0
+        gross_loss = 0.0
+        wins = 0
+        losses = 0
+
+        # Filtra saídas (entry == 1 ou entry == 2)
+        for d in reversed(deals):
+            if d.entry in [1, 2]:  # Saída ou Inversão
+                profit = float(d.profit)
+                if profit > 0:
+                    gross_profit += profit
+                    wins += 1
+                elif profit < 0:
+                    gross_loss += abs(profit)
+                    losses += 1
+
+                # Formata comentário
+                comm = d.comment or ""
+                if comm.startswith("[tp"):
+                    tag = "PIRÂMIDE TP"
+                elif comm.startswith("[sl"):
+                    tag = "STOP LOSS"
+                elif "Inversao" in comm or "Zeragem" in comm:
+                    tag = "INVERSÃO FLUXO"
+                else:
+                    tag = comm or "ORDEM MT5"
+
+                tipo_str = "COMPRA" if d.type == 0 else ("VENDA" if d.type == 1 else "SAÍDA")
+                pts = (profit / (0.20 * d.volume)) if d.volume > 0 else 0
+
+                deals_list.append({
+                    "ticket": d.ticket,
+                    "order": d.order,
+                    "position_id": d.position_id,
+                    "time": datetime.fromtimestamp(d.time).strftime("%H:%M:%S"),
+                    "symbol": d.symbol,
+                    "type": tipo_str,
+                    "volume": int(d.volume),
+                    "price": float(d.price),
+                    "profit": round(profit, 2),
+                    "points": round(pts, 0),
+                    "comment": tag,
+                    "is_win": profit > 0
+                })
+
+        total_trades = wins + losses
+        win_rate = round((wins / total_trades * 100), 1) if total_trades > 0 else 0
+        pf = round(gross_profit / gross_loss, 2) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0)
+        net = round(gross_profit - gross_loss, 2)
+
+        summary = {
+            "total_trades": total_trades,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "net_profit": net,
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+            "profit_factor": pf
+        }
+
+        # Retorna as últimas 100 operações ordenadas da mais nova para a mais antiga
+        return JSONResponse(content={
+            "success": True,
+            "deals": deals_list[:100],
+            "summary": summary
+        })
+    except Exception as e:
+        return JSONResponse(content={"success": False, "error": str(e), "deals": [], "summary": {}})
+
 
 @app.get("/api/initial_data")
 async def get_initial_data():

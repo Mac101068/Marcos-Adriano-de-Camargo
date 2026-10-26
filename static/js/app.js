@@ -897,10 +897,140 @@ window.addEventListener('resize', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// HISTÓRICO DE OPERAÇÕES DO DIA (METATRADER 5)
+// ═══════════════════════════════════════════════════════════════
+function loadDealsToday() {
+    fetch('/api/deals/today')
+        .then(res => res.json())
+        .then(data => {
+            if (!data.success) return;
+            const summary = data.summary || {};
+            const deals = data.deals || [];
+
+            // Atualiza KPIs
+            const totalEl = document.getElementById('stat-total-trades');
+            if (totalEl) totalEl.textContent = summary.total_trades || 0;
+
+            const badgeEl = document.getElementById('deals-count-badge');
+            if (badgeEl) badgeEl.textContent = `${summary.total_trades || 0} OPERAÇÕES`;
+
+            const winEl = document.getElementById('stat-win-rate');
+            if (winEl) {
+                winEl.textContent = `${summary.win_rate || 0}%`;
+                winEl.style.color = (summary.win_rate >= 50) ? '#22c55e' : '#f43f5e';
+            }
+
+            const netEl = document.getElementById('stat-net-profit');
+            if (netEl) {
+                const net = summary.net_profit || 0;
+                netEl.textContent = `${net >= 0 ? '+' : ''}R$ ${net.toFixed(2)}`;
+                netEl.style.color = net >= 0 ? '#22c55e' : '#f43f5e';
+            }
+
+            const pfEl = document.getElementById('stat-profit-factor');
+            if (pfEl) {
+                const pf = summary.profit_factor || 0;
+                pfEl.textContent = pf.toFixed(2);
+                pfEl.style.color = pf >= 1.0 ? '#22c55e' : '#f59e0b';
+            }
+
+            // Atualiza Tabela de Deals
+            const tbody = document.getElementById('deals-table-body');
+            if (!tbody) return;
+
+            if (deals.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                            Nenhuma operação fechada registrada hoje.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = deals.map(d => {
+                const isBuy = d.type === 'COMPRA';
+                const isWin = d.is_win;
+                const typeColor = isBuy ? '#22c55e' : '#f43f5e';
+                const profitColor = isWin ? '#22c55e' : '#f43f5e';
+                const profitPrefix = d.profit > 0 ? '+' : '';
+                const ptsPrefix = d.points > 0 ? '+' : '';
+
+                return `
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                        <td style="font-family: monospace; font-size: 0.85rem; color: #cbd5e1;">${d.time}</td>
+                        <td style="font-family: monospace; font-size: 0.75rem; color: #64748b;">#${d.ticket}</td>
+                        <td>
+                            <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; background: ${isBuy ? 'rgba(34,197,94,0.15)' : 'rgba(244,63,94,0.15)'}; color: ${typeColor};">
+                                ${d.type}
+                            </span>
+                        </td>
+                        <td>
+                            <span style="font-size: 0.75rem; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;">
+                                ${d.comment}
+                            </span>
+                        </td>
+                        <td style="font-family: monospace; font-size: 0.85rem;">${d.volume}</td>
+                        <td style="font-family: monospace; font-size: 0.85rem; color: #e2e8f0;">${d.price.toFixed(0)}</td>
+                        <td style="font-family: monospace; font-size: 0.85rem; font-weight: 600; color: ${profitColor};">
+                            ${ptsPrefix}${d.points} pts
+                        </td>
+                        <td style="font-family: monospace; font-size: 0.85rem; font-weight: 700; text-align: right; color: ${profitColor};">
+                            ${profitPrefix}R$ ${d.profit.toFixed(2)}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        })
+        .catch(err => console.error('Erro ao buscar operações:', err));
+}
+
+const btnRefreshDeals = document.getElementById('btn-refresh-deals');
+if (btnRefreshDeals) {
+    btnRefreshDeals.addEventListener('click', () => {
+        loadDealsToday();
+        showToast('Histórico de operações atualizado', 'info');
+    });
+}
+
+// Sincroniza configuração de Renko salva ao carregar a página
+function syncRenkoConfig() {
+    fetch('/api/renko/config')
+        .then(res => res.json())
+        .then(cfg => {
+            const r = cfg.renko_r || 20;
+            const pts = cfg.box_points || (r * 5);
+            selectedRenkoR = r;
+            selectedRenkoPts = pts;
+
+            document.querySelectorAll('.renko-pill').forEach(pill => {
+                const pillR = parseInt(pill.dataset.renko, 10);
+                if (pillR === r) {
+                    pill.classList.add('active');
+                } else {
+                    pill.classList.remove('active');
+                }
+            });
+
+            const badgeRenko = document.getElementById('badge-renko-text');
+            if (badgeRenko) {
+                badgeRenko.textContent = `${r}R (${pts}p)`;
+            }
+            const badgeStrat = document.getElementById('badge-strategy-name');
+            if (badgeStrat) {
+                badgeStrat.textContent = `PIRÂMIDE & CONFLUÊNCIA ${r}R`;
+            }
+        })
+        .catch(() => {});
+}
+
 // INITIALIZATION & DYNAMIC POLLING
 // ═══════════════════════════════════════════════════════════════
 setInterval(updateClock, 1000);
 setInterval(updateStatus, 800);
+setInterval(loadDealsToday, 4000);
 
 // Dynamic chart data polling: faster when simulation is active
 setInterval(() => {
@@ -909,6 +1039,8 @@ setInterval(() => {
 
 updateClock();
 updateStatus();
+syncRenkoConfig();
+loadDealsToday();
 fetchChartData();
 showToast('Dashboard carregado com sucesso', 'success');
 
@@ -920,8 +1052,10 @@ fetch('/api/connect', { method: 'POST' })
             showToast('Conectado automaticamente ao MetaTrader 5 (XP)', 'success');
             updateStatus();
             fetchChartData();
+            loadDealsToday();
         }
     })
     .catch(() => {});
+
 
 
