@@ -90,20 +90,28 @@ class RoboFluxoState:
 
 state = RoboFluxoState()
 
+def is_mt5_process_running() -> bool:
+    try:
+        import subprocess
+        res = subprocess.run(["tasklist", "/fi", "imagename eq terminal64.exe", "/fo", "csv"], capture_output=True, text=True)
+        return "terminal64.exe" in res.stdout.lower()
+    except Exception:
+        return True
+
 def validar_e_conectar():
     try:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
+        if not is_mt5_process_running():
+            state.mt5_connected = False
+            state.account_info = None
+            state.error = "MetaTrader 5 não está aberto. Abra o MetaTrader 5 pela sua Área de Trabalho primeiro e clique em Conectar."
+            return False
 
         state.mt5_connected = False
         state.account_info = None
 
         if not mt5.initialize():
-            if not mt5.initialize(path=MT5_PATH):
-                state.error = "Erro ao conectar ao terminal MT5. Abra o MetaTrader 5 na sua área de trabalho."
-                return False
+            state.error = "MetaTrader 5 não está respondendo. Verifique se há uma conta logada."
+            return False
 
         account_info = mt5.account_info()
         if account_info is None:
@@ -152,26 +160,26 @@ def pipeline_captura_dados(ativo):
             state.log(f"Aviso: Não foi possível assinar Level 2 para {ativo}")
         while state.running:
             try:
-                # Referência = relógio do servidor MT5 (hora B3 gravada como UTC), não o relógio do PC
                 ref = mt5.symbol_info_tick(ativo)
                 if ref is None:
-                    time.sleep(0.5)
+                    time.sleep(0.1)
                     continue
-                desde_ms = state.last_tick_time if state.last_tick_time else (ref.time_msc - 1000)
-                inicio = datetime.fromtimestamp(desde_ms / 1000.0, tz=timezone.utc)
-                ticks = mt5.copy_ticks_from(ativo, inicio, 1000, mt5.COPY_TICKS_ALL)
+                
+                server_time_sec = int(ref.time)
+                ticks = mt5.copy_ticks_from(ativo, server_time_sec - 3, 500, mt5.COPY_TICKS_ALL)
                 if ticks is not None and len(ticks) > 0:
                     for tick in ticks:
-                        if tick['time_msc'] > state.last_tick_time:
+                        tick_msc = int(tick['time_msc'])
+                        if tick_msc > state.last_tick_time:
                             try:
                                 state.fila_ticks.put(tick, timeout=0.1)
-                                state.last_tick_time = tick['time_msc']
+                                state.last_tick_time = tick_msc
                             except queue.Full:
-                                state.log("Aviso: Fila de ticks cheia")
+                                pass
                 time.sleep(TICK_POLL_INTERVAL)
             except Exception as e:
                 state.log(f"Erro na captura: {e}")
-                time.sleep(1)
+                time.sleep(0.5)
     except Exception as e:
         state.log(f"Erro fatal na captura: {e}")
 

@@ -17,10 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    try:
-        validar_e_conectar()
-    except Exception:
-        pass
     yield
 
 app = FastAPI(title="RoboFluxoB3", description="Painel de Controle do Robo de Trading B3", lifespan=lifespan)

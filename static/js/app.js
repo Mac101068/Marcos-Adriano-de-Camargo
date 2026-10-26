@@ -864,3 +864,16 @@ updateStatus();
 fetchChartData();
 showToast('Dashboard carregado com sucesso', 'success');
 
+// Auto-conecta ao MT5 aberto na máquina local para puxar o mercado ao vivo de hoje
+fetch('/api/connect', { method: 'POST' })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            showToast('Conectado automaticamente ao MetaTrader 5 (XP)', 'success');
+            updateStatus();
+            fetchChartData();
+        }
+    })
+    .catch(() => {});
+
+

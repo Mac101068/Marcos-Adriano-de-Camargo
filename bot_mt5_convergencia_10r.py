@@ -347,19 +347,36 @@ class MT5OrderManager:
 # ==============================================================================
 async def ws_handler(websocket):
     CONNECTED_CLIENTS.add(websocket)
-    acc = mt5.account_info()
-    init_msg = {
-        "type": "ACCOUNT_INFO",
-        "data": {
-            "login": acc.login if acc else "DEMO",
-            "broker": acc.server if acc else "MetaTrader 5 Live",
-            "balance": acc.balance if acc else 0.0,
-            "equity": acc.equity if acc else 0.0,
-        }
-    }
-    await websocket.send(json.dumps(init_msg))
-
     try:
+        acc = mt5.account_info()
+        tick = mt5.symbol_info_tick(SYMBOL)
+        current_price = tick.last if (tick and tick.last > 0) else (tick.bid if tick else 172500)
+
+        init_msg = {
+            "type": "ACCOUNT_INFO",
+            "data": {
+                "login": acc.login if acc else "DEMO",
+                "broker": acc.server if acc else "MetaTrader 5 Live",
+                "balance": acc.balance if acc else 0.0,
+                "equity": acc.equity if acc else 0.0,
+            }
+        }
+        await websocket.send(json.dumps(init_msg))
+
+        market_data_msg = {
+            "type": "INITIAL_DATA",
+            "data": {
+                "symbol": SYMBOL,
+                "currentPrice": current_price,
+                "bid": tick.bid if tick else current_price,
+                "ask": tick.ask if tick else current_price,
+                "cvd": RENKO_ENGINE.cvd if RENKO_ENGINE else 0.0,
+                "boxes": RENKO_ENGINE.boxes[-50:] if (RENKO_ENGINE and RENKO_ENGINE.boxes) else [],
+                "currentBox": RENKO_ENGINE.current_box if RENKO_ENGINE else None,
+            }
+        }
+        await websocket.send(json.dumps(market_data_msg))
+
         async for message in websocket:
             data = json.loads(message)
             action = data.get("action")
@@ -383,7 +400,7 @@ async def broadcast_to_web(msg_dict):
         return
     msg_str = json.dumps(msg_dict)
     disconnected = set()
-    for client in CONNECTED_CLIENTS:
+    for client in list(CONNECTED_CLIENTS):
         try:
             await client.send(msg_str)
         except Exception:
@@ -393,62 +410,88 @@ async def broadcast_to_web(msg_dict):
 
 async def mt5_stream_loop():
     last_tick_time_msc = 0
-    print(f"📡 Monitorando Times & Trades em tempo real em '{SYMBOL}'...")
+    ref_tick = mt5.symbol_info_tick(SYMBOL)
+    if ref_tick:
+        last_tick_time_msc = ref_tick.time_msc
+        price = ref_tick.last if ref_tick.last > 0 else ref_tick.bid
+        RENKO_ENGINE.init_engine(price, ref_tick.time_msc)
+        print(f"📡 Monitorando Times & Trades ao vivo em '{SYMBOL}' a partir de {price:.0f} pts...")
 
     while True:
-        now = datetime.now(timezone.utc)
-        ticks = mt5.copy_ticks_from(SYMBOL, now, 50, mt5.COPY_TICKS_TRADE)
+        try:
+            ref = mt5.symbol_info_tick(SYMBOL)
+            if not ref:
+                await asyncio.sleep(0.1)
+                continue
 
-        if ticks is not None and len(ticks) > 0:
-            for tick in ticks:
-                tick_msc = tick['time_msc']
-                if tick_msc <= last_tick_time_msc:
-                    continue
-                last_tick_time_msc = tick_msc
+            # Busca os ticks mais recentes utilizando o timestamp do servidor da XP MT5
+            server_time_sec = int(ref.time)
+            ticks = mt5.copy_ticks_from(SYMBOL, server_time_sec - 3, 200, mt5.COPY_TICKS_ALL)
 
-                price = tick['price']
-                volume = int(tick['volume'])
-                flags = tick['flags']
-                aggressor = "BUY" if (flags & mt5.TICK_FLAG_BUY) else ("SELL" if (flags & mt5.TICK_FLAG_SELL) else "CROSS")
+            if ticks is not None and len(ticks) > 0:
+                for tick in ticks:
+                    tick_msc = int(tick['time_msc'])
+                    if tick_msc <= last_tick_time_msc:
+                        continue
+                    last_tick_time_msc = tick_msc
 
-                # Transmite tick ao Terminal Web
-                await broadcast_to_web({
-                    "type": "TICK",
-                    "data": {
-                        "id": f"mt5-{tick_msc}",
-                        "timestamp": tick_msc,
-                        "timeStr": datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S.%f')[:-3],
-                        "price": price,
-                        "volume": volume,
-                        "aggressor": aggressor
-                    }
-                })
+                    price = float(tick['last'] if tick['last'] > 0 else (tick['bid'] if tick['bid'] > 0 else ref.bid))
+                    if price <= 0:
+                        continue
+                    vol = int(tick['volume'] if tick['volume'] > 0 else (tick['volume_real'] if tick['volume_real'] > 0 else 1))
+                    flags = int(tick['flags'])
+                    aggressor = "BUY" if (flags & mt5.TICK_FLAG_BUY) else ("SELL" if (flags & mt5.TICK_FLAG_SELL) else "CROSS")
 
-                new_box, signal, reason = RENKO_ENGINE.process_tick(price, volume, aggressor, tick_msc)
+                    # Transmite tick ao Terminal Web
+                    await broadcast_to_web({
+                        "type": "TICK",
+                        "data": {
+                            "id": f"mt5-{tick_msc}",
+                            "timestamp": tick_msc,
+                            "timeStr": datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S.%f')[:-3],
+                            "price": price,
+                            "volume": vol,
+                            "aggressor": aggressor
+                        }
+                    })
 
-                if new_box:
-                    print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box 10R #{new_box['index']}: {new_box['direction']} | {new_box['open']:.0f} -> {new_box['close']:.0f} | Delta: {new_box['delta']}")
-                    await broadcast_to_web({"type": "BOX_CLOSED", "data": new_box})
+                    new_box, signal, reason = RENKO_ENGINE.process_tick(price, vol, aggressor, tick_msc)
 
-                    if signal:
-                        success, ticket, role = ORDER_MANAGER.execute_pyramid_confluence(signal, new_box)
-                        if success:
-                            await broadcast_to_web({
-                                "type": "ORDER_RESULT",
-                                "ticket": ticket,
-                                "role": role,
-                                "orderType": signal,
-                                "status": "DONE",
-                            })
+                    if new_box:
+                        print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box 10R #{new_box['index']}: {new_box['direction']} | {new_box['open']:.0f} -> {new_box['close']:.0f} | Delta: {new_box['delta']}")
+                        await broadcast_to_web({"type": "BOX_CLOSED", "data": new_box})
 
-        await asyncio.sleep(0.01)
+                        if signal:
+                            success, ticket, role = ORDER_MANAGER.execute_pyramid_confluence(signal, new_box)
+                            if success:
+                                await broadcast_to_web({
+                                    "type": "ORDER_RESULT",
+                                    "ticket": ticket,
+                                    "role": role,
+                                    "orderType": signal,
+                                    "status": "DONE"
+                                })
+            await asyncio.sleep(0.02)
+        except Exception as e:
+            await asyncio.sleep(0.1)
+
+def is_mt5_process_running() -> bool:
+    try:
+        import subprocess
+        res = subprocess.run(["tasklist", "/fi", "imagename eq terminal64.exe", "/fo", "csv"], capture_output=True, text=True)
+        return "terminal64.exe" in res.stdout.lower()
+    except Exception:
+        return True
 
 async def main():
     global ORDER_MANAGER, RENKO_ENGINE
+    if not is_mt5_process_running():
+        print(f"[AVISO] MetaTrader 5 não está aberto no Windows. Abra o MetaTrader 5 pela Área de Trabalho e execute novamente.")
+        sys.exit(1)
+
     if not mt5.initialize():
-        if not mt5.initialize(r"C:\Program Files\MetaTrader 5 Terminal\terminal64.exe"):
-            print(f"[ERRO] Falha ao conectar ao MT5: {mt5.last_error()}")
-            sys.exit(1)
+        print(f"[AVISO] Falha ao conectar à instância aberta do MT5. Verifique se o MT5 está rodando.")
+        sys.exit(1)
 
     acc = mt5.account_info()
     print("=" * 65)
