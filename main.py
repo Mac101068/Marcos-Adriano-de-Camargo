@@ -109,16 +109,21 @@ async def renko_config(req: RenkoConfigRequest):
         state.renko_engine.box_points = pts
     state.log(f"Parâmetro Renko ajustado para {r}R ({pts} pontos)")
 
-    # Salva em renko_config.json para persistência e sincronização com o bot
-    cfg = {
+    # Salva em renko_config.json preservando todas as configurações avançadas
+    config_path = os.path.join(os.path.dirname(__file__), "renko_config.json")
+    cfg = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+    cfg.update({
         "renko_r": r,
         "box_points": pts,
-        "min_delta_threshold": 50,
-        "min_reversal_delta": 75,
         "pyramid_tp_points": pts,
         "last_updated": datetime.now().isoformat()
-    }
-    config_path = os.path.join(os.path.dirname(__file__), "renko_config.json")
+    })
     try:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)

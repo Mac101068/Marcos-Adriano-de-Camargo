@@ -113,9 +113,22 @@ def check_accumulation(boxes, box_to_check, window_size=6, max_alternations=3, m
     reason = f"Acumulação/Caixote [{range_min:.0f} - {range_max:.0f}] ({', '.join(reason_detail)})"
     return True, False, reason, range_min, range_max
 
+# PARÂMETROS DE TRAILING STOP E LIMITES DIÁRIOS
+MAE_TRAILING_STOP_ENABLED = True
+DAILY_LIMITS_ENABLED = True
+DAILY_PROFIT_TARGET = 1000.0
+DAILY_STOP_LOSS = 800.0
+DAILY_TRAILING_ENABLED = True
+DAILY_TRAILING_TRIGGER = 800.0
+DAILY_TRAILING_GIVEBACK = 250.0
+DAILY_TARGET_HIT = False
+DAILY_MAX_PROFIT_PEAK = 0.0
+
 def load_renko_config():
     global RENKO_R, BOX_POINTS, PYRAMID_TP_POINTS, MIN_DELTA_THRESHOLD, MIN_REVERSAL_DELTA
     global ACCUMULATION_FILTER_ENABLED, ACCUMULATION_WINDOW_BOXES, ACCUMULATION_MAX_ALTERNATIONS, ACCUMULATION_MIN_RANGE_MULT
+    global MAE_TRAILING_STOP_ENABLED, DAILY_LIMITS_ENABLED, DAILY_PROFIT_TARGET, DAILY_STOP_LOSS
+    global DAILY_TRAILING_ENABLED, DAILY_TRAILING_TRIGGER, DAILY_TRAILING_GIVEBACK
     cfg_file = os.path.join(os.path.dirname(__file__), "renko_config.json")
     if os.path.exists(cfg_file):
         try:
@@ -128,13 +141,20 @@ def load_renko_config():
                     BOX_POINTS = int(data["box_points"])
                     RENKO_R = max(1, BOX_POINTS // 5)
                 PYRAMID_TP_POINTS = int(data.get("pyramid_tp_points", BOX_POINTS))
-                MIN_DELTA_THRESHOLD = float(data.get("min_delta_threshold", 50.0))
+                MIN_DELTA_THRESHOLD = float(data.get("min_delta_threshold", 100.0))
                 MIN_REVERSAL_DELTA = float(data.get("min_reversal_delta", 75.0))
                 ACCUMULATION_FILTER_ENABLED = bool(data.get("accumulation_filter_enabled", True))
                 ACCUMULATION_WINDOW_BOXES = int(data.get("accumulation_window_boxes", 6))
                 ACCUMULATION_MAX_ALTERNATIONS = int(data.get("accumulation_max_alternations", 3))
                 ACCUMULATION_MIN_RANGE_MULT = float(data.get("accumulation_min_range_mult", 2.0))
-                print(f"⚙️ [CONFIG CARREGADA] Renko: {RENKO_R}R ({BOX_POINTS} pts) | Filtro Acumulação: {'ATIVO' if ACCUMULATION_FILTER_ENABLED else 'DESATIVADO'} (Janela {ACCUMULATION_WINDOW_BOXES} boxes)")
+                MAE_TRAILING_STOP_ENABLED = bool(data.get("mae_trailing_stop_enabled", True))
+                DAILY_LIMITS_ENABLED = bool(data.get("daily_limits_enabled", True))
+                DAILY_PROFIT_TARGET = float(data.get("daily_profit_target", 1000.0))
+                DAILY_STOP_LOSS = float(data.get("daily_stop_loss", 800.0))
+                DAILY_TRAILING_ENABLED = bool(data.get("daily_trailing_enabled", True))
+                DAILY_TRAILING_TRIGGER = float(data.get("daily_trailing_trigger", 800.0))
+                DAILY_TRAILING_GIVEBACK = float(data.get("daily_trailing_giveback", 250.0))
+                print(f"⚙️ [CONFIG CARREGADA] Renko: {RENKO_R}R ({BOX_POINTS} pts) | Trailing Stop Mãe: {'ATIVO' if MAE_TRAILING_STOP_ENABLED else 'OFF'} | Meta Diária: R$ {DAILY_PROFIT_TARGET:.0f} | Stop Diário: R$ {DAILY_STOP_LOSS:.0f}")
         except Exception as e:
             print(f"Erro ao carregar renko_config.json: {e}")
 
@@ -428,8 +448,14 @@ class MT5OrderManager:
                 pyramid_count += 1
 
         if not has_main_order:
+            # Exige Delta mínimo na entrada primária para evitar overtrading e entradas fracas (Fase 3)
+            raw_delta = box.get("delta", 0)
+            if (current_dir == "BUY" and raw_delta < MIN_DELTA_THRESHOLD) or (current_dir == "SELL" and raw_delta > -MIN_DELTA_THRESHOLD):
+                print(f"🛡️ [FILTRO DELTA PRIMÁRIO] Entrada de {current_dir} pausada: Delta ({raw_delta:.0f}) abaixo do gatilho institucional ({MIN_DELTA_THRESHOLD:.0f} ctros).")
+                return False, 0, "BLOCKED_DELTA_PRIMARY"
+
             # Dispara Ordem Mãe de Surfe
-            print(f"🟢 [ORDEM MÃE] Disparando {current_dir} ({MAIN_CONTRACTS} ct) no Box #{box['index']} | Surfe até inversão")
+            print(f"🟢 [ORDEM MÃE] Disparando {current_dir} ({MAIN_CONTRACTS} ct) no Box #{box['index']} | Delta: {raw_delta:+.0f} | Surfe com Trailing Stop")
             success, ticket = self.execute_market_order(
                 order_type=current_dir,
                 comment=f"MAE_{box['index']}",
@@ -480,6 +506,113 @@ class MT5OrderManager:
             res = mt5.order_send(req)
             if res.retcode == mt5.TRADE_RETCODE_DONE:
                 print(f" Posicao #{pos.ticket} zerada com sucesso a {close_price:.0f} pts.")
+
+    def update_trailing_stop_mae(self, box):
+        """
+        Ajusta dinamicamente o Stop Loss da Ordem Mãe:
+        1. Breakeven: Quando o trade anda pelo menos 1 box a favor, move o SL para a entrada.
+        2. Trailing Stop Renko: A cada novo box na direção, sobe o SL para o fundo/topo do box.
+        """
+        positions = mt5.positions_get(symbol=self.symbol)
+        active_positions = [p for p in positions if p.magic == self.magic_number] if positions else []
+        mae_pos = next((p for p in active_positions if "MAE" in p.comment), None)
+        if not mae_pos:
+            return
+
+        is_buy = (mae_pos.type == mt5.ORDER_TYPE_BUY)
+        current_sl = float(mae_pos.sl)
+        entry_price = float(mae_pos.price_open)
+        box_open = float(box["open"])
+
+        # Para COMPRA: avança SL para a abertura do box fechado
+        if is_buy and box["direction"] == "UP":
+            suggested_sl = float(box_open)
+            if (suggested_sl >= entry_price) and (suggested_sl > current_sl):
+                req = {
+                    "action": mt5.TRADE_ACTION_SLTP,
+                    "position": mae_pos.ticket,
+                    "symbol": self.symbol,
+                    "sl": suggested_sl,
+                    "tp": float(mae_pos.tp),
+                }
+                res = mt5.order_send(req)
+                if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                    lucro_pts = suggested_sl - entry_price
+                    tag = "BREAKEVEN" if suggested_sl == entry_price else f"LUCRO +{lucro_pts:.0f} pts"
+                    print(f"🛡️ [TRAILING STOP MÃE] Ordem Mãe #{mae_pos.ticket} SL ajustado para {suggested_sl:.0f} pts ({tag})!")
+
+        # Para VENDA: desce SL para a abertura do box fechado
+        elif (not is_buy) and box["direction"] == "DOWN":
+            suggested_sl = float(box_open)
+            if (suggested_sl <= entry_price) and (current_sl == 0.0 or suggested_sl < current_sl):
+                req = {
+                    "action": mt5.TRADE_ACTION_SLTP,
+                    "position": mae_pos.ticket,
+                    "symbol": self.symbol,
+                    "sl": suggested_sl,
+                    "tp": float(mae_pos.tp),
+                }
+                res = mt5.order_send(req)
+                if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                    lucro_pts = entry_price - suggested_sl
+                    tag = "BREAKEVEN" if suggested_sl == entry_price else f"LUCRO +{lucro_pts:.0f} pts"
+                    print(f"🛡️ [TRAILING STOP MÃE] Ordem Mãe #{mae_pos.ticket} SL ajustado para {suggested_sl:.0f} pts ({tag})!")
+
+    def check_daily_limits(self):
+        """
+        Monitora limites financeiros diários:
+        1. Meta de Lucro diária
+        2. Stop Diário máximo
+        3. Trailing Stop de Capital diário
+        """
+        global DAILY_TARGET_HIT, DAILY_MAX_PROFIT_PEAK
+        if not DAILY_LIMITS_ENABLED:
+            return True, ""
+
+        if DAILY_TARGET_HIT:
+            return False, "Meta diária ou Stop diário já atingido hoje."
+
+        from datetime import timedelta
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        deals = mt5.history_deals_get(today - timedelta(hours=3), datetime.now())
+        if not deals:
+            return True, ""
+
+        closed_deals = [d for d in deals if d.entry in [1, 2]]
+        gross_p = sum(d.profit for d in closed_deals if d.profit > 0)
+        gross_l = sum(abs(d.profit) for d in closed_deals if d.profit < 0)
+        net_profit = gross_p - gross_l
+
+        if net_profit > DAILY_MAX_PROFIT_PEAK:
+            DAILY_MAX_PROFIT_PEAK = net_profit
+
+        # 1. Meta Diária de Lucro
+        if DAILY_PROFIT_TARGET > 0 and net_profit >= DAILY_PROFIT_TARGET:
+            DAILY_TARGET_HIT = True
+            print(f"\n🏆🏆 [META DIÁRIA ATINGIDA] Lucro Líquido: R$ {net_profit:.2f} >= Meta R$ {DAILY_PROFIT_TARGET:.2f}!")
+            print(f"🔒 Encerrando posições e travando o pregão com vitória!\n")
+            self.close_all_positions()
+            return False, f"Meta Diária de R$ {DAILY_PROFIT_TARGET:.2f} atingida!"
+
+        # 2. Stop Diário Máximo
+        if DAILY_STOP_LOSS > 0 and net_profit <= -DAILY_STOP_LOSS:
+            DAILY_TARGET_HIT = True
+            print(f"\n🛑 [STOP DIÁRIO ATINGIDO] Perda Líquida: R$ {net_profit:.2f} <= Limite -R$ {DAILY_STOP_LOSS:.2f}!")
+            print(f"🔒 Encerrando posições e protegendo conta até amanhã!\n")
+            self.close_all_positions()
+            return False, f"Stop Diário de R$ {DAILY_STOP_LOSS:.2f} atingido!"
+
+        # 3. Trailing Stop de Capital
+        if DAILY_TRAILING_ENABLED and DAILY_MAX_PROFIT_PEAK >= DAILY_TRAILING_TRIGGER:
+            recuo = DAILY_MAX_PROFIT_PEAK - net_profit
+            if recuo >= DAILY_TRAILING_GIVEBACK:
+                DAILY_TARGET_HIT = True
+                print(f"\n💰 [TRAILING STOP DIÁRIO] Lucro recuou de R$ {DAILY_MAX_PROFIT_PEAK:.2f} para R$ {net_profit:.2f} (recuo R$ {recuo:.2f}).")
+                print(f"🔒 Travando o dia com lucro líquido de R$ {net_profit:.2f} garantido!\n")
+                self.close_all_positions()
+                return False, f"Trailing Stop Diário atingido!"
+
+        return True, ""
 
 
 # ==============================================================================
@@ -626,7 +759,14 @@ async def mt5_stream_loop():
                         print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box {RENKO_R}R #{new_box['index']}: {new_box['direction']} | {new_box['open']:.0f} -> {new_box['close']:.0f} | Delta: {new_box['delta']}")
                         await broadcast_to_web({"type": "BOX_CLOSED", "data": new_box})
 
-                        if signal:
+                        # FASE 1: Trailing Stop & Breakeven dinâmico na Ordem Mãe
+                        if MAE_TRAILING_STOP_ENABLED:
+                            ORDER_MANAGER.update_trailing_stop_mae(new_box)
+
+                        # FASE 2: Gestor Financeiro Diário (Meta de Ganho & Stop Diário)
+                        can_trade, limit_reason = ORDER_MANAGER.check_daily_limits()
+
+                        if signal and can_trade:
                             success, ticket, role = ORDER_MANAGER.execute_pyramid_confluence(signal, new_box)
                             if success:
                                 await broadcast_to_web({
