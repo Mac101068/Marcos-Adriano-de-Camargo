@@ -102,7 +102,7 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition-colors cursor-pointer"
               title="Baixar arquivo Markdown do relatório técnico"
             >
-              <Download className="w-3.5 h-3.5 text-sky-400" />
+              <Download className="w-3.5 h-3.5 text-neutral-400" />
               <span>Baixar .MD</span>
             </button>
 
@@ -169,7 +169,7 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
               </div>
               <div className="p-2 bg-slate-950/70 rounded border border-slate-800/80 print:bg-white print:border-gray-300">
                 <span className="text-[10px] text-slate-400 block print:text-gray-600">Delta Mínimo:</span>
-                <strong className="text-sky-400 print:text-sky-800">±{config.minDeltaThreshold} ctros</strong>
+                <strong className="text-neutral-400 print:text-neutral-800">±{config.minDeltaThreshold} ctros</strong>
               </div>
               <div className="p-2 bg-slate-950/70 rounded border border-slate-800/80 print:bg-white print:border-gray-300">
                 <span className="text-[10px] text-slate-400 block print:text-gray-600">Gatilho de Entrada:</span>
@@ -187,7 +187,7 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
               </div>
               <div className="p-2 bg-slate-950/70 rounded border border-slate-800/80 print:bg-white print:border-gray-300">
                 <span className="text-[10px] text-slate-400 block print:text-gray-600">Saída Parcial:</span>
-                <strong className="text-cyan-400 print:text-cyan-800">
+                <strong className="text-neutral-400 print:text-neutral-800">
                   +{config.partialPoints} pts ({config.partialContracts} ctro)
                 </strong>
               </div>
@@ -254,7 +254,7 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-800 text-xs font-mono print:border-gray-300">
                 <div>
                   <span className="text-slate-400 block print:text-gray-600">Saída Parcial:</span>
-                  <span className="text-cyan-400 font-bold print:text-cyan-800">+50 pts (R$ 10,00/ctro)</span>
+                  <span className="text-neutral-400 font-bold print:text-neutral-800">+50 pts (R$ 10,00/ctro)</span>
                 </div>
                 <div>
                   <span className="text-slate-400 block print:text-gray-600">Breakeven Automático:</span>

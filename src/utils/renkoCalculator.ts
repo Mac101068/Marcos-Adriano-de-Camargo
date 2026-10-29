@@ -1,4 +1,5 @@
 import { Tick, RenkoBox, AutomationConfig } from '../types/trading';
+import { evaluateBoxConvergence } from './convergenceEvaluator';
 
 /**
  * Calculador de Gráficos Atemporais:
@@ -95,6 +96,9 @@ export class RenkoFlowEngine {
     curr.high = Math.max(curr.high || tick.price, tick.price);
     curr.low = Math.min(curr.low || tick.price, tick.price);
     curr.timeEnd = tick.timestamp;
+    // Opção B: mantém o CVD do box em formação ao vivo (atualiza a cada tick,
+    // sem esperar o box fechar), para o candle Heikin-Ashi intrabox não defasar do preço.
+    curr.cvdAtClose = this.currentCvd;
 
     let newBoxClosed = false;
     let closedBox: RenkoBox | undefined;
@@ -335,7 +339,9 @@ export class RenkoFlowEngine {
   }
 
   /**
-   * Avalia a convergência entre Preço 10R e Fluxo de Agressão
+   * Avalia a convergência entre Preço 10R e Fluxo de Agressão.
+   * Lógica extraída para convergenceEvaluator.ts (compartilhada com Range e Tempo),
+   * mantendo comportamento idêntico: this.boxes ainda não contém o box recém-fechado.
    */
   private evaluateConvergence(
     box: RenkoBox,
@@ -346,91 +352,6 @@ export class RenkoFlowEngine {
     signal?: 'BUY' | 'SELL';
     reason?: string;
   } {
-    // SE A ESTRATÉGIA ATIVA FOR: PIRÂMIDE DE CONFLUÊNCIA FLUXO & RENKO 10R
-    if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
-      if (box.direction === 'UP') {
-        // Bloco verde fechado: gera compra na pirâmide incondicionalmente
-        return {
-          isConvergence: true,
-          type: 'BUY_CONVERGENCE',
-          signal: 'BUY',
-          reason: `Pirâmide Confluência Alta: Bloco Verde #${box.index} (+50 pts) | Δ: ${box.delta}`,
-        };
-      } else if (box.direction === 'DOWN') {
-        // Bloco vermelho fechado: gera venda na pirâmide incondicionalmente
-        return {
-          isConvergence: true,
-          type: 'SELL_CONVERGENCE',
-          signal: 'SELL',
-          reason: `Pirâmide Confluência Baixa: Bloco Vermelho #${box.index} (-50 pts) | Δ: ${box.delta}`,
-        };
-      }
-      return { isConvergence: false };
-    }
-
-    const minThreshold = config.minDeltaThreshold; // Ex: 200 contratos
-
-    // CONVERGÊNCIA COMPRADORA (MODO CLÁSSICO RETESTE / BREAKOUT):
-    // 1. Box de alta fechado
-    // 2. Delta líquido do box fortemente positivo (agressores compradores dominando)
-    // 3. CVD fez máxima recente (se configurado)
-    if (box.direction === 'UP') {
-      if (box.delta >= minThreshold) {
-        // Validação adicional de CVD se requerida
-        let cvdOk = true;
-        if (config.requireCvdNewExtreme && this.boxes.length >= 3) {
-          const recentBoxes = this.boxes.slice(-3);
-          const maxPrevCvd = Math.max(...recentBoxes.map(b => b.cvdAtClose));
-          cvdOk = box.cvdAtClose >= maxPrevCvd;
-        }
-
-        if (cvdOk) {
-          return {
-            isConvergence: true,
-            type: 'BUY_CONVERGENCE',
-            signal: 'BUY',
-            reason: `Convergência Compradora: Preço 10R Alta (+50 pts) + Delta Agressão +${box.delta} ctros`,
-          };
-        }
-      } else if (box.delta < 0) {
-        // Divergência: preço subiu mas delta foi negativo (exaustão/absorção passiva de venda)
-        return {
-          isConvergence: false,
-          type: 'DIVERGENCE',
-        };
-      }
-    }
-
-    // CONVERGÊNCIA VENDEDORA:
-    // 1. Box de baixa fechado
-    // 2. Delta líquido do box fortemente negativo (agressores vendedores dominando)
-    // 3. CVD fez mínima recente
-    if (box.direction === 'DOWN') {
-      if (box.delta <= -minThreshold) {
-        let cvdOk = true;
-        if (config.requireCvdNewExtreme && this.boxes.length >= 3) {
-          const recentBoxes = this.boxes.slice(-3);
-          const minPrevCvd = Math.min(...recentBoxes.map(b => b.cvdAtClose));
-          cvdOk = box.cvdAtClose <= minPrevCvd;
-        }
-
-        if (cvdOk) {
-          return {
-            isConvergence: true,
-            type: 'SELL_CONVERGENCE',
-            signal: 'SELL',
-            reason: `Convergência Vendedora: Preço 10R Baixa (-50 pts) + Delta Agressão ${box.delta} ctros`,
-          };
-        }
-      } else if (box.delta > 0) {
-        // Divergência: preço caiu mas delta foi positivo (absorção compradora)
-        return {
-          isConvergence: false,
-          type: 'DIVERGENCE',
-        };
-      }
-    }
-
-    return { isConvergence: false };
+    return evaluateBoxConvergence(box, config, this.boxes);
   }
 }

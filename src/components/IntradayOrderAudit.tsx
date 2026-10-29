@@ -182,7 +182,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
         <div className="bg-slate-900/70 p-3 rounded-lg border border-slate-800/80">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Ordens Disparadas</span>
-            <Layers className="w-3.5 h-3.5 text-sky-400" />
+            <Layers className="w-3.5 h-3.5 text-neutral-400" />
           </div>
           <div className="text-lg font-bold font-mono text-slate-100 tabular-nums">
             {summary.totalOrdersGenerated}
@@ -246,12 +246,12 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
         <div className="bg-slate-900/70 p-3 rounded-lg border border-slate-800/80">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Saídas Parciais</span>
-            <CheckCircle2 className="w-3.5 h-3.5 text-sky-400" />
+            <CheckCircle2 className="w-3.5 h-3.5 text-neutral-400" />
           </div>
-          <div className="text-lg font-bold font-mono text-sky-300 tabular-nums">
+          <div className="text-lg font-bold font-mono text-neutral-300 tabular-nums">
             {summary.partialExitsExecuted}
           </div>
-          <div className="text-[10px] text-sky-400/90 mt-0.5 font-mono">
+          <div className="text-[10px] text-neutral-400/90 mt-0.5 font-mono">
             +R$ {summary.totalPartialProfit.toFixed(2)} colhidos
           </div>
         </div>
@@ -398,7 +398,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                       key={order.id}
                       onClick={() => setSelectedOrderForAudit(order)}
                       className={`hover:bg-slate-800/50 transition-colors cursor-pointer ${
-                        isOpen ? 'bg-sky-500/5' : isPending ? 'bg-amber-500/5' : ''
+                        isOpen ? 'bg-neutral-500/5' : isPending ? 'bg-amber-500/5' : ''
                       }`}
                     >
                       {/* Ticket & Horário */}
@@ -434,7 +434,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                       <td className="py-2.5 px-3 text-slate-300">
                         <span>{order.contracts} ctr</span>
                         {order.remainingContracts !== undefined && order.remainingContracts < order.contracts && (
-                          <span className="block text-[10px] text-sky-400">
+                          <span className="block text-[10px] text-neutral-400">
                             ({order.remainingContracts} restante)
                           </span>
                         )}
@@ -453,7 +453,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                       {/* Preço de Saída */}
                       <td className="py-2.5 px-3 text-slate-300">
                         {isOpen ? (
-                          <span className="text-sky-400 font-medium">
+                          <span className="text-neutral-400 font-medium">
                             {currentPrice.toLocaleString('pt-BR')} (Flutuante)
                           </span>
                         ) : isPending ? (
@@ -470,7 +470,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                         <div>SL: {order.stopLoss}</div>
                         <div>TP: {order.takeProfit}</div>
                         {order.isBreakevenActive && (
-                          <span className="text-[9px] text-sky-300 font-semibold block">
+                          <span className="text-[9px] text-neutral-300 font-semibold block">
                             🛡️ BE Ativo
                           </span>
                         )}
@@ -479,9 +479,9 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                       {/* Parcial */}
                       <td className="py-2.5 px-3 text-[11px]">
                         {order.partialExecuted ? (
-                          <div className="text-sky-400 font-semibold">
+                          <div className="text-neutral-400 font-semibold">
                             <span>+{order.partialPoints} pts</span>
-                            <span className="block text-[10px] text-sky-300">
+                            <span className="block text-[10px] text-neutral-300">
                               +R$ {order.partialFinancial?.toFixed(2)}
                             </span>
                           </div>
@@ -542,7 +542,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                           </span>
                         )}
                         {order.status === 'OPEN' && (
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-neutral-500/15 text-neutral-400 border border-neutral-500/30">
                             ABERTO
                           </span>
                         )}
@@ -685,7 +685,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
 
                 {/* 2. Disparo da Ordem */}
                 <div className="relative">
-                  <span className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-900 border-2 border-sky-400" />
+                  <span className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-900 border-2 border-neutral-400" />
                   <div className="flex items-center justify-between text-slate-300 font-bold">
                     <span>2. Roteamento da Ordem</span>
                     <span className="text-[10px] text-slate-400">{selectedOrderForAudit.timeStr}</span>
@@ -720,8 +720,8 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                 {/* 4. Breakeven ou Trailing Stop (se ativado) */}
                 {selectedOrderForAudit.isBreakevenActive && (
                   <div className="relative">
-                    <span className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-900 border-2 border-sky-400" />
-                    <div className="flex items-center justify-between text-sky-300 font-bold">
+                    <span className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-900 border-2 border-neutral-400" />
+                    <div className="flex items-center justify-between text-neutral-300 font-bold">
                       <span>4. Proteção de Risco (Breakeven)</span>
                       <span className="text-[10px] text-slate-400">{selectedOrderForAudit.timeStr}</span>
                     </div>
@@ -740,7 +740,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                         : selectedOrderForAudit.status === 'CLOSED_LOSS'
                         ? 'border-rose-400'
                         : selectedOrderForAudit.status === 'OPEN'
-                        ? 'border-sky-400 animate-pulse'
+                        ? 'border-neutral-400 animate-pulse'
                         : 'border-slate-500'
                     }`}
                   />

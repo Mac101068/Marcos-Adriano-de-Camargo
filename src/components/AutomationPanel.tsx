@@ -231,7 +231,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
 
           <button
             onClick={() => setShowSaveProfileModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-300 bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 rounded-lg transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-neutral-300 bg-neutral-500/15 hover:bg-neutral-500/25 border border-neutral-500/40 rounded-lg transition-colors cursor-pointer"
             title="Salvar configuração atual como um novo perfil"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -277,11 +277,11 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
       {showSaveProfileModal && (
         <form
           onSubmit={handleCreateCustomProfile}
-          className="bg-slate-900 border border-sky-500/40 p-4 rounded-xl space-y-3 animate-in fade-in slide-in-from-top-2"
+          className="bg-slate-900 border border-neutral-500/40 p-4 rounded-xl space-y-3 animate-in fade-in slide-in-from-top-2"
         >
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold text-sky-300 flex items-center gap-1.5">
-              <BookmarkCheck className="w-4 h-4 text-sky-400" />
+            <h3 className="text-xs font-bold text-neutral-300 flex items-center gap-1.5">
+              <BookmarkCheck className="w-4 h-4 text-neutral-400" />
               Salvar Configuração Atual como Perfil do Operador
             </h3>
             <button
@@ -298,13 +298,13 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               placeholder="Ex: Setup 10R Marcos Scalper ou Trend Agressivo"
               value={newProfileName}
               onChange={(e) => setNewProfileName(e.target.value)}
-              className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:border-sky-500 focus:outline-hidden"
+              className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:border-neutral-500 focus:outline-hidden"
               autoFocus
             />
             <button
               type="submit"
               disabled={!newProfileName.trim()}
-              className="px-4 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              className="px-4 py-1.5 bg-neutral-600 hover:bg-neutral-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
             >
               Salvar Perfil
             </button>
@@ -451,17 +451,17 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 onClick={() => handleApplyPreset(cp)}
                 className={`p-3 rounded-lg border text-left cursor-pointer transition-all relative group ${
                   isCurrent
-                    ? 'bg-sky-950/40 border-sky-500/60 shadow-md ring-1 ring-sky-500/40'
+                    ? 'bg-neutral-950/40 border-neutral-500/60 shadow-md ring-1 ring-neutral-500/40'
                     : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 font-bold">
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-neutral-500/20 text-neutral-300 font-bold">
                     OPERADOR
                   </span>
                   <div className="flex items-center gap-1">
                     {isCurrent && (
-                      <span className="flex items-center gap-1 text-[10px] text-sky-400 font-semibold mr-1">
+                      <span className="flex items-center gap-1 text-[10px] text-neutral-400 font-semibold mr-1">
                         <CheckCircle className="w-3 h-3" />
                         ATIVO
                       </span>
@@ -558,16 +558,16 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
             onClick={() => handleConfigChange('strategyMode', 'PULLBACK_RETEST')}
             className={`p-3.5 rounded-lg border text-left cursor-pointer transition-all ${
               config.strategyMode === 'PULLBACK_RETEST'
-                ? 'bg-sky-950/40 border-sky-500 ring-1 ring-sky-500/50 shadow-md'
+                ? 'bg-neutral-950/40 border-neutral-500 ring-1 ring-neutral-500/50 shadow-md'
                 : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
             }`}
           >
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300">
+              <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-neutral-500/20 text-neutral-300">
                 CLÁSSICO
               </span>
               {config.strategyMode === 'PULLBACK_RETEST' && (
-                <span className="flex items-center gap-1 text-[11px] font-bold text-sky-400">
+                <span className="flex items-center gap-1 text-[11px] font-bold text-neutral-400">
                   <CheckCircle className="w-3.5 h-3.5" />
                   EM EXECUÇÃO
                 </span>
@@ -579,7 +579,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
             <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
               Posiciona ordem limitada na abertura do bloco (50 pts de retorno). Saída parcial em +50 pts com Breakeven protegido e SL fixo de 100 pts.
             </p>
-            <div className="mt-2.5 pt-2 border-t border-slate-800 text-[10px] font-mono text-sky-400/90 flex flex-wrap gap-x-3 gap-y-1">
+            <div className="mt-2.5 pt-2 border-t border-slate-800 text-[10px] font-mono text-neutral-400/90 flex flex-wrap gap-x-3 gap-y-1">
               <span>✓ Ordem Limitada</span>
               <span>✓ SL: 100 pts</span>
               <span>✓ Parcial + Breakeven</span>
@@ -940,15 +940,15 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
       </div>
 
       {/* BLOCO 4: GESTÃO AVANÇADA (REALIZAÇÃO PARCIAL, BREAKEVEN & TRAILING STOP) */}
-      <div className="bg-slate-900/70 p-4 sm:p-5 rounded-xl border border-sky-500/30 space-y-4 shadow-sm">
+      <div className="bg-slate-900/70 p-4 sm:p-5 rounded-xl border border-neutral-500/30 space-y-4 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
-            <Target className="w-4 h-4 text-sky-400" />
+            <Target className="w-4 h-4 text-neutral-400" />
             <h3 className="text-sm font-bold text-slate-100">
               4. Ordem Parcial, Breakeven Automático & Trailing Stop Móvel
             </h3>
           </div>
-          <span className="px-2 py-0.5 rounded bg-sky-500/10 text-sky-300 border border-sky-500/30 text-[10px] font-mono font-semibold self-start sm:self-auto">
+          <span className="px-2 py-0.5 rounded bg-neutral-500/10 text-neutral-300 border border-neutral-500/30 text-[10px] font-mono font-semibold self-start sm:self-auto">
             CONTROLE AVANÇADO DE EXECUÇÃO
           </span>
         </div>
@@ -962,13 +962,13 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                   type="checkbox"
                   checked={config.enablePartialExit}
                   onChange={(e) => handleConfigChange('enablePartialExit', e.target.checked)}
-                  className="w-4 h-4 rounded accent-cyan-500 cursor-pointer"
+                  className="w-4 h-4 rounded accent-neutral-500 cursor-pointer"
                 />
                 <span>Habilitar Realização Parcial</span>
               </label>
               <span
                 className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${
-                  config.enablePartialExit ? 'text-cyan-300 bg-cyan-500/20' : 'text-slate-500 bg-slate-900'
+                  config.enablePartialExit ? 'text-neutral-300 bg-neutral-500/20' : 'text-slate-500 bg-slate-900'
                 }`}
               >
                 {config.enablePartialExit ? 'ATIVADA' : 'DESATIVADA'}
@@ -980,7 +980,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-slate-400">Alvo da Parcial:</span>
-                    <span className="font-mono text-cyan-400 font-semibold">
+                    <span className="font-mono text-neutral-400 font-semibold">
                       +{config.partialPoints} pts (R${' '}
                       {(config.partialPoints * 0.2 * config.partialContracts).toFixed(2)})
                     </span>
@@ -992,7 +992,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                     step="25"
                     value={config.partialPoints}
                     onChange={(e) => handleConfigChange('partialPoints', Number(e.target.value))}
-                    className="w-full accent-cyan-500"
+                    className="w-full accent-neutral-500"
                   />
                   <span className="text-[10px] text-slate-500">
                     Recomendado: 50 pontos = 1 Box 10R a favor.
@@ -1010,7 +1010,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                       onChange={(e) =>
                         handleConfigChange('partialContracts', Math.max(1, Number(e.target.value)))
                       }
-                      className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-cyan-500 focus:outline-hidden"
+                      className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-neutral-500 focus:outline-hidden"
                     />
                   </div>
 
@@ -1026,7 +1026,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                         onChange={(e) =>
                           handleConfigChange('breakevenOffsetPoints', Number(e.target.value))
                         }
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-cyan-500 focus:outline-hidden"
+                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-neutral-500 focus:outline-hidden"
                       />
                       <span className="text-slate-400 text-[11px]">pts</span>
                     </div>
@@ -1039,7 +1039,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                       type="checkbox"
                       checked={config.moveStopToBreakevenOnPartial}
                       onChange={(e) => handleConfigChange('moveStopToBreakevenOnPartial', e.target.checked)}
-                      className="w-3.5 h-3.5 rounded accent-cyan-500 cursor-pointer"
+                      className="w-3.5 h-3.5 rounded accent-neutral-500 cursor-pointer"
                     />
                     <span>
                       Mover Stop Loss para Breakeven (+{config.breakevenOffsetPoints} pts) ao bater parcial
@@ -1263,7 +1263,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
       <div className="bg-slate-900/40 p-4 rounded-xl border border-slate-800 space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
-            <TrendingUp className="w-4 h-4 text-sky-400" />
+            <TrendingUp className="w-4 h-4 text-neutral-400" />
             Controles do Simulador de Mercado B3 & Teste Manual de Ordens
           </div>
 
@@ -1275,7 +1275,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 onClick={() => setSimulationSpeed(s)}
                 className={`px-2.5 py-1 text-xs font-mono rounded transition-colors cursor-pointer ${
                   simulationSpeed === s
-                    ? 'bg-sky-500/20 text-sky-300 font-bold border border-sky-500/40'
+                    ? 'bg-neutral-500/20 text-neutral-300 font-bold border border-neutral-500/40'
                     : 'bg-slate-900 text-slate-400 hover:text-slate-200'
                 }`}
               >

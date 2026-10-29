@@ -29,7 +29,7 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
 
   const getStatusStyle = () => {
     if (currentUser.role === 'ADMIN' || currentUser.plan === 'VITALICIO') {
-      return 'bg-purple-950/40 border-purple-500/35 text-purple-200 hover:border-purple-500/60 hover:bg-purple-950/60';
+      return 'bg-neutral-950/40 border-neutral-500/35 text-neutral-200 hover:border-neutral-500/60 hover:bg-neutral-950/60';
     }
     if (!isActive || currentUser.status === 'EXPIRED') {
       return 'bg-rose-950/50 border-rose-500/40 text-rose-300 hover:bg-rose-950/70 animate-pulse';
@@ -51,10 +51,10 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
         >
           {currentUser.role === 'ADMIN' ? (
             <>
-              <ShieldCheck className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-              <span className="font-semibold text-purple-200 text-[11px] tracking-tight">Admin Master</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
-              <ChevronDown className="w-3 h-3 text-purple-400/80 ml-0.5 shrink-0" />
+              <ShieldCheck className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+              <span className="font-semibold text-neutral-200 text-[11px] tracking-tight">Admin Master</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 animate-pulse" />
+              <ChevronDown className="w-3 h-3 text-neutral-400/80 ml-0.5 shrink-0" />
             </>
           ) : (
             <>
@@ -91,18 +91,18 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
         <div className="absolute right-0 top-full mt-1.5 w-76 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl p-2.5 z-50 animate-in fade-in zoom-in-95 duration-150">
           {/* Card Resumo do Usuário Ativo */}
           {currentUser.role === 'ADMIN' ? (
-            <div className="p-2.5 mb-2 rounded-lg bg-purple-950/40 border border-purple-500/30 text-xs">
+            <div className="p-2.5 mb-2 rounded-lg bg-neutral-950/40 border border-neutral-500/30 text-xs">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-purple-200 flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-purple-400" />
+                <span className="font-bold text-neutral-200 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-neutral-400" />
                   {currentUser.name}
                 </span>
-                <span className="text-[10px] bg-purple-500/30 text-purple-200 px-1.5 py-0.2 rounded font-mono font-bold">
+                <span className="text-[10px] bg-neutral-500/30 text-neutral-200 px-1.5 py-0.2 rounded font-mono font-bold">
                   MASTER
                 </span>
               </div>
-              <p className="text-[11px] text-purple-300/80 font-mono mt-0.5 truncate">{currentUser.email}</p>
-              <div className="mt-1.5 pt-1.5 border-t border-purple-500/20 flex items-center justify-between text-[10px] text-slate-300">
+              <p className="text-[11px] text-neutral-300/80 font-mono mt-0.5 truncate">{currentUser.email}</p>
+              <div className="mt-1.5 pt-1.5 border-t border-neutral-500/20 flex items-center justify-between text-[10px] text-slate-300">
                 <span>Plano: <strong>Vitalício</strong></span>
                 <span className="text-emerald-400 font-semibold">Acesso Irrestrito</span>
               </div>
@@ -155,7 +155,7 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
                     <div
                       className={`w-2 h-2 rounded-full shrink-0 ${
                         u.role === 'ADMIN'
-                          ? 'bg-purple-400 ring-2 ring-purple-500/20'
+                          ? 'bg-neutral-400 ring-2 ring-neutral-500/20'
                           : !uActive
                           ? 'bg-rose-500'
                           : u.status === 'TRIAL'
@@ -173,7 +173,7 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
                     <span
                       className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
                         u.role === 'ADMIN'
-                          ? 'bg-purple-500/20 text-purple-300 font-bold'
+                          ? 'bg-neutral-500/20 text-neutral-300 font-bold'
                           : !uActive
                           ? 'bg-rose-500/20 text-rose-300'
                           : u.status === 'TRIAL'
@@ -196,9 +196,9 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
                   setDropdownOpen(false);
                   onOpenAdminPanel();
                 }}
-                className="w-full py-1.5 px-2 rounded-lg bg-purple-950/50 hover:bg-purple-900/60 border border-purple-500/30 text-purple-300 text-left font-medium flex items-center gap-2 cursor-pointer text-xs"
+                className="w-full py-1.5 px-2 rounded-lg bg-neutral-950/50 hover:bg-neutral-900/60 border border-neutral-500/30 text-neutral-300 text-left font-medium flex items-center gap-2 cursor-pointer text-xs"
               >
-                <UserCheck className="w-3.5 h-3.5 text-purple-400" />
+                <UserCheck className="w-3.5 h-3.5 text-neutral-400" />
                 Painel Master de Assinantes
               </button>
             )}

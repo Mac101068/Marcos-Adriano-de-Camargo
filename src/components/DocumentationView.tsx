@@ -126,7 +126,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
-              <Wifi className="w-4 h-4 text-sky-400" />
+              <Wifi className="w-4 h-4 text-neutral-400" />
               Diagnóstico de Conexão Local com o Script Python
             </span>
             <p className="text-[11px] text-slate-400 mt-0.5">
@@ -138,7 +138,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
             <button
               onClick={testWebSocketConnection}
               disabled={isTesting}
-              className="px-3 py-1.5 text-xs font-semibold rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white transition-colors cursor-pointer flex items-center gap-1.5"
+              className="px-3 py-1.5 text-xs font-semibold rounded bg-neutral-600 hover:bg-neutral-500 disabled:opacity-50 text-white transition-colors cursor-pointer flex items-center gap-1.5"
             >
               {isTesting ? (
                 <>
@@ -181,7 +181,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
           <div className="p-4 rounded-lg bg-slate-900/50 border border-slate-800 space-y-2">
-            <div className="font-bold text-sky-400">Camada 1: MetaTrader 5</div>
+            <div className="font-bold text-neutral-400">Camada 1: MetaTrader 5</div>
             <p className="text-slate-400 leading-relaxed text-[11px]">
               Instalado no seu Windows, conectado à corretora (Clear, XP, BTG, Genial). É onde residem os dados reais de book, cotações e onde as ordens são efetivamente liquidadas.
             </p>
@@ -225,7 +225,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
                 href="https://www.python.org/downloads/"
                 target="_blank"
                 rel="noreferrer"
-                className="text-sky-400 hover:underline inline-flex items-center gap-1"
+                className="text-neutral-400 hover:underline inline-flex items-center gap-1"
               >
                 python.org <ExternalLink className="w-3 h-3" />
               </a>
@@ -299,7 +299,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
                 • Para <b>Mini-Índice Contínuo</b>: certifique-se de que <code className="text-emerald-300 font-bold">WIN$N</code> ou <code className="text-emerald-300 font-bold">WIN$</code> está adicionado.
               </div>
               <div>
-                • Para o <b>Contrato Vigente</b>: adicione o código do vencimento atual (ex: <code className="text-sky-300">WINZ24</code>, <code className="text-sky-300">WING25</code>, etc.).
+                • Para o <b>Contrato Vigente</b>: adicione o código do vencimento atual (ex: <code className="text-neutral-300">WINZ24</code>, <code className="text-neutral-300">WING25</code>, etc.).
               </div>
               <div>
                 • Pressione <kbd className="font-mono bg-slate-800 px-1 py-0.5 rounded">Ctrl + U</kbd> no MT5, busque pelo ativo e clique em <b>"Exibir"</b> se ele não estiver visível.
@@ -372,7 +372,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
           </div>
 
           <div className="p-4 rounded-lg bg-slate-900/60 border border-slate-800 space-y-2">
-            <div className="font-bold text-sky-400 flex items-center gap-1.5">
+            <div className="font-bold text-neutral-400 flex items-center gap-1.5">
               <TrendingUp className="w-4 h-4" />
               O que é a Convergência de Fluxo (Delta)?
             </div>
@@ -392,7 +392,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
           </div>
 
           <div className="p-4 rounded-lg bg-slate-900/60 border border-slate-800 space-y-2">
-            <div className="font-bold text-purple-400 flex items-center gap-1.5">
+            <div className="font-bold text-neutral-400 flex items-center gap-1.5">
               <ShieldCheck className="w-4 h-4" />
               Contas Hedge vs Netting no MT5
             </div>

@@ -1,27 +1,16 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { RenkoBox, TradeOrder } from '../types/trading';
-import {
-  ZoomIn,
-  ZoomOut,
-  RotateCcw,
-  Sparkles,
-  Pin,
-  ChevronUp,
-  ChevronDown,
-  Target,
-  Move,
-  Maximize2,
-  Sliders,
-  ChevronRight,
-  ArrowUp,
-  ArrowDown,
-  Activity,
-  BarChart2,
-  Layers,
-} from 'lucide-react';
+import { ChartSeries } from '../utils/barEngines';
+import { Drawing, DrawingColor, DrawingTool, loadDrawings, saveDrawings } from '../types/drawing';
+import { ChartLayout, DrawingOverlay } from './DrawingOverlay';
+import { ChartControlSidebar } from './ChartControlSidebar';
+import { DadosPanelWindow } from './DadosPanelWindow';
+import { RenkoBoxCard } from './RenkoBoxCard';
+import { Sliders, ArrowUp, ArrowDown } from 'lucide-react';
 
 const STORAGE_KEY_SCALES = 'fluxo_renko_chart_scales_v2';
 const STORAGE_KEY_FLOW_MODE = 'fluxo_renko_flow_mode_v1';
+const STORAGE_KEY_SPACING_MODE = 'fluxo_renko_spacing_mode_v1';
 
 interface RenkoFlowChartProps {
   boxes: RenkoBox[];
@@ -40,6 +29,17 @@ interface RenkoFlowChartProps {
   partialContracts?: number;
   trailingStop?: boolean;
   onExecutePyramidDemo?: () => void;
+  // Série ativa (Pontos/Range/Tempo) e controles da barra do gráfico
+  chartSeries?: ChartSeries;
+  onSeriesChange?: (s: ChartSeries) => void;
+  renkoBoxPoints?: number;
+  rangePoints?: number;
+  onRangePointsChange?: (n: number) => void;
+  timeframeSec?: number;
+  onTimeframeChange?: (n: number) => void;
+  // Janela flutuante de controles (atalho "Dados" no menu)
+  dadosWindowOpen?: boolean;
+  onDadosWindowClose?: () => void;
 }
 
 interface FlowHeikinAshi {
@@ -50,6 +50,13 @@ interface FlowHeikinAshi {
   state: 'UP' | 'DOWN' | 'REVERSAL';
   colorFill: string;
   colorStroke: string;
+}
+
+// Formata o intervalo do gráfico de Tempo para exibição compacta (ex.: 30s, 1min, 5min)
+function formatTimeframe(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}min`;
+  return `${Math.round(sec / 3600)}h`;
 }
 
 export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
@@ -69,9 +76,31 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   partialContracts = 1,
   trailingStop = true,
   onExecutePyramidDemo,
+  chartSeries = 'renko',
+  onSeriesChange,
+  renkoBoxPoints = 50,
+  rangePoints = 50,
+  onRangePointsChange,
+  timeframeSec = 30,
+  onTimeframeChange,
+  dadosWindowOpen = false,
+  onDadosWindowClose,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // =========================================================================
+  // FERRAMENTAS DE DESENHO: estado da barra, desenhos persistidos e layout
+  // publicado pelo canvas para a camada SVG (âncora em preço/tijolo, não px)
+  // =========================================================================
+  const [activeDrawingTool, setActiveDrawingTool] = useState<DrawingTool>('select');
+  const [drawingColor, setDrawingColor] = useState<DrawingColor>('white');
+  const [drawings, setDrawings] = useState<Drawing[]>([]);
+  const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+  const chartLayoutRef = useRef<ChartLayout | null>(null);
+  const [canvasSize, setCanvasSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  const lastLayoutSigRef = useRef<string>('');
 
   // Armazena posições dos boxes para hit-testing sem causar re-render cíclico
   const boxPositionsRef = useRef<{ x: number; box: RenkoBox; index: number; haState?: 'UP' | 'DOWN' | 'REVERSAL' }[]>([]);
@@ -153,10 +182,22 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Controle do card flutuante em celulares
   const [isMobileDetailsOpen, setIsMobileDetailsOpen] = useState<boolean>(false);
 
+  // Barra lateral de controles: dockada na esquerda no desktop, drawer em telas pequenas
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
+
   // Preferências visuais
   const [showOrderLines, setShowOrderLines] = useState<boolean>(true);
   const [boxThickness, setBoxThickness] = useState<'thin' | 'ultrathin' | 'medium'>('thin');
-  const [spacingMode, setSpacingMode] = useState<'dynamic' | 'fixed'>('dynamic');
+  // 'compact' = tijolos sempre agrupados à direita | 'fill' = auto-ajuste que preenche a tela
+  const [spacingMode, setSpacingMode] = useState<'compact' | 'fill'>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SPACING_MODE);
+      if (saved === 'fill' || saved === 'compact') return saved;
+    } catch (e) {
+      // Ignora
+    }
+    return 'compact';
+  });
   const [rightMargin, setRightMargin] = useState<number>(() =>
     typeof window !== 'undefined' && window.innerWidth < 640 ? 50 : 90
   );
@@ -187,6 +228,15 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       // Ignora
     }
   }, [flowViewMode]);
+
+  // Salva preferência do espaçamento dos tijolos
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_SPACING_MODE, spacingMode);
+    } catch (e) {
+      // Ignora
+    }
+  }, [spacingMode]);
 
   // Lista unificada incluindo o box em formação se houver
   const allBoxes = useMemo(() => {
@@ -273,11 +323,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const effectiveRightMargin = isMobile ? Math.min(rightMargin, 50) : rightMargin;
 
     // Fundo escuro profissional
-    ctx.fillStyle = '#050811';
+    ctx.fillStyle = '#09090b';
     ctx.fillRect(0, 0, width, height);
 
     // Divisor interativo de painel (arrastável)
-    ctx.strokeStyle = '#1e293b';
+    ctx.strokeStyle = '#27272a';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, pricePaneHeight);
@@ -289,16 +339,16 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const handleH = 4;
     const handleX = chartWidth / 2 - handleW / 2;
     const handleY = pricePaneHeight - handleH / 2;
-    ctx.fillStyle = '#1e293b';
+    ctx.fillStyle = '#27272a';
     ctx.beginPath();
     ctx.roundRect(handleX, handleY, handleW, handleH, 2);
     ctx.fill();
-    ctx.strokeStyle = '#475569';
+    ctx.strokeStyle = '#52525b';
     ctx.lineWidth = 1;
     ctx.stroke();
 
     // 3 pontos no puxador
-    ctx.fillStyle = '#94a3b8';
+    ctx.fillStyle = '#a1a1aa';
     for (let d = -1; d <= 1; d++) {
       ctx.beginPath();
       ctx.arc(chartWidth / 2 + d * (isMobile ? 6 : 8), pricePaneHeight, 1, 0, Math.PI * 2);
@@ -306,7 +356,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     }
 
     // Eixo de preços lateral
-    ctx.fillStyle = '#080d1a';
+    ctx.fillStyle = '#121215';
     ctx.fillRect(chartWidth, 0, rightAxisWidth, height);
     ctx.beginPath();
     ctx.moveTo(chartWidth, 0);
@@ -314,10 +364,16 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.stroke();
 
     if (allBoxes.length === 0) {
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = '#71717a';
       ctx.font = isMobile ? '11px "Plus Jakarta Sans", sans-serif' : '13px "Plus Jakarta Sans", sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Aguardando ticks para formar Renko 10R...', width / 2, height / 2);
+      ctx.fillText(
+        `Aguardando ticks para formar ${
+          chartSeries === 'range' ? `Range ${rangePoints} pts` : chartSeries === 'tempo' ? `candles de ${formatTimeframe(timeframeSec)}` : 'Renko 10R'
+        }...`,
+        width / 2,
+        height / 2
+      );
       return;
     }
 
@@ -342,22 +398,19 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         : 14;
     const boxWidth = Math.max(5, Math.min(28, Math.round(baseBoxWidth * Math.sqrt(scaleX))));
 
-    // Posicionamento X com ancoragem à direita e preenchimento harmônico do viewport
-    const baseSpacingStep = isMobile ? 18 : 22;
+    // Posicionamento X com ancoragem à direita
+    const baseSpacingStep = isMobile ? 14 : 17;
     // Garante que o scrollOffset nunca seja negativo (o que jogaria os blocos para a esquerda, deixando o lado direito vazio)
     const effectiveScroll = Math.max(0, scrollOffset);
 
-    // Auto-fit adaptativo para preencher o canvas harmoniosamente quando há poucos blocos
     const availableWidth = Math.max(100, chartWidth - effectiveRightMargin - (isMobile ? 16 : 30));
+    // Auto-fit discreto do modo "Preencher": limita o vão máximo entre tijolos
     const autoFitStep =
       displayedBoxes.length > 1
-        ? Math.min(isMobile ? 32 : 46, Math.max(baseSpacingStep, availableWidth / (displayedBoxes.length + 1)))
+        ? Math.min(isMobile ? 26 : 30, Math.max(baseSpacingStep, availableWidth / (displayedBoxes.length + 1)))
         : baseSpacingStep;
 
-    const dynamicStep =
-      spacingMode === 'dynamic'
-        ? autoFitStep
-        : Math.max(16, availableWidth / Math.max(1, displayedBoxes.length));
+    const dynamicStep = spacingMode === 'fill' ? autoFitStep : baseSpacingStep;
     const stepX = dynamicStep * scaleX;
 
     const lastBoxX = chartWidth - effectiveRightMargin + effectiveScroll * stepX;
@@ -414,8 +467,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         state = 'DOWN'; // Descida -> VERMELHO
       }
 
-      const colorFill = state === 'REVERSAL' ? '#94a3b8' : state === 'UP' ? '#10b981' : '#ef4444';
-      const colorStroke = state === 'REVERSAL' ? '#64748b' : state === 'UP' ? '#059669' : '#dc2626';
+      const colorFill = state === 'REVERSAL' ? '#a1a1aa' : state === 'UP' ? '#10b981' : '#ef4444';
+      const colorStroke = state === 'REVERSAL' ? '#71717a' : state === 'UP' ? '#059669' : '#dc2626';
 
       const haObj: FlowHeikinAshi = {
         open: haOpen,
@@ -536,8 +589,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const effMinCvd = midCvd - effectiveCvdRange / 2;
 
     const cvdToY = (cvd: number) => {
-      const top = pricePaneHeight + 14;
-      const h = flowPaneHeight - 28;
+      // Usa a subfaixa do HA (declaração posterior é segura: só é chamada após o cálculo das bandas)
+      const top = flowTopMargin;
+      const h = Math.max(20, haBandHeight - 2);
       return top + h - ((cvd - effMinCvd) / effectiveCvdRange) * h;
     };
 
@@ -577,8 +631,23 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const flowBottomMargin = 16;
     const usableFlowHeight = Math.max(40, flowPaneHeight - (flowTopMargin - pricePaneHeight) - flowBottomMargin);
 
+    // NOVO: no modo Heikin-Ashi, particiona o painel de fluxo em duas subfaixas:
+    // candles Heikin-Ashi em cima + histograma de Delta embaixo, para decisão visual.
+    const haSplitHist = flowViewMode === 'heikin_ashi';
+    const haBandTop = flowTopMargin;
+    const haBandHeight = haSplitHist ? usableFlowHeight * 0.66 : usableFlowHeight;
+    const haBandBottom = haBandTop + haBandHeight;
+    const histBandTop = haSplitHist ? haBandBottom + 12 : flowTopMargin;
+    const histBandBottom = flowTopMargin + usableFlowHeight;
+    const histBandHeight = Math.max(0, histBandBottom - histBandTop);
+    const histMidY = (histBandTop + histBandBottom) / 2;
+    const histHalf = Math.max(6, histBandHeight / 2);
+    // Mapeia o Delta para a subfaixa inferior (usa a mesma escala efetiva do histograma cheio)
+    const histDeltaToY = (delta: number) => histMidY - (delta / effectiveMaxAbsDelta) * histHalf;
+    const histZeroY = histDeltaToY(0);
+
     const flowHaToY = (val: number) => {
-      return flowTopMargin + usableFlowHeight - ((val - effectiveMinFlowHa) / effectiveHaRange) * usableFlowHeight;
+      return haBandTop + haBandHeight - ((val - effectiveMinFlowHa) / effectiveHaRange) * haBandHeight;
     };
 
     // =======================================================================
@@ -590,9 +659,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       gridStep *= 2;
     }
 
-    ctx.strokeStyle = '#0f172a';
+    ctx.strokeStyle = '#18181b';
     ctx.lineWidth = 1;
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = '#71717a';
     ctx.font = isMobile ? '8.5px "JetBrains Mono", monospace' : '10px "JetBrains Mono", monospace';
     ctx.textAlign = 'left';
 
@@ -615,8 +684,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const lastHa = flowHaData[flowHaData.length - 1];
       const lastHaY = lastHa ? flowHaToY(lastHa.close) : null;
 
-      // Calcula haStep dinamicamente para garantir no máximo 1 linha a cada 24px de altura utilizável
-      const maxHaTicks = Math.max(2, Math.floor(usableFlowHeight / 24));
+      // Calcula haStep dinamicamente para garantir no máximo 1 linha a cada 24px da faixa do HA
+      const maxHaTicks = Math.max(2, Math.floor(haBandHeight / 24));
       const rawHaStep = Math.max(50, effectiveHaRange / maxHaTicks);
 
       // Arredonda para um passo limpo (50, 100, 250, 500, 1000, 2500, 5000, 10000, etc.)
@@ -640,7 +709,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           if (lastHaY !== null && Math.abs(y - lastHaY) < 14) continue;
 
           const isZero = Math.abs(v) < 1;
-          ctx.strokeStyle = isZero ? '#334155' : 'rgba(30, 41, 59, 0.55)';
+          ctx.strokeStyle = isZero ? '#3f3f46' : 'rgba(39, 39, 42, 0.55)';
           ctx.setLineDash(isZero ? [4, 4] : [1, 4]);
           ctx.beginPath();
           ctx.moveTo(0, y);
@@ -648,7 +717,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.stroke();
           ctx.setLineDash([]);
 
-          ctx.fillStyle = isZero ? '#94a3b8' : '#64748b';
+          ctx.fillStyle = isZero ? '#a1a1aa' : '#71717a';
           ctx.textAlign = 'left';
           const sign = v > 0 ? '+' : '';
           const formatted = Math.abs(v) >= 1000 ? `${sign}${(v / 1000).toFixed(1)}k` : `${sign}${v}`;
@@ -661,7 +730,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       if (lastHa && lastHaY !== null) {
         if (lastHaY >= pricePaneHeight + 8 && lastHaY <= height - 12) {
           const badgeFill =
-            lastHa.state === 'UP' ? '#059669' : lastHa.state === 'DOWN' ? '#dc2626' : '#475569';
+            lastHa.state === 'UP' ? '#059669' : lastHa.state === 'DOWN' ? '#dc2626' : '#52525b';
           ctx.fillStyle = badgeFill;
           ctx.beginPath();
           ctx.roundRect(chartWidth + 1, lastHaY - 7, rightAxisWidth - 2, 14, 2);
@@ -683,7 +752,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     if (flowViewMode === 'histogram' || flowViewMode === 'hybrid') {
       const zeroY = deltaToY(0);
       if (zeroY >= pricePaneHeight + 10 && zeroY <= height - 14) {
-        ctx.strokeStyle = '#1e293b';
+        ctx.strokeStyle = '#27272a';
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
         ctx.moveTo(0, zeroY);
@@ -691,7 +760,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.stroke();
         ctx.setLineDash([]);
         if (flowViewMode === 'histogram') {
-          ctx.fillStyle = '#94a3b8';
+          ctx.fillStyle = '#a1a1aa';
           ctx.font = isMobile ? '8px "JetBrains Mono"' : '9px "JetBrains Mono"';
           ctx.textAlign = 'left';
           ctx.fillText('0Δ', chartWidth + (isMobile ? 3 : 6), zeroY + 3);
@@ -755,6 +824,76 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }
     }
 
+    // =======================================================================
+    // NOVO: SUBFAIXA DE HISTOGRAMA DE DELTA (abaixo do Heikin-Ashi no modo 'heikin_ashi')
+    // =======================================================================
+    if (haSplitHist && histBandHeight > 8) {
+      // Divisor sutil separando os candles HA do histograma
+      ctx.strokeStyle = '#27272a';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, haBandBottom + 6);
+      ctx.lineTo(chartWidth, haBandBottom + 6);
+      ctx.stroke();
+
+      // Linha de zero do Delta
+      ctx.strokeStyle = '#3f3f46';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, histZeroY);
+      ctx.lineTo(chartWidth, histZeroY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Guias de limiar (+/-) para decisão visual de agressão forte
+      const upThY = histDeltaToY(minDeltaThreshold);
+      const dnThY = histDeltaToY(-minDeltaThreshold);
+      if (upThY >= histBandTop && upThY <= histBandBottom) {
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, upThY);
+        ctx.lineTo(chartWidth, upThY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (dnThY >= histBandTop && dnThY <= histBandBottom) {
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.3)';
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, dnThY);
+        ctx.lineTo(chartWidth, dnThY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Rótulos do eixo Δ na régua lateral direita
+      ctx.fillStyle = '#a1a1aa';
+      ctx.font = isMobile ? '8px "JetBrains Mono"' : '9px "JetBrains Mono"';
+      ctx.textAlign = 'left';
+      ctx.fillText('0Δ', chartWidth + (isMobile ? 3 : 6), histZeroY + 3);
+
+      // Selo com o Delta ao vivo do último box (inclui o box em formação)
+      const lastLiveBox = displayedBoxes[displayedBoxes.length - 1];
+      if (lastLiveBox) {
+        const badgeY = histDeltaToY(lastLiveBox.delta);
+        if (badgeY >= histBandTop - 2 && badgeY <= histBandBottom + 2) {
+          ctx.fillStyle = lastLiveBox.delta >= 0 ? '#059669' : '#dc2626';
+          ctx.beginPath();
+          ctx.roundRect(chartWidth + 1, badgeY - 7, rightAxisWidth - 2, 14, 2);
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
+          ctx.textAlign = 'center';
+          ctx.fillText(
+            `${lastLiveBox.delta > 0 ? '+' : ''}${Math.round(lastLiveBox.delta)}Δ`,
+            chartWidth + rightAxisWidth / 2,
+            badgeY + 3.5
+          );
+        }
+      }
+    }
+
     // Título dos painéis
     // Salva posições dos boxes para hit-testing
     const boxPositions: { x: number; box: RenkoBox; index: number; haState?: 'UP' | 'DOWN' | 'REVERSAL' }[] = [];
@@ -793,6 +932,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
       const isUp = b.direction === 'UP';
       const isForming = i === displayedBoxes.length - 1 && currentBox !== null;
+      // Ghost de conclusão ("faltam Xp") só faz sentido no Renko por pontos
+      const showRenkoGhost = isForming && chartSeries === 'renko';
 
       const openY = priceToY(b.open);
       const closeY = priceToY(b.close);
@@ -802,16 +943,18 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const highY = priceToY(b.high);
       const lowY = priceToY(b.low);
 
-      // Pavio
-      ctx.strokeStyle = isUp ? '#059669' : '#dc2626';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(centerX, highY);
-      ctx.lineTo(centerX, lowY);
-      ctx.stroke();
+      // Pavio (no gráfico de Tempo desenhamos blocos sólidos estilo Renko, sem pavios)
+      if (chartSeries !== 'tempo') {
+        ctx.strokeStyle = isUp ? '#059669' : '#dc2626';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(centerX, highY);
+        ctx.lineTo(centerX, lowY);
+        ctx.stroke();
+      }
 
-      if (isForming) {
-        const targetClosePrice = isUp ? b.open + 50 : b.open - 50;
+      if (showRenkoGhost) {
+        const targetClosePrice = isUp ? b.open + renkoBoxPoints : b.open - renkoBoxPoints;
         const targetCloseY = priceToY(targetClosePrice);
         const ghostTopY = Math.min(openY, targetCloseY);
         const ghostH = Math.max(3, Math.abs(targetCloseY - openY));
@@ -911,15 +1054,23 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       // =======================================================================
       // DESENHO DO PAINEL INFERIOR: HEIKIN-ASHI E/OU HISTOGRAMA DE DELTA
       // =======================================================================
-      // 1. Histograma de Delta (desenhado em modo 'histogram' ou 'hybrid')
-      if (flowViewMode === 'histogram' || flowViewMode === 'hybrid') {
-        const deltaY = deltaToY(b.delta);
+      // 1. Histograma de Delta (cheio em 'histogram'/'hybrid'; na subfaixa inferior em 'heikin_ashi')
+      if (flowViewMode === 'histogram' || flowViewMode === 'hybrid' || haSplitHist) {
+        const mapDeltaY = haSplitHist ? histDeltaToY : deltaToY;
+        const refZeroY = haSplitHist ? histZeroY : deltaZeroY;
+        const deltaY = mapDeltaY(b.delta);
         const isPositiveDelta = b.delta >= 0;
-        const barTop = Math.min(deltaZeroY, deltaY);
-        const barHeight = Math.max(2, Math.abs(deltaY - deltaZeroY));
+        let barTop = Math.min(refZeroY, deltaY);
+        let barHeight = Math.max(2, Math.abs(deltaY - refZeroY));
+        if (haSplitHist) {
+          // Restringe as barras à subfaixa inferior para não invadirem os candles HA
+          barTop = Math.max(histBandTop, barTop);
+          barHeight = Math.min(barHeight, histBandBottom - barTop);
+          if (barHeight < 1) barHeight = 1;
+        }
 
         const strongFlow = Math.abs(b.delta) >= minDeltaThreshold;
-        const opacity = flowViewMode === 'hybrid' ? '0.35' : '1.0';
+        const opacity = flowViewMode === 'hybrid' ? '0.35' : haSplitHist ? '0.9' : '1.0';
 
         ctx.fillStyle = isPositiveDelta
           ? strongFlow
@@ -965,7 +1116,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
           // Destaque visual no centro se for candle de REVERSÃO (CINZA)
           if (ha.state === 'REVERSAL') {
-            ctx.fillStyle = '#f8fafc';
+            ctx.fillStyle = '#fafafa';
             ctx.beginPath();
             ctx.arc(centerX, (highY + lowY) / 2, isMobile ? 1.5 : 2, 0, Math.PI * 2);
             ctx.fill();
@@ -976,11 +1127,28 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
     boxPositionsRef.current = boxPositions;
 
+    // Publica o layout do painel de preço para a camada de desenho (SVG),
+    // mantendo os desenhos ancorados em (índice do tijolo, preço) mesmo com zoom/pan
+    const layoutSig = [width, height, pricePaneHeight, effectiveMinPrice, effectiveMaxPrice, startIdx, lastBoxX, stepX].join('|');
+    if (layoutSig !== lastLayoutSigRef.current) {
+      lastLayoutSigRef.current = layoutSig;
+      chartLayoutRef.current = {
+        height,
+        pricePaneHeight,
+        priceToY,
+        yToPrice,
+        indexToX: (k: number) => lastBoxX - (totalCount - 1 - k) * stepX + effectiveScroll * stepX,
+        xToIndex: (x: number) => totalCount - 1 - (lastBoxX + effectiveScroll * stepX - x) / stepX,
+      };
+      setCanvasSize((prev) => (prev.w === width && prev.h === height ? prev : { w: width, h: height }));
+      setLayoutVersion((v) => v + 1);
+    }
+
     // =======================================================================
     // RÉGUA HORIZONTAL DE TEMPO (EIXO X)
     // =======================================================================
     const timeAxisY = height - 14;
-    ctx.fillStyle = '#475569';
+    ctx.fillStyle = '#52525b';
     ctx.font = isMobile ? '8px "JetBrains Mono"' : '9px "JetBrains Mono"';
     ctx.textAlign = 'center';
 
@@ -1271,7 +1439,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }, boxPositions[0]);
 
       if (hoverItem) {
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+        ctx.strokeStyle = 'rgba(161, 161, 170, 0.35)';
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
@@ -1288,11 +1456,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         // Badge de preço flutuante na régua do eixo Y
         if (mousePos.y <= pricePaneHeight) {
           const hoveredPrice = Math.round(yToPrice(mousePos.y) / 5) * 5;
-          ctx.fillStyle = '#1e293b';
+          ctx.fillStyle = '#27272a';
           ctx.fillRect(chartWidth + 1, mousePos.y - 8, rightAxisWidth - 2, 16);
-          ctx.strokeStyle = '#64748b';
+          ctx.strokeStyle = '#71717a';
           ctx.strokeRect(chartWidth + 1, mousePos.y - 8, rightAxisWidth - 2, 16);
-          ctx.fillStyle = '#f8fafc';
+          ctx.fillStyle = '#fafafa';
           ctx.font = isMobile ? 'bold 8.5px "JetBrains Mono"' : 'bold 9.5px "JetBrains Mono"';
           ctx.textAlign = 'center';
           ctx.fillText(
@@ -1302,11 +1470,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           );
         } else {
           // Leitura flutuante na régua lateral da Janela de Fluxo
-          ctx.fillStyle = '#1e293b';
+          ctx.fillStyle = '#27272a';
           ctx.fillRect(chartWidth + 1, mousePos.y - 8, rightAxisWidth - 2, 16);
-          ctx.strokeStyle = '#64748b';
+          ctx.strokeStyle = '#71717a';
           ctx.strokeRect(chartWidth + 1, mousePos.y - 8, rightAxisWidth - 2, 16);
-          ctx.fillStyle = '#f8fafc';
+          ctx.fillStyle = '#fafafa';
           ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
           ctx.textAlign = 'center';
 
@@ -1356,7 +1524,77 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     partialPoints,
     partialContracts,
     trailingStop,
+    chartSeries,
+    renkoBoxPoints,
+    rangePoints,
+    timeframeSec,
   ]);
+
+  // =========================================================================
+  // AÇÕES DAS FERRAMENTAS DE DESENHO: persistência, atalhos e edição
+  // =========================================================================
+  useEffect(() => {
+    setDrawings(loadDrawings());
+  }, []);
+
+  useEffect(() => {
+    saveDrawings(drawings);
+  }, [drawings]);
+
+  const undoLastDrawing = () => setDrawings((prev) => prev.slice(0, -1));
+
+  const clearAllDrawings = () => {
+    if (drawings.length === 0) return;
+    if (window.confirm('Remover todos os desenhos do gráfico?')) {
+      setDrawings([]);
+      setSelectedDrawingId(null);
+    }
+  };
+
+  const handleDrawingSelect = (id: string | null) => setSelectedDrawingId(id);
+
+  const handleDrawingCreate = (d: Drawing) => {
+    setDrawings((prev) => [...prev, d]);
+    setSelectedDrawingId(d.id);
+  };
+
+  const handleDrawingUpdate = (id: string, patch: Partial<Drawing>) => {
+    setDrawings((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  };
+
+  const handleDrawingDelete = (id: string) => {
+    setDrawings((prev) => prev.filter((d) => d.id !== id));
+    setSelectedDrawingId((cur) => (cur === id ? null : cur));
+  };
+
+  // Atalhos: V/H/R/A/T selecionam ferramentas, Delete apaga seleção, Ctrl+Z desfaz, Esc limpa seleção
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        setDrawings((prev) => prev.slice(0, -1));
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedDrawingId) {
+        handleDrawingDelete(selectedDrawingId);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setSelectedDrawingId(null);
+        setActiveDrawingTool('select');
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const map: Record<string, DrawingTool> = { v: 'select', h: 'hline', r: 'rect', a: 'arrow', t: 'text', l: 'trendline' };
+      const tool = map[e.key.toLowerCase()];
+      if (tool) setActiveDrawingTool(tool);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selectedDrawingId]);
 
   // =========================================================================
   // MANIPULAÇÃO DE MOUSE: DIVISOR, ESCALAS E EIXOS (PREÇO, TEMPO E FLUXO)
@@ -1726,337 +1964,192 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     return { points: ptsTotal, financial: finTotal, openCount, mainCount, pyramidCount };
   }, [openOrders, currentPrice]);
 
+  // Fecha o drawer de controles com Esc
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSidebarOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [sidebarOpen]);
+
+  // Props compartilhadas entre a barra lateral dockada (desktop) e o drawer (telas pequenas)
+  const sidebarProps = {
+    blockCount: boxes.length,
+    pnl: openPnL,
+    activePosCount: openOrders.length,
+    flowViewMode,
+    onFlowViewMode: setFlowViewMode,
+    boxThickness,
+    onBoxThickness: setBoxThickness,
+    spacingMode,
+    onSpacingMode: setSpacingMode,
+    scaleY,
+    onScaleY: setScaleY,
+    onResetY: () => {
+      setScaleY(1.0);
+      setPricePanOffset(0);
+    },
+    scaleX,
+    onScaleX: setScaleX,
+    onResetX: () => {
+      setScaleX(1.0);
+      setScrollOffset(0);
+    },
+    scaleFlow,
+    onScaleFlow: setScaleFlow,
+    onResetFlow: () => {
+      setScaleFlow(1.0);
+      setFlowPanOffset(0);
+    },
+    flowPaneRatio,
+    onFlowPaneRatio: setFlowPaneRatio,
+    isCustomScaled,
+    onResetAll: handleResetAllScales,
+    showOrderLines,
+    onToggleOrderLines: () => setShowOrderLines((prev) => !prev),
+    activeDrawingTool,
+    onSelectDrawingTool: setActiveDrawingTool,
+    drawingColor,
+    onSelectDrawingColor: setDrawingColor,
+    onUndoDrawing: undoLastDrawing,
+    onClearDrawings: clearAllDrawings,
+    hasDrawings: drawings.length > 0,
+    currentPrice,
+    contracts,
+    onManualOrder,
+    onClosePositions,
+  };
+
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full flex flex-col bg-slate-950 select-none overflow-hidden"
+      className="relative w-full h-full flex flex-col bg-zinc-950 select-none overflow-hidden"
     >
       {/* ========================================================================= */}
-      {/* BARRA DE FERRAMENTAS SUPERIOR                                             */}
+      {/* TIRA DE STATUS COMPACTA: sem botões (todos vivem na barra lateral)         */}
       {/* ========================================================================= */}
-      <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 bg-slate-900/95 border-b border-slate-800 text-xs shrink-0 overflow-x-auto no-scrollbar">
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="flex items-center gap-1 font-mono text-[11px] sm:text-xs">
-            <span className="text-slate-400">10R:</span>
-            <span className="font-semibold text-emerald-400">{boxes.length} blk</span>
+      <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 h-9 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Abre a barra lateral de controles em telas pequenas */}
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="lg:hidden flex items-center gap-1 px-1.5 h-[22px] rounded bg-zinc-950/70 border border-zinc-700/80 text-zinc-300 hover:text-zinc-100 cursor-pointer"
+            title="Abrir controles do gráfico"
+          >
+            <Sliders className="w-3 h-3" />
+            <span className="text-[10px] font-sans">Controles</span>
+          </button>
+
+          {/* Seletor da série: Pontos (Renko) x Range x Tempo, com escala editável */}
+          <div className="flex items-center gap-1.5 shrink-0 rounded-md border border-zinc-600/70 bg-zinc-950/60 px-1.5 py-0.5" title="Escolha o tipo de gráfico e a escala">
+            <span className="text-[9.5px] text-zinc-400 font-sans uppercase tracking-wide hidden sm:inline">Gráfico</span>
+            <select
+              value={chartSeries}
+              onChange={(e) => onSeriesChange?.(e.target.value as ChartSeries)}
+              className="h-6 rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
+              title="Tipo de gráfico: Pontos (Renko), Range (variação de preço) ou Tempo"
+            >
+              <option value="renko">Pontos</option>
+              <option value="range">Range</option>
+              <option value="tempo">Tempo</option>
+            </select>
+            {chartSeries === 'renko' && (
+              <span className="text-zinc-400 text-[10.5px]" title="Escala do Renko definida no Painel do EA">
+                {Math.max(1, Math.round(renkoBoxPoints / 5))}R
+              </span>
+            )}
+            {chartSeries === 'range' && (
+              <select
+                value={rangePoints}
+                onChange={(e) => onRangePointsChange?.(Number(e.target.value))}
+                className="h-6 rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
+                title="Escala do Range em pontos (variação High-Low por barra)"
+              >
+                {[10, 25, 50, 75, 100, 150].map((p) => (
+                  <option key={p} value={p}>
+                    {p} pts
+                  </option>
+                ))}
+              </select>
+            )}
+            {chartSeries === 'tempo' && (
+              <select
+                value={timeframeSec}
+                onChange={(e) => onTimeframeChange?.(Number(e.target.value))}
+                className="h-6 rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
+                title="Intervalo de relógio de cada candle"
+              >
+                {[5, 15, 30, 60, 120, 300, 600, 900].map((s) => (
+                  <option key={s} value={s}>
+                    {formatTimeframe(s)}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
+          <span className="text-emerald-400 font-semibold tabular-nums">{boxes.length} blk</span>
 
-          <div className="h-3.5 w-[1px] bg-slate-800" />
+          <div className="h-3.5 w-[1px] bg-zinc-800" />
 
-          {/* PnL em Tempo Real no Top Toolbar */}
-          <div
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono font-bold border transition-colors ${
+          <span
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded border font-bold tabular-nums ${
               openPnL.openCount > 0
                 ? openPnL.financial > 0
                   ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
                   : openPnL.financial < 0
                   ? 'bg-rose-950/90 border-rose-500/50 text-rose-300'
-                  : 'bg-slate-900/90 border-slate-700 text-slate-300'
-                : 'bg-slate-950/50 border-slate-800 text-slate-400'
+                  : 'bg-zinc-900/90 border-zinc-700 text-zinc-300'
+                : 'bg-zinc-950/50 border-zinc-800 text-zinc-400'
             }`}
             title="Resultado flutuante acumulado das operações abertas"
           >
-            <span className="text-[9.5px] text-slate-400 font-sans uppercase">PnL:</span>
-            <span className="font-extrabold text-[11.5px]">
-              {openPnL.financial > 0 ? '+' : ''}
-              {openPnL.financial.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-            </span>
-            <span
-              className={`text-[9.5px] px-1 py-0.2 rounded font-semibold ${
-                openPnL.points > 0
-                  ? 'bg-emerald-500/20 text-emerald-300'
-                  : openPnL.points < 0
-                  ? 'bg-rose-500/20 text-rose-300'
-                  : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              {openPnL.points > 0 ? '+' : ''}
-              {openPnL.points} pts
-            </span>
-          </div>
-
-          <div className="h-3.5 w-[1px] bg-slate-800" />
-
-          {/* Seletor do Modo de Exibição do Painel de Fluxo */}
-          <div className="flex items-center gap-0.5 bg-slate-950/90 p-0.5 rounded border border-slate-800 shrink-0">
-            <button
-              onClick={() => setFlowViewMode('heikin_ashi')}
-              className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 ${
-                flowViewMode === 'heikin_ashi'
-                  ? 'bg-purple-500/25 text-purple-300 border border-purple-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Exibir Fluxo como Candles Heikin-Ashi (Verde = Subida, Vermelho = Descida, Cinza = Reversão)"
-            >
-              <Activity className="w-3 h-3 text-purple-400" />
-              <span>Heikin-Ashi</span>
-            </button>
-            <button
-              onClick={() => setFlowViewMode('histogram')}
-              className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1 ${
-                flowViewMode === 'histogram'
-                  ? 'bg-sky-500/25 text-sky-300 border border-sky-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Exibir Histograma de Delta Tradicional"
-            >
-              <BarChart2 className="w-3 h-3 text-sky-400" />
-              <span>Delta</span>
-            </button>
-            <button
-              onClick={() => setFlowViewMode('hybrid')}
-              className={`hidden sm:inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-semibold transition-colors cursor-pointer ${
-                flowViewMode === 'hybrid'
-                  ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Exibir Heikin-Ashi sobreposto ao Histograma de Delta"
-            >
-              <span>Híbrido</span>
-            </button>
-          </div>
-
-          <div className="h-3.5 w-[1px] bg-slate-800 hidden sm:block" />
-
-          {/* Seletor de Espessura dos Tijolos */}
-          <div className="hidden sm:flex items-center gap-0.5 bg-slate-950/90 p-0.5 rounded border border-slate-800 shrink-0">
-            <button
-              onClick={() => setBoxThickness('thin')}
-              className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-semibold transition-colors cursor-pointer ${
-                boxThickness === 'thin'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Tijolos Finos (10px)"
-            >
-              Fino
-            </button>
-            <button
-              onClick={() => setBoxThickness('ultrathin')}
-              className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-semibold transition-colors cursor-pointer ${
-                boxThickness === 'ultrathin'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Tijolos Ultra-Finos (7px)"
-            >
-              Ultra
-            </button>
-          </div>
-
-          {/* Modo de Espaçamento Dinâmico */}
-          <button
-            onClick={() => setSpacingMode((prev) => (prev === 'dynamic' ? 'fixed' : 'dynamic'))}
-            className={`hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-colors border cursor-pointer shrink-0 ${
-              spacingMode === 'dynamic'
-                ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
-                : 'bg-slate-900 text-slate-400 border-slate-800'
-            }`}
-            title="Aproximação progressiva temporal dos tijolos"
-          >
-            <Sparkles className="w-3 h-3 text-sky-400" />
-            <span>{spacingMode === 'dynamic' ? 'Aproximação Temporal' : 'Fixo'}</span>
-          </button>
+            {openPnL.financial > 0 ? '+' : ''}
+            {openPnL.financial.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            {openPnL.openCount > 0 && (
+              <span
+                className={`text-[9.5px] px-1 py-0.2 rounded font-semibold ${
+                  openPnL.points > 0
+                    ? 'bg-emerald-500/20 text-emerald-300'
+                    : openPnL.points < 0
+                    ? 'bg-rose-500/20 text-rose-300'
+                    : 'bg-zinc-800 text-zinc-400'
+                }`}
+              >
+                {openPnL.points > 0 ? '+' : ''}
+                {openPnL.points} pts
+              </span>
+            )}
+          </span>
         </div>
 
-        {/* CONTROLES DE AJUSTE DE ESCALA X E Y DO OPERADOR */}
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0 bg-slate-950/80 p-0.5 rounded-lg border border-slate-800">
-          {/* Controle da Escala Y (Preço/Vertical) */}
-          <div
-            className="flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-900/60 border border-slate-800/80"
-            title="Ajuste fino da Escala Y (Preços / Altura dos Boxes). Dica: você também pode arrastar a régua de preços na lateral!"
-          >
-            <span className="text-[10px] font-bold text-slate-500 mr-0.5">Y</span>
-            <button
-              onClick={() => setScaleY((prev) => Math.max(0.25, Number((prev - 0.15).toFixed(2))))}
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Comprimir Escala Y (mais pontos na tela)"
-            >
-              -
-            </button>
-            <button
-              onClick={() => {
-                setScaleY(1.0);
-                setPricePanOffset(0);
-              }}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
-                scaleY !== 1.0 || pricePanOffset !== 0
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Clique para resetar Escala Y para 100% (Auto)"
-            >
-              {Math.round(scaleY * 100)}%
-            </button>
-            <button
-              onClick={() => setScaleY((prev) => Math.min(4.0, Number((prev + 0.15).toFixed(2))))}
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Esticar Escala Y (boxes mais altos)"
-            >
-              +
-            </button>
-          </div>
-
-          {/* Controle da Escala X (Tempo/Espaçamento Horizontal) */}
-          <div
-            className="flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-900/60 border border-slate-800/80"
-            title="Ajuste fino da Escala X (Tempo / Espaçamento dos Tijolos)"
-          >
-            <span className="text-[10px] font-bold text-slate-500 mr-0.5">X</span>
-            <button
-              onClick={() => setScaleX((prev) => Math.max(0.5, Number((prev - 0.15).toFixed(2))))}
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Comprimir Escala X (boxes mais compactos)"
-            >
-              -
-            </button>
-            <button
-              onClick={() => {
-                setScaleX(1.0);
-                setScrollOffset(0);
-              }}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
-                scaleX !== 1.0
-                  ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Clique para resetar Escala X para 100% (Auto)"
-            >
-              {Math.round(scaleX * 100)}%
-            </button>
-            <button
-              onClick={() => setScaleX((prev) => Math.min(3.5, Number((prev + 0.15).toFixed(2))))}
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Expandir Escala X (boxes mais arejados)"
-            >
-              +
-            </button>
-          </div>
-
-          {/* Controle da Escala do Fluxo (Vertical) */}
-          <div
-            className="flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-900/60 border border-slate-800/80"
-            title="Ajuste fino da Escala Vertical do Fluxo. Dica: você também pode arrastar a régua lateral do fluxo!"
-          >
-            <span className="text-[10px] font-bold text-purple-400 mr-0.5">Fluxo</span>
-            <button
-              onClick={() => setScaleFlow((prev) => Math.max(0.25, Number((prev - 0.15).toFixed(2))))}
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Comprimir Escala do Fluxo (mais candles/amplitude na tela)"
-            >
-              -
-            </button>
-            <button
-              onClick={() => {
-                setScaleFlow(1.0);
-                setFlowPanOffset(0);
-              }}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
-                scaleFlow !== 1.0 || flowPanOffset !== 0
-                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Clique para resetar Escala do Fluxo para 100%"
-            >
-              {Math.round(scaleFlow * 100)}%
-            </button>
-            <button
-              onClick={() => setScaleFlow((prev) => Math.min(4.0, Number((prev + 0.15).toFixed(2))))}
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Esticar Escala do Fluxo (candles/barras mais altas)"
-            >
-              +
-            </button>
-          </div>
-
-          {/* Presets de Altura da Janela de Fluxo (Divisor) */}
-          <div
-            className="hidden sm:flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-900/60 border border-slate-800/80"
-            title="Ajuste rápido da Altura da Janela de Fluxo (ou arraste a barra divisora entre os painéis)"
-          >
-            <span className="text-[10px] font-bold text-slate-500 mr-0.5">Janela</span>
-            <button
-              onClick={() => setFlowPaneRatio(0.25)}
-              className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold transition-colors cursor-pointer ${
-                Math.abs(flowPaneRatio - 0.25) < 0.04
-                  ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Janela de Fluxo Compacta (25% da tela)"
-            >
-              25%
-            </button>
-            <button
-              onClick={() => setFlowPaneRatio(0.33)}
-              className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold transition-colors cursor-pointer ${
-                Math.abs(flowPaneRatio - 0.33) < 0.04
-                  ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Janela de Fluxo Equilibrada (33% da tela)"
-            >
-              33%
-            </button>
-            <button
-              onClick={() => setFlowPaneRatio(0.46)}
-              className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold transition-colors cursor-pointer ${
-                Math.abs(flowPaneRatio - 0.46) < 0.04
-                  ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Janela de Fluxo Expandida (46% da tela)"
-            >
-              46%
-            </button>
-          </div>
-
-          {/* Botão de Centralização / Auto-Escala Completa */}
-          <button
-            onClick={handleResetAllScales}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
-              isCustomScaled
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-            }`}
-            title="Auto-Ajustar Todas as Escalas (Preço, Tempo, Fluxo e Divisor)"
-          >
-            <Target className="w-3 h-3 text-emerald-400" />
-            <span className="hidden sm:inline">Auto</span>
-          </button>
-
-          {/* Toggle Visibilidade das Linhas de Ordens (Entrada, Reteste, SL, TP, Parcial) */}
-          <button
-            onClick={() => setShowOrderLines((prev) => !prev)}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
-              showOrderLines
-                ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
-                : 'text-slate-500 hover:text-slate-300 bg-slate-900 border border-slate-800'
-            }`}
-            title="Alternar visibilidade das linhas de ordens (Entrada, SL, TP e Parcial)"
-          >
-            <Layers className="w-3 h-3 text-sky-400" />
-            <span className="hidden md:inline">Linhas:</span>
-            <span className="font-mono">{showOrderLines ? `(${openOrders.length})` : 'Off'}</span>
-          </button>
-        </div>
-
-        {/* Status de Posição / Feedback no Topo */}
-        <div className="flex items-center gap-1.5 shrink-0 text-[11px] font-mono">
+        <div className="flex items-center gap-1.5 shrink-0">
           {openOrders.length > 0 ? (
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-sky-950/80 border border-sky-500/40 text-sky-300">
-              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-zinc-900/80 border border-zinc-600/40 text-zinc-300 text-[10px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-pulse" />
               <span>{openOrders.length} Pos Ativa(s)</span>
             </div>
           ) : (
-            <span className="text-slate-500 text-[10px] hidden sm:inline">Aguardando Sinal</span>
+            <span className="text-zinc-500 text-[10px] hidden sm:inline">Aguardando Sinal</span>
           )}
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* CANVAS PRINCIPAL COM HIT-TESTING, GESTOS E WIDGET DE ESCALA               */}
+      {/* CORPO: CANVAS EM LARGURA TOTAL + JANELA FLUTUANTE "DADOS" (CONTROLES)     */}
       {/* ========================================================================= */}
-      <div className="relative flex-1 w-full min-h-[300px]">
+      <div className="flex-1 flex flex-row min-h-0 relative">
+        {dadosWindowOpen && (
+          <DadosPanelWindow title="Dados — Painel Renko" onClose={() => onDadosWindowClose?.()}>
+            <ChartControlSidebar {...sidebarProps} isWindow />
+          </DadosPanelWindow>
+        )}
+
+        {/* ====================================================================== */}
+        {/* CANVAS PRINCIPAL COM HIT-TESTING E GESTOS                              */}
+        {/* ====================================================================== */}
+        <div className="relative flex-1 w-full min-w-0 min-h-[300px]">
         <canvas
           ref={canvasRef}
           onMouseDown={handleMouseDown}
@@ -2072,355 +2165,102 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         />
 
         {/* ========================================================================= */}
-        {/* BOLETA RÁPIDA APENAS COM COMPRA, VENDA E ZERAR (SEM SOBREPOSIÇÃO)          */}
+        {/* CAMADA DE DESENHO PROFISSIONAL: barra de ferramentas + overlay SVG         */}
+        {/* ========================================================================= */}
+        <DrawingOverlay
+          width={canvasSize.w}
+          layout={chartLayoutRef.current}
+          drawings={drawings}
+          activeTool={activeDrawingTool}
+          activeColor={drawingColor}
+          selectedId={selectedDrawingId}
+          onSelect={handleDrawingSelect}
+          onCreate={handleDrawingCreate}
+          onUpdate={handleDrawingUpdate}
+          onDelete={handleDrawingDelete}
+        />
+
+        {/* ========================================================================= */}
+        {/* BOLETA COMPACTA SOMENTE EM TELAS PEQUENAS (no desktop vive na barra lateral) */}
         {/* ========================================================================= */}
         {onManualOrder && (
-          <div className="absolute top-2.5 left-2.5 z-30 flex items-center gap-1.5 bg-slate-950/92 backdrop-blur-md border border-slate-700/80 rounded-lg p-1 shadow-2xl pointer-events-auto select-none">
-            {/* Botão Compacto de COMPRA */}
+          <div className="lg:hidden absolute top-2 left-2 right-2 z-30 flex items-center gap-1.5 bg-zinc-950/92 backdrop-blur-md border border-zinc-700/80 rounded-lg p-1 shadow-2xl pointer-events-auto select-none">
             <button
               onClick={() => onManualOrder('BUY')}
-              className="px-2.5 py-1 text-[11px] font-bold rounded bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+              className="flex-1 px-2 h-[30px] text-[11px] font-bold rounded bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center gap-1"
               title={`Enviar COMPRA a Mercado (${contracts}ct a ${currentPrice.toLocaleString('pt-BR')} pts)`}
             >
               <ArrowUp className="w-3 h-3 stroke-[2.5]" />
               <span>COMPRA</span>
-              <span className="text-[9px] font-mono px-1 py-0.2 bg-emerald-800/80 rounded text-emerald-100">
-                {contracts}ct
-              </span>
             </button>
-
-            {/* Botão Compacto de VENDA */}
             <button
               onClick={() => onManualOrder('SELL')}
-              className="px-2.5 py-1 text-[11px] font-bold rounded bg-rose-600 hover:bg-rose-500 active:scale-95 text-white transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+              className="flex-1 px-2 h-[30px] text-[11px] font-bold rounded bg-rose-600 hover:bg-rose-500 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center gap-1"
               title={`Enviar VENDA a Mercado (${contracts}ct a ${currentPrice.toLocaleString('pt-BR')} pts)`}
             >
               <ArrowDown className="w-3 h-3 stroke-[2.5]" />
               <span>VENDA</span>
-              <span className="text-[9px] font-mono px-1 py-0.2 bg-rose-800/80 rounded text-rose-100">
-                {contracts}ct
-              </span>
             </button>
-
-            {/* Botão Compacto de ZERAR quando há posições abertas */}
             {openOrders.length > 0 && onClosePositions && (
               <button
                 onClick={onClosePositions}
-                className="px-2.5 py-1 text-[11px] font-bold rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 active:scale-95 transition-all cursor-pointer flex items-center gap-1"
+                className="flex-1 px-2 h-[30px] text-[11px] font-bold rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1"
                 title="Zerar todas as ordens e posições abertas imediatamente"
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
                 <span>ZERAR ({openOrders.length})</span>
               </button>
             )}
           </div>
         )}
 
-        {/* Controles de Escala Flutuantes na Parte Inferior Esquerda (Evitando PnL e Box Card) */}
-        <div
-          className="absolute bottom-2 left-2.5 z-20 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-lg p-1 shadow-2xl text-slate-300 pointer-events-auto text-[10px] font-mono"
-          title="Controle rápido de Escala de Preço (Y) e Fluxo (F)"
-        >
-          <span className="text-slate-400 font-bold px-1">Escalas:</span>
-          
-          {/* Preço (Y) */}
-          <div className="flex items-center gap-0.5 bg-slate-950/80 px-1 py-0.5 rounded border border-slate-800">
-            <span className="text-slate-500 font-bold">Y:</span>
-            <button
-              onClick={() => setScaleY((prev) => Math.min(4.0, Number((prev + 0.2).toFixed(2))))}
-              className="w-4 h-4 flex items-center justify-center hover:text-emerald-300 hover:bg-slate-800 rounded font-bold cursor-pointer"
-              title="Esticar Escala Y"
-            >
-              +
-            </button>
-            <button
-              onClick={() => {
-                setScaleY(1.0);
-                setPricePanOffset(0);
-              }}
-              className="px-1 hover:text-emerald-300 cursor-pointer"
-              title="Reset Y"
-            >
-              {Math.round(scaleY * 100)}%
-            </button>
-            <button
-              onClick={() => setScaleY((prev) => Math.max(0.25, Number((prev - 0.2).toFixed(2))))}
-              className="w-4 h-4 flex items-center justify-center hover:text-emerald-300 hover:bg-slate-800 rounded font-bold cursor-pointer"
-              title="Comprimir Escala Y"
-            >
-              -
-            </button>
-          </div>
+        {/* ========================================================================= */}
+        {/* BOX RENKO: card flutuante arrastável pelo mouse (desktop)                 */}
+        {/* ========================================================================= */}
+        {activeBox && (
+          <RenkoBoxCard
+            box={activeBox}
+            haState={activeBoxHaState}
+            isInspection={Boolean(hoveredBox)}
+            bounds={canvasSize}
+          />
+        )}
 
-          {/* Pan Y (+50 / -50) */}
-          <div className="flex items-center gap-0.5 bg-slate-950/80 px-1 py-0.5 rounded border border-slate-800">
-            <button
-              onClick={() => setPricePanOffset((prev) => prev + 50)}
-              className="w-4 h-4 flex items-center justify-center hover:text-sky-300 hover:bg-slate-800 rounded cursor-pointer"
-              title="Subir Preço (+50 pts)"
-            >
-              <ArrowUp className="w-2.5 h-2.5" />
-            </button>
-            <button
-              onClick={() => setPricePanOffset((prev) => prev - 50)}
-              className="w-4 h-4 flex items-center justify-center hover:text-sky-300 hover:bg-slate-800 rounded cursor-pointer"
-              title="Descer Preço (-50 pts)"
-            >
-              <ArrowDown className="w-2.5 h-2.5" />
-            </button>
+        {/* ========================================================================= */}
+        {/* BOX RENKO: HUD compacto em telas pequenas                                 */}
+        {/* ========================================================================= */}
+        {activeBox && (
+          <div className="block sm:hidden absolute bottom-1 left-2 right-2 z-20 font-sans pointer-events-auto">
+            <RenkoBoxCard
+              box={activeBox}
+              haState={activeBoxHaState}
+              isInspection={Boolean(hoveredBox)}
+              bounds={canvasSize}
+              variant="mobile"
+              mobileOpen={isMobileDetailsOpen}
+              onToggleMobile={setIsMobileDetailsOpen}
+            />
           </div>
-
-          {/* Fluxo (F) */}
-          <div className="flex items-center gap-0.5 bg-slate-950/80 px-1 py-0.5 rounded border border-slate-800">
-            <span className="text-purple-400 font-bold">Fluxo:</span>
-            <button
-              onClick={() => setScaleFlow((prev) => Math.min(4.0, Number((prev + 0.2).toFixed(2))))}
-              className="w-4 h-4 flex items-center justify-center hover:text-purple-300 hover:bg-slate-800 rounded font-bold cursor-pointer"
-              title="Esticar Fluxo"
-            >
-              +
-            </button>
-            <button
-              onClick={() => {
-                setScaleFlow(1.0);
-                setFlowPanOffset(0);
-              }}
-              className="px-1 hover:text-purple-300 cursor-pointer"
-              title="Reset Fluxo"
-            >
-              {Math.round(scaleFlow * 100)}%
-            </button>
-            <button
-              onClick={() => setScaleFlow((prev) => Math.max(0.25, Number((prev - 0.2).toFixed(2))))}
-              className="w-4 h-4 flex items-center justify-center hover:text-purple-300 hover:bg-slate-800 rounded font-bold cursor-pointer"
-              title="Comprimir Fluxo"
-            >
-              -
-            </button>
-          </div>
-
-          <button
-            onClick={handleResetAllScales}
-            className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 font-semibold cursor-pointer"
-            title="Resetar todas as escalas"
-          >
-            Auto
-          </button>
+        )}
         </div>
-
-        {/* ========================================================================= */}
-        {/* QUADRO BOX RENKO FIXO: DESKTOP (CANTO INFERIOR DIREITO)                   */}
-        {/* ========================================================================= */}
-        {activeBox && (
-          <div className="hidden sm:block absolute bottom-3 right-[88px] z-20 w-[285px] bg-slate-950/95 backdrop-blur-md border border-slate-700/80 rounded-lg p-2.5 shadow-2xl pointer-events-none select-none font-sans text-xs">
-            <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
-              <div className="flex items-center gap-1.5 font-bold text-slate-100">
-                <Pin className="w-3 h-3 text-sky-400 rotate-45" />
-                <span>Box Renko 10R #{activeBox.index}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                    activeBox.direction === 'UP'
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                      : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                  }`}
-                >
-                  {activeBox.direction === 'UP' ? 'ALTA +50' : 'BAIXA -50'}
-                </span>
-                <span
-                  className={`text-[9px] font-mono px-1 rounded ${
-                    hoveredBox ? 'text-sky-400 bg-sky-500/10' : 'text-emerald-400 bg-emerald-500/10'
-                  }`}
-                >
-                  {hoveredBox ? 'INSPEÇÃO' : 'AO VIVO'}
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-x-2 gap-y-1 py-1.5 text-[11px] font-mono border-b border-slate-800/80">
-              <div>
-                <span className="text-slate-500 mr-1">Aber:</span>
-                <span className="text-slate-200">{activeBox.open.toLocaleString('pt-BR')}</span>
-              </div>
-              <div>
-                <span className="text-slate-500 mr-1">Fech:</span>
-                <span className="text-slate-100 font-semibold">
-                  {activeBox.close.toLocaleString('pt-BR')}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-500 mr-1">Máx:</span>
-                <span className="text-slate-300">{activeBox.high.toLocaleString('pt-BR')}</span>
-              </div>
-              <div>
-                <span className="text-slate-500 mr-1">Mín:</span>
-                <span className="text-slate-300">{activeBox.low.toLocaleString('pt-BR')}</span>
-              </div>
-            </div>
-
-            <div className="py-1.5 space-y-1 text-[11px] font-mono border-b border-slate-800/80">
-              {/* Destaque do Fluxo Heikin-Ashi */}
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">Fluxo Heikin-Ashi:</span>
-                <span
-                  className={`font-bold flex items-center gap-1 ${
-                    activeBoxHaState === 'UP'
-                      ? 'text-emerald-400'
-                      : activeBoxHaState === 'DOWN'
-                      ? 'text-rose-400'
-                      : 'text-slate-300'
-                  }`}
-                >
-                  {activeBoxHaState === 'UP'
-                    ? '▲ SUBIDA (VERDE)'
-                    : activeBoxHaState === 'DOWN'
-                    ? '▼ DESCIDA (VERMELHO)'
-                    : '⚡ REVERSÃO (CINZA)'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">Saldo CVD:</span>
-                <span className="text-sky-400 font-semibold">
-                  {activeBox.cvdAtClose.toLocaleString('pt-BR')} ctros
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">Delta do Box:</span>
-                <span
-                  className={`font-bold ${
-                    activeBox.delta >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
-                >
-                  {activeBox.delta > 0 ? '+' : ''}
-                  {activeBox.delta} ctros
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-[10px] text-slate-500">
-                <span>
-                  C: {activeBox.buyVolume} | V: {activeBox.sellVolume}
-                </span>
-                <span>{activeBox.ticksCount} ticks</span>
-              </div>
-            </div>
-
-            <div className="pt-1.5">
-              {activeBox.convergenceType === 'BUY_CONVERGENCE' ? (
-                <div className="text-[10px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 rounded px-2 py-0.5 text-center">
-                  ▲ CONVERGÊNCIA COMPRA DISPARADA
-                </div>
-              ) : activeBox.convergenceType === 'SELL_CONVERGENCE' ? (
-                <div className="text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded px-2 py-0.5 text-center">
-                  ▼ CONVERGÊNCIA VENDA DISPARADA
-                </div>
-              ) : activeBox.convergenceType === 'DIVERGENCE' ? (
-                <div className="text-[10px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 rounded px-2 py-0.5 text-center">
-                  ⚡ DIVERGÊNCIA DE FLUXO (ABSORÇÃO)
-                </div>
-              ) : (
-                <div className="text-[10px] text-slate-500 bg-slate-900/60 rounded px-2 py-0.5 text-center">
-                  Fluxo Regular / Neutro
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* QUADRO BOX RENKO: MOBILE COMPACT HUD (EM BAIXO, NÃO COBRE O GRÁFICO)      */}
-        {/* ========================================================================= */}
-        {activeBox && (
-          <div className="block sm:hidden absolute bottom-1 left-2 right-14 z-20 font-sans pointer-events-auto">
-            {isMobileDetailsOpen ? (
-              <div className="bg-slate-950/95 backdrop-blur-md border border-slate-700 rounded-lg p-2.5 shadow-2xl animate-in slide-in-from-bottom duration-200">
-                <div className="flex items-center justify-between pb-1 border-b border-slate-800">
-                  <span className="font-bold text-slate-100 text-xs">
-                    Box Renko 10R #{activeBox.index}
-                  </span>
-                  <button
-                    onClick={() => setIsMobileDetailsOpen(false)}
-                    className="p-1 text-slate-400 hover:text-slate-100 text-xs flex items-center gap-0.5 cursor-pointer"
-                  >
-                    <span>Ocultar</span>
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-x-2 gap-y-1 py-1.5 text-[10px] font-mono border-b border-slate-800/80">
-                  <div>
-                    Aber: <span className="text-slate-200">{activeBox.open}</span>
-                  </div>
-                  <div>
-                    Fech: <span className="text-slate-100 font-semibold">{activeBox.close}</span>
-                  </div>
-                  <div>
-                    Máx: <span className="text-slate-300">{activeBox.high}</span>
-                  </div>
-                  <div>
-                    Mín: <span className="text-slate-300">{activeBox.low}</span>
-                  </div>
-                </div>
-                <div className="space-y-1 py-1 text-[10px] font-mono">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Fluxo HA:</span>
-                    <span
-                      className={`font-bold ${
-                        activeBoxHaState === 'UP'
-                          ? 'text-emerald-400'
-                          : activeBoxHaState === 'DOWN'
-                          ? 'text-rose-400'
-                          : 'text-slate-300'
-                      }`}
-                    >
-                      {activeBoxHaState === 'UP' ? 'Subida' : activeBoxHaState === 'DOWN' ? 'Descida' : 'Reversão'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sky-400">CVD: {activeBox.cvdAtClose}</span>
-                    <span
-                      className={`font-bold ${
-                        activeBox.delta >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                      }`}
-                    >
-                      Delta: {activeBox.delta > 0 ? '+' : ''}{activeBox.delta} ctros
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div
-                onClick={() => setIsMobileDetailsOpen(true)}
-                className="bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] font-mono flex items-center justify-between shadow-lg cursor-pointer active:scale-98"
-              >
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      activeBox.direction === 'UP' ? 'bg-emerald-400' : 'bg-rose-400'
-                    }`}
-                  />
-                  <span className="font-bold text-slate-200">10R #{activeBox.index}</span>
-                  <span
-                    className={`font-bold ${
-                      activeBox.delta >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                    }`}
-                  >
-                    Δ{activeBox.delta > 0 ? '+' : ''}{activeBox.delta}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 text-[10px] text-sky-400">
-                  <span>Detalhes</span>
-                  <ChevronUp className="w-3 h-3" />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </div>
+
+      {/* Drawer de controles (telas pequenas): mesma barra lateral sobre o gráfico */}
+      {sidebarOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-zinc-950/70 backdrop-blur-sm lg:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+          <div className="fixed top-0 bottom-0 left-0 z-50 lg:hidden shadow-2xl shadow-black/60">
+            <ChartControlSidebar {...sidebarProps} isDrawer onCloseDrawer={() => setSidebarOpen(false)} />
+          </div>
+        </>
+      )}
 
       {/* ========================================================================= */}
       {/* RODAPÉ INFORMATIVO COM LEGENDA DE FLUXO HEIKIN-ASHI                       */}
       {/* ========================================================================= */}
-      <div className="flex items-center justify-between px-3 sm:px-4 py-1 sm:py-1.5 bg-slate-950 border-t border-slate-900 text-[10px] sm:text-[11px] text-slate-400 font-mono shrink-0">
+      <div className="flex items-center justify-between px-3 sm:px-4 py-1 sm:py-1.5 bg-zinc-950 border-t border-zinc-900 text-[10px] sm:text-[11px] text-zinc-400 font-mono shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto no-scrollbar">
           {/* Legenda dos Boxes Renko 10R */}
           <div className="flex items-center gap-1 shrink-0">
@@ -2432,11 +2272,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             <span>10R Baixa</span>
           </div>
 
-          <div className="h-3 w-[1px] bg-slate-800 shrink-0" />
+          <div className="h-3 w-[1px] bg-zinc-800 shrink-0" />
 
           {/* Legenda Solicitada do Fluxo Heikin-Ashi */}
           <div className="flex items-center gap-2 shrink-0">
-            <span className="text-slate-500 font-semibold">Fluxo HA:</span>
+            <span className="text-zinc-500 font-semibold">Fluxo HA:</span>
             <div className="flex items-center gap-1">
               <span className="w-2 h-2.5 bg-emerald-500 rounded-xs" />
               <span className="text-emerald-300">Subida</span>
@@ -2446,11 +2286,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               <span className="text-rose-300">Descida</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="w-2 h-2.5 bg-slate-400 rounded-xs" />
-              <span className="text-slate-200 font-semibold">Reversão</span>
+              <span className="w-2 h-2.5 bg-zinc-400 rounded-xs" />
+              <span className="text-zinc-200 font-semibold">Reversão</span>
             </div>
 
-            <div className="h-3 w-[1px] bg-slate-800 shrink-0 hidden sm:block" />
+            <div className="h-3 w-[1px] bg-zinc-800 shrink-0 hidden sm:block" />
 
             <button
               onClick={() => {
@@ -2466,9 +2306,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           </div>
         </div>
 
-        <div className="text-slate-500 text-[9px] sm:text-[10px] min-w-0 truncate flex items-center justify-end gap-2 pl-2">
+        <div className="text-zinc-500 text-[9px] sm:text-[10px] min-w-0 truncate flex items-center justify-end gap-2 pl-2">
           <span className="hidden lg:inline truncate">
-            💡 Arraste régua lateral para esticar Preço/Fluxo · Divisor para altura · Duplo clique para auto-escala
+            💡 Controles na barra lateral · arraste réguas para zoom Y/Fluxo · arraste o Box Renko pelo título · duplo clique auto-escala
           </span>
           <span className="hidden sm:inline lg:hidden truncate">
             💡 Arraste réguas para zoom Y/Fluxo · Divisor para altura

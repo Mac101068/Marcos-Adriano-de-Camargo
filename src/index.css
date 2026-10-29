@@ -1,10 +1,31 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   TEMA PROFISSIONAL: escala de cinza padrão (neutra)
+   Redefine a paleta `slate` com tons de cinza puros (sem subtom azul),
+   aplicando a escala neutra automaticamente a todos os componentes.
+   Cores de sinal preservadas: emerald (compra/lucro), rose (venda/prejuízo),
+   amber (avisos/conexão).
+   ========================================================================== */
+@theme {
+  --color-slate-50: #fafafa;
+  --color-slate-100: #f5f5f5;
+  --color-slate-200: #e5e5e5;
+  --color-slate-300: #d4d4d4;
+  --color-slate-400: #a3a3a3;
+  --color-slate-500: #737373;
+  --color-slate-600: #525252;
+  --color-slate-700: #404040;
+  --color-slate-800: #262626;
+  --color-slate-900: #171717;
+  --color-slate-950: #0a0a0a;
+}
+
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     color-scheme: dark;
-    background-color: #030712;
+    background-color: #0a0a0a;
   }
 
   code, pre, .font-mono, [data-mono] {
@@ -19,14 +40,14 @@
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: #0a0a0a;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #262626;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #404040;
 }
 
 /* Regras de Impressão e Exportação para PDF */
@@ -55,4 +76,18 @@
     break-inside: avoid;
     page-break-inside: avoid;
   }
+}
+
+/* Esconde a barra de rolagem horizontal da navegação inferior móvel (mantém o gesto de deslizar) */
+.no-scrollbar {
+  -ms-overflow-style: none;      /* IE/Edge */
+  scrollbar-width: none;         /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;                 /* Chrome/Safari/Android WebView */
+}
+
+/* Altura extra segura para celulares Android com gesto de navegação na parte de baixo */
+.safe-area-pb {
+  padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
 }

@@ -458,7 +458,7 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
         <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Taxa de Acerto</span>
-            <Target className="w-3.5 h-3.5 text-sky-400" />
+            <Target className="w-3.5 h-3.5 text-neutral-400" />
           </div>
           <div className="text-lg font-bold font-mono tabular-nums text-slate-100">
             {extendedStats.winRate.toFixed(1)}%
@@ -486,7 +486,7 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
         <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Recuperação</span>
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+            <Sparkles className="w-3.5 h-3.5 text-neutral-400" />
           </div>
           <div className="text-lg font-bold font-mono tabular-nums text-slate-100">
             {extendedStats.recoveryFactor.toFixed(2)}
@@ -520,7 +520,7 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
             </div>
             {chartMetric === 'TOTAL_EQUITY' && (
               <div className="flex items-center gap-1.5">
-                <span className="w-3 h-0.5 bg-sky-400 border-dashed inline-block" />
+                <span className="w-3 h-0.5 bg-neutral-400 border-dashed inline-block" />
                 <span>High-Water Mark (Pico)</span>
               </div>
             )}
@@ -631,7 +631,7 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
 
                           <div className="flex items-center justify-between">
                             <span className="text-slate-400">Pontos B3:</span>
-                            <span className="text-sky-400 font-semibold">
+                            <span className="text-neutral-400 font-semibold">
                               {data.cumulativePoints > 0 ? '+' : ''}
                               {data.cumulativePoints} pts
                             </span>
@@ -762,7 +762,7 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
         <div className="bg-slate-900/70 rounded-xl border border-slate-800 overflow-hidden shadow-lg">
           <div className="flex items-center justify-between px-4 py-2.5 bg-slate-900 border-b border-slate-800">
             <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-sky-400" />
+              <Layers className="w-4 h-4 text-neutral-400" />
               <h4 className="text-xs font-bold text-slate-200">
                 Resultado Nominal por Operação (R$)
               </h4>
@@ -850,7 +850,7 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
 
           <div className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80">
             <span className="text-slate-500 text-[11px] block">Sequência Máxima</span>
-            <span className="font-bold text-sky-400 text-sm">
+            <span className="font-bold text-neutral-400 text-sm">
               {extendedStats.maxConsecWins} Ganhos · {extendedStats.maxConsecLoss} Perdas
             </span>
           </div>

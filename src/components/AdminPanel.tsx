@@ -141,7 +141,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
         <div>
           <div className="flex items-center gap-2">
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 font-mono">
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-500/20 text-neutral-300 border border-neutral-500/30 font-mono">
               PAINEL MASTER • REDE DE ASSINANTES
             </span>
             <span className="text-xs text-slate-500">Acesso Restrito: {currentUser.email}</span>
@@ -290,7 +290,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 placeholder="Buscar por nome, email ou telefone..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-purple-500"
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-neutral-500"
               />
             </div>
 
@@ -363,7 +363,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             <div
                               className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                                 user.role === 'ADMIN'
-                                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                  ? 'bg-neutral-500/20 text-neutral-300 border border-neutral-500/30'
                                   : isActive
                                   ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                   : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
@@ -375,7 +375,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               <div className="font-semibold text-white flex items-center gap-1.5">
                                 {user.name}
                                 {user.role === 'ADMIN' && (
-                                  <span className="text-[10px] bg-purple-500/30 text-purple-200 px-1 py-0.2 rounded font-mono">
+                                  <span className="text-[10px] bg-neutral-500/30 text-neutral-200 px-1 py-0.2 rounded font-mono">
                                     ADMIN
                                   </span>
                                 )}
@@ -399,7 +399,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         {/* Status Badge */}
                         <td className="py-3 px-4">
                           {user.role === 'ADMIN' ? (
-                            <span className="px-2 py-0.5 rounded-full text-[11px] bg-purple-500/20 text-purple-300 border border-purple-500/30 font-medium">
+                            <span className="px-2 py-0.5 rounded-full text-[11px] bg-neutral-500/20 text-neutral-300 border border-neutral-500/30 font-medium">
                               Vitalício
                             </span>
                           ) : user.status === 'TRIAL' ? (
@@ -496,7 +496,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         <td className="py-3 px-4 text-right">
                           <button
                             onClick={() => onSelectUserToTest(user)}
-                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-purple-900/60 hover:text-purple-200 border border-slate-700 text-slate-300 text-[11px] font-medium transition-colors inline-flex items-center gap-1"
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-neutral-900/60 hover:text-neutral-200 border border-slate-700 text-slate-300 text-[11px] font-medium transition-colors inline-flex items-center gap-1"
                           >
                             <span>Ver Como</span>
                             <ChevronRight className="w-3 h-3" />
@@ -605,7 +605,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
 
               <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5">
-                <div className="font-semibold text-purple-400">2. Endpoint do Webhook de Liberação Automática</div>
+                <div className="font-semibold text-neutral-400">2. Endpoint do Webhook de Liberação Automática</div>
                 <div className="text-slate-400">
                   URL a configurar no seu gateway:
                 </div>
@@ -621,7 +621,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
           <div className="p-5 rounded-xl bg-slate-900 border border-slate-800 space-y-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Lock className="w-4 h-4 text-purple-400" />
+              <Lock className="w-4 h-4 text-neutral-400" />
               Segurança do Algoritmo & Acesso Web
             </h3>
             <p className="text-xs text-slate-300 leading-relaxed">

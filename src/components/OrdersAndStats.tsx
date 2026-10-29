@@ -193,7 +193,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
         <div className="bg-slate-900/80 p-3.5 rounded-lg border border-slate-800">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
             <span>Taxa de Acerto</span>
-            <Target className="w-3.5 h-3.5 text-sky-400" />
+            <Target className="w-3.5 h-3.5 text-neutral-400" />
           </div>
           <div className="text-lg font-bold font-mono tabular-nums text-slate-100">
             {stats.winRate.toFixed(1)}%
@@ -390,7 +390,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
 
                           <div className="flex items-center justify-between">
                             <span className="text-slate-400">Pontos Acumulados:</span>
-                            <span className="text-sky-400 font-semibold">
+                            <span className="text-neutral-400 font-semibold">
                               {data.cumulativePoints > 0 ? '+' : ''}
                               {data.cumulativePoints} pts
                             </span>
@@ -539,7 +539,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
                     <tr
                       key={order.id}
                       className={`hover:bg-slate-800/40 transition-colors ${
-                        isOpen ? 'bg-sky-500/5' : ''
+                        isOpen ? 'bg-neutral-500/5' : ''
                       }`}
                     >
                       <td className="py-2 px-4 text-[11px]">
@@ -601,7 +601,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
                           </span>
                         )}
                         {order.status === 'OPEN' && (
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-neutral-500/15 text-neutral-400 border border-neutral-500/30">
                             ABERTO
                           </span>
                         )}

@@ -82,7 +82,7 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
           <div className="p-3 bg-slate-950 rounded border border-slate-800/80 space-y-1.5">
-            <div className="text-sky-400 font-bold flex items-center gap-1.5">
+            <div className="text-neutral-400 font-bold flex items-center gap-1.5">
               <span>1. Terminal Web (Navegador)</span>
             </div>
             <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
@@ -162,7 +162,7 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
       {/* Destaque Técnico sobre a Extração de Fluxo e Detecção de Convergência */}
       <div className="bg-slate-900/40 p-4 rounded-lg border border-slate-800 space-y-3">
         <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
-          <BookOpen className="w-4 h-4 text-sky-400" />
+          <BookOpen className="w-4 h-4 text-neutral-400" />
           Como o Script Executa e Envia as Ordens
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-300">
@@ -173,7 +173,7 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
             </p>
           </div>
           <div className="space-y-1.5">
-            <span className="font-semibold text-sky-400">2. Disparo e Envio de Ordens Automáticas:</span>
+            <span className="font-semibold text-neutral-400">2. Disparo e Envio de Ordens Automáticas:</span>
             <p className="text-slate-400 leading-relaxed">
               O preço 10R é calculado atemporalmente em caixas de {config.boxPoints} pontos. Ao detectar convergência (Delta <code className="text-slate-200 font-mono">≥ ±{config.minDeltaThreshold}</code>), o script chama <code className="text-slate-200 font-mono">mt5.order_send()</code> a mercado com Stop Loss de {config.stopLossPoints} pts e Take Profit de {config.takeProfitPoints} pts diretamente na sua conta da corretora.
             </p>

@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Tick, RenkoBox, TradeOrder, AutomationConfig, TerminalStats, MT5ConnectionState } from './types/trading';
 import { RenkoFlowEngine } from './utils/renkoCalculator';
-import { B3MarketSimulator } from './utils/marketSimulator';
+import { RangeBarEngine, TimeBarEngine, ChartSeries } from './utils/barEngines';
+import { evaluateBoxConvergence, ConvergenceResult } from './utils/convergenceEvaluator';
+import { seriesCollectorService } from './services/seriesCollectorService';
+import { SimulatorView } from './components/SimulatorView';
+import { B3MarketSimulator, generateHistoricalTicks } from './utils/marketSimulator';
 import { Header } from './components/Header';
 import { RenkoFlowChart } from './components/RenkoFlowChart';
 import { TimesAndTrades } from './components/TimesAndTrades';
@@ -18,10 +22,44 @@ import { EaConfigService } from './services/eaConfigService';
 import { OrderAuditService } from './services/orderAuditService';
 import { IntradayOrderAudit } from './components/IntradayOrderAudit';
 import { ProjectDossierPdfModal } from './components/ProjectDossierPdfModal';
-import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart } from 'lucide-react';
+import { SeriesComparisonView } from './components/SeriesComparisonView';
+import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText } from 'lucide-react';
+
+type ActiveTickResult = {
+  newBoxClosed: boolean;
+  closedBox?: RenkoBox;
+  signal?: 'BUY' | 'SELL';
+  signalReason?: string;
+};
+
+/** Anota uma barra fechada (Range/Tempo) com a convergência da MESMA estratégia do Renko. */
+function annotateActiveBar(
+  box: RenkoBox,
+  previousBoxes: RenkoBox[],
+  config: AutomationConfig,
+  priceLabel: string
+): ConvergenceResult {
+  const pts = Math.max(1, Math.round(Math.abs(box.close - box.open)));
+  const conv = evaluateBoxConvergence(box, config, previousBoxes, {
+    priceLabel,
+    gainLabelUp: `+${pts} pts`,
+    gainLabelDown: `-${pts} pts`,
+  });
+  box.isConvergence = conv.isConvergence;
+  box.convergenceType = conv.type;
+  return conv;
+}
+
+// Escalas Renko paralelas (1R = 5 pts no Mini-Índice): medidas APENAS pelo coletor
+// de eficiência. Elas nunca disparam ordens reais — quem opera é a série ativa.
+const ALT_RENKO_SCALES: { key: 'renko15r' | 'renko20r' | 'renko25r'; pts: number; label: string }[] = [
+  { key: 'renko15r', pts: 75, label: '15R (75 pts)' },
+  { key: 'renko20r', pts: 100, label: '20R (100 pts)' },
+  { key: 'renko25r', pts: 125, label: '25R (125 pts)' },
+];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'chart' | 'tape' | 'equity' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'admin'>('chart');
+  const [activeTab, setActiveTab] = useState<'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'admin'>('chart');
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => AuthService.getCurrentUser());
   const [showRenewModal, setShowRenewModal] = useState<boolean>(false);
   const [showPdfModal, setShowPdfModal] = useState<boolean>(false);
@@ -34,6 +72,60 @@ export default function App() {
   const [currentBox, setCurrentBox] = useState<Partial<RenkoBox> | null>(null);
   const [currentPrice, setCurrentPrice] = useState<number>(128500);
   const [cvd, setCvd] = useState<number>(0);
+
+  // =========================================================================
+  // SÉRIES EXPERIMENTAIS: Pontos (Renko) x Range x Tempo — escolha na barra do gráfico
+  // =========================================================================
+  const [chartSeries, setChartSeries] = useState<ChartSeries>(() => {
+    try {
+      const saved = localStorage.getItem('fluxo_chart_series_v1');
+      if (saved === 'renko' || saved === 'range' || saved === 'tempo') return saved;
+    } catch (e) {
+      // Ignora
+    }
+    return 'renko';
+  });
+  const [rangePoints, setRangePoints] = useState<number>(() => Number(localStorage.getItem('fluxo_chart_range_pts_v1')) || 50);
+  const [timeframeSec, setTimeframeSec] = useState<number>(() => Number(localStorage.getItem('fluxo_chart_time_sec_v1')) || 30);
+  const [rangeBoxes, setRangeBoxes] = useState<RenkoBox[]>([]);
+  const [rangeCurrentBox, setRangeCurrentBox] = useState<Partial<RenkoBox> | null>(null);
+  const [timeBoxes, setTimeBoxes] = useState<RenkoBox[]>([]);
+  const [timeCurrentBox, setTimeCurrentBox] = useState<Partial<RenkoBox> | null>(null);
+  const rangeEngineRef = useRef<RangeBarEngine>(new RangeBarEngine(50));
+  const timeEngineRef = useRef<TimeBarEngine>(new TimeBarEngine(30000));
+  const allTicksRef = useRef<Tick[]>([]);
+
+  // Janela flutuante "Dados" (controles do painel Renko) — visível por padrão, persistida
+  const [dadosPanelOpen, setDadosPanelOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('fluxo_dados_window_v1') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('fluxo_dados_window_v1', dadosPanelOpen ? '1' : '0');
+    } catch {
+      // Ignora erro de storage
+    }
+  }, [dadosPanelOpen]);
+  const handleToggleDadosPanel = () => {
+    setDadosPanelOpen((v) => {
+      // Ao reabrir pelo menu, leva o operador para a aba do gráfico onde a janela vive
+      if (!v) setActiveTab('chart');
+      return !v;
+    });
+  };
+  // Menu "Mais" da barra inferior móvel — agrupa as abas secundárias sem rolagem lateral
+  const [moreNavOpen, setMoreNavOpen] = useState<boolean>(false);
+  const mobileMoreTabsActive = ['simulador', 'comparativo', 'audit', 'settings', 'docs', 'admin', 'python'].includes(activeTab);
+  // Motores Renko extras (15R/20R/25R) rodando em paralelo só para o coletor
+  const altEnginesRef = useRef<Record<'renko15r' | 'renko20r' | 'renko25r', RenkoFlowEngine>>({
+    renko15r: new RenkoFlowEngine(75),
+    renko20r: new RenkoFlowEngine(100),
+    renko25r: new RenkoFlowEngine(125),
+  });
 
   const [orders, setOrders] = useState<TradeOrder[]>(() => {
     const saved = OrderAuditService.loadIntradayOrders();
@@ -296,7 +388,7 @@ export default function App() {
   });
   const [latestToast, setLatestToast] = useState<{
     id: string;
-    type: 'BUY' | 'SELL';
+    type: 'BUY' | 'SELL' | 'INFO';
     title: string;
     description: string;
     timestamp: number;
@@ -319,11 +411,19 @@ export default function App() {
     engine.initialize(128500);
 
     const initialTicks: Tick[] = [];
+    rangeEngineRef.current.setRangePoints(rangePoints);
+    rangeEngineRef.current.initialize(128500);
+    timeEngineRef.current.setIntervalMs(timeframeSec * 1000);
+    timeEngineRef.current.initialize(128500);
+    // Escalas paralelas 15R/20R/25R começam sincronizadas com o mercado (só o coletor usa)
+    ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(128500));
     // Simula 350 ticks para gerar os primeiros ~20 boxes
     for (let i = 0; i < 350; i++) {
       const t = sim.generateNextTick();
       initialTicks.unshift(t);
       engine.processTick(t, config);
+      rangeEngineRef.current.processTick(t);
+      timeEngineRef.current.processTick(t);
     }
 
     setTicks(initialTicks.slice(0, 100));
@@ -331,12 +431,56 @@ export default function App() {
     setCurrentBox(engine.getCurrentBox());
     setCurrentPrice(sim.getPrice());
     setCvd(engine.getCvd());
+    setRangeBoxes([...rangeEngineRef.current.getBoxes()]);
+    setRangeCurrentBox(rangeEngineRef.current.getCurrentBox());
+    setTimeBoxes([...timeEngineRef.current.getBoxes()]);
+    setTimeCurrentBox(timeEngineRef.current.getCurrentBox());
+    // initialTicks está do mais recente para o mais antigo; o replay precisa da ordem cronológica
+    allTicksRef.current = [...initialTicks].reverse();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Atualiza tamanho do box quando a config mudar
   useEffect(() => {
     engineRef.current.setBoxPoints(config.boxPoints);
   }, [config.boxPoints]);
+
+  // Persiste a escolha de série e as escalas experimentais no navegador
+  useEffect(() => {
+    try {
+      localStorage.setItem('fluxo_chart_series_v1', chartSeries);
+      localStorage.setItem('fluxo_chart_range_pts_v1', String(rangePoints));
+      localStorage.setItem('fluxo_chart_time_sec_v1', String(timeframeSec));
+    } catch (e) {
+      // Ignora
+    }
+  }, [chartSeries, rangePoints, timeframeSec]);
+
+  // Recalcula toda a história em Range quando a escala mudar (experimentar instantâneo)
+  useEffect(() => {
+    const eng = rangeEngineRef.current;
+    eng.setRangePoints(rangePoints);
+    const hist = allTicksRef.current;
+    if (hist.length > 0) {
+      eng.initialize(hist[0].price, hist[0].timestamp);
+      for (const t of hist) eng.processTick(t);
+    }
+    setRangeBoxes([...eng.getBoxes()]);
+    setRangeCurrentBox(eng.getCurrentBox());
+  }, [rangePoints]);
+
+  // Recalcula toda a história temporal quando o intervalo mudar
+  useEffect(() => {
+    const eng = timeEngineRef.current;
+    eng.setIntervalMs(timeframeSec * 1000);
+    const hist = allTicksRef.current;
+    if (hist.length > 0) {
+      eng.initialize(hist[0].price, hist[0].timestamp);
+      for (const t of hist) eng.processTick(t);
+    }
+    setTimeBoxes([...eng.getBoxes()]);
+    setTimeCurrentBox(eng.getCurrentBox());
+  }, [timeframeSec]);
 
   // Função para processar a execução de um tick
   const handleIncomingTick = useCallback(
@@ -348,13 +492,85 @@ export default function App() {
       setTicks((prev) => [tick, ...prev.slice(0, 99)]);
 
       // Processa no motor de Renko 10R e Fluxo
-      const result = engine.processTick(tick, config);
+      const renkoRes = engine.processTick(tick, config);
       setCvd(engine.getCvd());
       setCurrentBox(engine.getCurrentBox());
 
-      // Se um novo box 10R fechou
-      if (result.newBoxClosed && result.closedBox) {
+      // Alimenta as séries experimentais (Range e Tempo) com o mesmo fluxo de ticks
+      if (allTicksRef.current.length < 50000) allTicksRef.current.push(tick);
+      const rangeEng = rangeEngineRef.current;
+      const timeEng = timeEngineRef.current;
+      const rangeRes = rangeEng.processTick(tick);
+      setRangeCurrentBox(rangeEng.getCurrentBox());
+      if (rangeRes.newBarClosed) setRangeBoxes([...rangeEng.getBoxes()]);
+      const timeRes = timeEng.processTick(tick);
+      setTimeCurrentBox(timeEng.getCurrentBox());
+      if (timeRes.newBarClosed) setTimeBoxes([...timeEng.getBoxes()]);
+
+      // =========================================================================
+      // COLETOR INTERNO: toda barra fechada (das 3 séries, não importa a ativa)
+      // alimenta os robôs sombra com a MESMA config do EA.
+      // =========================================================================
+      seriesCollectorService.markToMarket(tick.price, tick.timestamp);
+      const tfShortLabel =
+        timeframeSec < 60
+          ? `${timeframeSec}s`
+          : timeframeSec < 3600
+          ? `${Math.round(timeframeSec / 60)}min`
+          : `${Math.round(timeframeSec / 3600)}h`;
+      if (renkoRes.newBoxClosed && renkoRes.closedBox) {
         setBoxes([...engine.getBoxes()]);
+        seriesCollectorService.ingest(
+          'renko',
+          renkoRes.closedBox,
+          engine.getBoxes().slice(0, -1),
+          config,
+          `${Math.max(1, Math.round(config.boxPoints / 5))}R`
+        );
+      }
+      let rangeConv: ConvergenceResult | null = null;
+      if (rangeRes.newBarClosed && rangeRes.closedBox) {
+        rangeConv = annotateActiveBar(rangeRes.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`);
+        seriesCollectorService.ingest('range', rangeRes.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`);
+      }
+      let timeConv: ConvergenceResult | null = null;
+      if (timeRes.newBarClosed && timeRes.closedBox) {
+        timeConv = annotateActiveBar(timeRes.closedBox, timeEng.getBoxes().slice(0, -1), config, `Tempo ${tfShortLabel}`);
+        seriesCollectorService.ingest('tempo', timeRes.closedBox, timeEng.getBoxes().slice(0, -1), config, tfShortLabel);
+      }
+
+      // Escalas Renko paralelas (15R/20R/25R): processam os mesmos ticks e alimentam o coletor
+      for (const alt of ALT_RENKO_SCALES) {
+        const altEng = altEnginesRef.current[alt.key];
+        const altRes = altEng.processTick(tick, config);
+        if (altRes.newBoxClosed && altRes.closedBox) {
+          seriesCollectorService.ingest(alt.key, altRes.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`);
+        }
+      }
+
+      // =========================================================================
+      // ROBÔ NA SÉRIE ATIVA (Opção A): as ordens são disparadas pela série
+      // escolhida na barra do gráfico. Séries inativas só alimentam o coletor.
+      // =========================================================================
+      const mt5TagShort =
+        chartSeries === 'renko' ? '10R' : chartSeries === 'range' ? `RNG${rangePoints}` : `TF${timeframeSec}s`;
+      const robotTag =
+        chartSeries === 'renko'
+          ? 'Renko 10R'
+          : chartSeries === 'range'
+          ? `Range ${rangePoints}pts`
+          : `Tempo ${tfShortLabel}`;
+      let result: ActiveTickResult = { newBoxClosed: false };
+      if (chartSeries === 'renko') {
+        result = renkoRes;
+      } else if (chartSeries === 'range' && rangeRes.newBarClosed && rangeRes.closedBox && rangeConv) {
+        result = { newBoxClosed: true, closedBox: rangeRes.closedBox, signal: rangeConv.signal, signalReason: rangeConv.reason };
+      } else if (chartSeries === 'tempo' && timeRes.newBarClosed && timeRes.closedBox && timeConv) {
+        result = { newBoxClosed: true, closedBox: timeRes.closedBox, signal: timeConv.signal, signalReason: timeConv.reason };
+      }
+
+      // Se uma barra da série ativa fechou
+      if (result.newBoxClosed && result.closedBox) {
 
         // Se gerou sinal de fechamento de box
         if (result.signal && result.closedBox) {
@@ -415,7 +631,7 @@ export default function App() {
                 setLatestToast({
                   id: `flip-toast-${Date.now()}`,
                   type: signalType,
-                  title: `🔄 INVERSÃO DE MERCADO: POSIÇÕES ANTERIORES ZERADAS!`,
+                  title: `🔄 INVERSÃO DE MERCADO [${robotTag}]: POSIÇÕES ANTERIORES ZERADAS!`,
                   description: `Virada do fluxo para ${signalType === 'BUY' ? 'ALTA' : 'BAIXA'}. Entrada mãe e ordens da pirâmide encerradas (R$ ${totalClosedPnL.toFixed(2)}).`,
                   timestamp: Date.now(),
                 });
@@ -450,7 +666,7 @@ export default function App() {
                 if (!hasMainOrder) {
                   const mainEvt = OrderAuditService.createEvent(
                     'ORDER_DISPATCHED',
-                    `Ordem Principal ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} (Surfe de Tendência)`,
+                    `Ordem Principal ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} (Surfe de Tendência) [Robô ${robotTag}]`,
                     `Entrada Matriz no fechamento do 1º bloco ${signalType === 'BUY' ? 'verde' : 'vermelho'} a ${tick.price} pts (${config.contracts} ctro(s)). Mantida aberta até a virada do fluxo!`,
                     tick.price,
                     config.contracts,
@@ -471,7 +687,7 @@ export default function App() {
                     status: 'OPEN',
                     source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA',
                     magicNumber: config.magicNumber,
-                    triggerReason: `Entrada Principal ${signalType === 'BUY' ? 'Compra' : 'Venda'} 10R (Surfe até Virada do Fluxo)`,
+                    triggerReason: `Entrada Principal ${signalType === 'BUY' ? 'Compra' : 'Venda'} (${robotTag} — Surfe até Virada do Fluxo)`,
                     isRealMT5: mt5State.status === 'CONNECTED',
                     auditTrail: [mainEvt],
                   };
@@ -490,7 +706,7 @@ export default function App() {
                         action: 'ORDER_SEND',
                         type: signalType,
                         contracts: config.contracts,
-                        comment: `PIRAMIDE_MAIN_${signalType}`,
+                        comment: `PIRAMIDE_MAIN_${signalType}_${mt5TagShort}`,
                       })
                     );
                   }
@@ -504,7 +720,7 @@ export default function App() {
 
                   const pyrEvt = OrderAuditService.createEvent(
                     'ORDER_DISPATCHED',
-                    `Ordem da Pirâmide #${pyramidLevel} (${signalType === 'BUY' ? 'COMPRA' : 'VENDA'})`,
+                    `Ordem da Pirâmide #${pyramidLevel} (${signalType === 'BUY' ? 'COMPRA' : 'VENDA'}) [Robô ${robotTag}]`,
                     `Nova compra/venda no fechamento do bloco ${signalType === 'BUY' ? 'verde' : 'vermelho'} a ${tick.price} pts (${pyrContracts} ctro). Alvo TP fixo em +${tpPoints} pts (${targetTp} pts).`,
                     tick.price,
                     pyrContracts,
@@ -526,7 +742,7 @@ export default function App() {
                     status: 'OPEN',
                     source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA',
                     magicNumber: config.magicNumber,
-                    triggerReason: `Pirâmide #${pyramidLevel} ${signalType === 'BUY' ? 'Compra' : 'Venda'} 10R (+${tpPoints}p TP)`,
+                    triggerReason: `Pirâmide #${pyramidLevel} ${signalType === 'BUY' ? 'Compra' : 'Venda'} ${robotTag} (+${tpPoints}p TP)`,
                     isRealMT5: mt5State.status === 'CONNECTED',
                     auditTrail: [pyrEvt],
                   };
@@ -534,7 +750,7 @@ export default function App() {
                   setLatestToast({
                     id: `pyr-toast-${Date.now()}`,
                     type: signalType,
-                    title: `🔺 PIRÂMIDE #${pyramidLevel} ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} (+${tpPoints}p TP)!`,
+                    title: `🔺 PIRÂMIDE #${pyramidLevel} ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} [${mt5TagShort}] (+${tpPoints}p TP)!`,
                     description: `Entrada a ${tick.price.toLocaleString('pt-BR')} pts. Alvo TP em ${targetTp.toLocaleString('pt-BR')} pts (+1 box).`,
                     timestamp: Date.now(),
                   });
@@ -546,7 +762,7 @@ export default function App() {
                         type: signalType,
                         contracts: pyrContracts,
                         tp: tpPoints,
-                        comment: `PIRAMIDE_SUB_${pyramidLevel}`,
+                        comment: `PIRAMIDE_SUB_${pyramidLevel}_${mt5TagShort}`,
                       })
                     );
                   }
@@ -696,7 +912,7 @@ export default function App() {
                 setLatestToast({
                   id: `ord-toast-${Date.now()}`,
                   type: signalType,
-                  title: `ORDEM LIMITADA POSICIONADA NO RETESTE`,
+                  title: `ORDEM LIMITADA POSICIONADA NO RETESTE [${robotTag}]`,
                   description: `Convergência detectada! Aguardando o preço VOLTAR para testar a entrada em ${limitPrice.toLocaleString('pt-BR')} pts.`,
                   timestamp: Date.now(),
                 });
@@ -704,7 +920,7 @@ export default function App() {
                 setLatestToast({
                   id: `ord-toast-${Date.now()}`,
                   type: signalType,
-                  title: `ORDEM ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} DISPARADA A MERCADO`,
+                  title: `ORDEM ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} DISPARADA A MERCADO [${robotTag}]`,
                   description: `${result.signalReason} a ${tick.price.toLocaleString('pt-BR')} pts`,
                   timestamp: Date.now(),
                 });
@@ -721,7 +937,7 @@ export default function App() {
                     contracts: config.contracts,
                     sl: config.stopLossPoints,
                     tp: config.takeProfitPoints,
-                    comment: isPullbackMode ? `Reteste ${signalType}` : `10R ${signalType}`,
+                    comment: isPullbackMode ? `Reteste ${signalType} ${mt5TagShort}` : `${mt5TagShort} ${signalType}`,
                   })
                 );
               }
@@ -1036,7 +1252,7 @@ export default function App() {
         return changed ? updated : prevOrders;
       });
     },
-    [config, mt5State.status]
+    [config, mt5State.status, chartSeries, rangePoints, timeframeSec]
   );
 
   // Conexão WebSocket com o MetaTrader 5 (Local Bridge)
@@ -1435,6 +1651,115 @@ export default function App() {
     return () => clearInterval(timer);
   }, [isSimulating, simulationSpeed, mt5State.status, handleIncomingTick]);
 
+  // Troca manual da série do gráfico: o robô passa a operar nela (Opção A).
+  // Posições abertas NÃO são liquidadas automaticamente — apenas avisamos o operador.
+  const handleSeriesChange = (s: ChartSeries) => {
+    if (s === chartSeries) return;
+    setChartSeries(s);
+    const label =
+      s === 'renko'
+        ? 'Pontos (Renko 10R)'
+        : s === 'range'
+        ? `Range ${rangePoints} pts`
+        : `Tempo ${timeframeSec}s`;
+    const hasOpen = orders.some((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT');
+    setLatestToast({
+      id: `series-switch-${Date.now()}`,
+      type: 'INFO',
+      title: `ROBÔ AGORA OPERA: ${label.toUpperCase()}`,
+      description: hasOpen
+        ? `Atenção: há posições abertas — elas foram mantidas e continuam sendo geridas por SL/TP/virada de fluxo. Os próximos disparos vêm do gráfico ${label}.`
+        : `Próximas entradas serão disparadas no fechamento de barras do gráfico ${label}. O coletor de eficiência continua rodando os 3 em paralelo.`,
+      timestamp: Date.now(),
+    });
+  };
+
+  // Replay de histórico sintético (1 a 5 dias úteis, 09:05–17:45) nos gráficos e
+  // no coletor de eficiência. NÃO toca ordens reais, auditoria nem MT5 — é um
+  // backtest 100% em memória com os mesmos motores de barra do terminal.
+  const [isReplaying, setIsReplaying] = useState<boolean>(false);
+  const handleReplayHistory = (days: number) => {
+    if (isReplaying) return;
+    setIsReplaying(true);
+    // Cede um frame para a UI desenhar o estado "gerando..." antes de bloquear com o cálculo
+    setTimeout(() => {
+      try {
+        const engine = engineRef.current;
+        const rangeEng = rangeEngineRef.current;
+        const timeEng = timeEngineRef.current;
+        const ticks = generateHistoricalTicks(days, 128500);
+        if (ticks.length === 0) return;
+
+        const tfShortLabel =
+          timeframeSec < 60
+            ? `${timeframeSec}s`
+            : timeframeSec < 3600
+            ? `${Math.round(timeframeSec / 60)}min`
+            : `${Math.round(timeframeSec / 3600)}h`;
+        const renkoScale = `${Math.max(1, Math.round(config.boxPoints / 5))}R`;
+
+        // Zera os motores e o coletor para o replay limpo (ordens reais preservadas)
+        engine.setBoxPoints(config.boxPoints);
+        engine.initialize(ticks[0].price, ticks[0].timestamp);
+        rangeEng.setRangePoints(rangePoints);
+        rangeEng.initialize(ticks[0].price, ticks[0].timestamp);
+        timeEng.setIntervalMs(timeframeSec * 1000);
+        timeEng.initialize(ticks[0].price, ticks[0].timestamp);
+        ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(ticks[0].price, ticks[0].timestamp));
+        seriesCollectorService.reset();
+        seriesCollectorService.beginBatch();
+
+        for (const t of ticks) {
+          const r = engine.processTick(t, config);
+          if (r.newBoxClosed && r.closedBox) {
+            seriesCollectorService.ingest('renko', r.closedBox, engine.getBoxes().slice(0, -1), config, renkoScale);
+          }
+          const rr = rangeEng.processTick(t);
+          if (rr.newBarClosed && rr.closedBox) {
+            annotateActiveBar(rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`);
+            seriesCollectorService.ingest('range', rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`);
+          }
+          const tr = timeEng.processTick(t);
+          if (tr.newBarClosed && tr.closedBox) {
+            annotateActiveBar(tr.closedBox, timeEng.getBoxes().slice(0, -1), config, `Tempo ${tfShortLabel}`);
+            seriesCollectorService.ingest('tempo', tr.closedBox, timeEng.getBoxes().slice(0, -1), config, tfShortLabel);
+          }
+          for (const alt of ALT_RENKO_SCALES) {
+            const altEng = altEnginesRef.current[alt.key];
+            const ar = altEng.processTick(t, config);
+            if (ar.newBoxClosed && ar.closedBox) {
+              seriesCollectorService.ingest(alt.key, ar.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`);
+            }
+          }
+        }
+        seriesCollectorService.endBatch();
+
+        // Atualiza o React de uma só vez (evita dezenas de milhares de renders)
+        const last = ticks[ticks.length - 1];
+        simulatorRef.current.setPrice(last.price);
+        setCurrentPrice(last.price);
+        setCvd(engine.getCvd());
+        setBoxes([...engine.getBoxes()]);
+        setCurrentBox(engine.getCurrentBox());
+        setRangeBoxes([...rangeEng.getBoxes()]);
+        setRangeCurrentBox(rangeEng.getCurrentBox());
+        setTimeBoxes([...timeEng.getBoxes()]);
+        setTimeCurrentBox(timeEng.getCurrentBox());
+        allTicksRef.current = ticks.slice(-50000);
+
+        setLatestToast({
+          id: `replay-${Date.now()}`,
+          type: 'INFO',
+          title: `REPLAY CONCLUÍDO: ${days} DIA(S) DE HISTÓRICO GERADO`,
+          description: `${ticks.length.toLocaleString('pt-BR')} ticks sintéticos (sessões 09:05–17:45) reproduzidos nos 6 contadores do coletor. Ordens reais não foram tocadas — abra a aba Comparativo para analisar os horários.`,
+          timestamp: Date.now(),
+        });
+      } finally {
+        setIsReplaying(false);
+      }
+    }, 60);
+  };
+
   // Avançar 1 tick manual
   const handleStepTick = () => {
     const nextTick = simulatorRef.current.generateNextTick();
@@ -1471,6 +1796,7 @@ export default function App() {
     const sim = simulatorRef.current;
     sim.setPrice(128500);
     engine.initialize(128500);
+    sessionStartRef.current = Date.now(); // PnL da sessão volta ao zero junto com o reinício
     setTicks([]);
     setBoxes([]);
     setCurrentBox(null);
@@ -1478,11 +1804,25 @@ export default function App() {
     setCvd(0);
     setOrders([]);
     OrderAuditService.clearIntradayAudit();
+    // Zera também as séries experimentais (Range e Tempo)
+    allTicksRef.current = [];
+    rangeEngineRef.current.initialize(128500);
+    timeEngineRef.current.initialize(128500);
+    ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(128500));
+    setRangeBoxes([]);
+    setRangeCurrentBox(null);
+    setTimeBoxes([]);
+    setTimeCurrentBox(null);
   };
 
-  // Estatísticas calculadas
+  // Estatísticas calculadas — contam SÓ o que foi fechado nesta abertura da página
+  // (o livro de ordens continua persistido para a auditoria, mas o PnL do canto
+  // direito zera a cada reinício para não confundir com resultados de sessões passadas)
+  const sessionStartRef = React.useRef<number>(Date.now());
   const stats: TerminalStats = React.useMemo(() => {
-    const closed = orders.filter((o) => o.status !== 'OPEN');
+    const closed = orders.filter(
+      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
+    );
     const winning = closed.filter((o) => (o.financialResult || 0) > 0);
     const losing = closed.filter((o) => (o.financialResult || 0) < 0);
     const totalWinR = winning.reduce((acc, o) => acc + (o.financialResult || 0), 0);
@@ -1521,7 +1861,7 @@ export default function App() {
   }, [latestToast]);
 
   return (
-    <div className="flex flex-col h-[100dvh] w-screen bg-[#030712] text-slate-100 overflow-hidden font-sans">
+    <div className="flex flex-col h-[100dvh] w-screen bg-[#0a0a0a] text-slate-100 overflow-hidden font-sans">
       {/* Top Bar seguindo o contrato de 3 zonas */}
       <Header
         activeTab={activeTab}
@@ -1545,6 +1885,8 @@ export default function App() {
         onOpenRenewModal={() => setShowRenewModal(true)}
         eaProfileName={config.profileName}
         onOpenPdfModal={() => setShowPdfModal(true)}
+        dadosPanelOpen={dadosPanelOpen}
+        onToggleDadosPanel={handleToggleDadosPanel}
       />
 
       {/* Tira de Métricas e Status Rápido (scroll horizontal suave no celular sem quebrar) */}
@@ -1556,10 +1898,6 @@ export default function App() {
             <span className="text-emerald-400 font-semibold">{currentPrice.toLocaleString('pt-BR')} pts</span>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2">
-            <span className="text-slate-400">Renko:</span>
-            <span className="text-slate-200">10R ({config.boxPoints} pts)</span>
-          </div>
-          <div className="flex items-center gap-1.5 sm:gap-2">
             <span className="text-slate-400">CVD:</span>
             <span className={`font-semibold ${cvd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
               {cvd > 0 ? '+' : ''}
@@ -1568,7 +1906,7 @@ export default function App() {
           </div>
           <div className="hidden md:flex items-center gap-2">
             <span className="text-slate-400">Origem:</span>
-            <span className={mt5State.status === 'CONNECTED' ? 'text-emerald-400 font-bold' : 'text-sky-400'}>
+            <span className={mt5State.status === 'CONNECTED' ? 'text-emerald-400 font-bold' : 'text-neutral-400'}>
               {mt5State.status === 'CONNECTED'
                 ? `MT5 Real (${mt5State.brokerCompany} #${mt5State.accountLogin || ''})`
                 : 'Simulação B3'}
@@ -1582,8 +1920,8 @@ export default function App() {
 
         <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
           {openOrders.length > 0 && (
-            <div className="flex items-center gap-1.5 text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/30 text-[10px] sm:text-xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+            <div className="flex items-center gap-1.5 text-neutral-400 bg-neutral-500/10 px-2 py-0.5 rounded border border-neutral-500/30 text-[10px] sm:text-xs">
+              <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 animate-pulse" />
               <span>
                 {openOrders.length === 1
                   ? `${openOrders[0].type} ${openOrders[0].contracts}x @ ${openOrders[0].entryPrice}`
@@ -1592,8 +1930,8 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            <span className="text-slate-400 text-[10px] sm:text-xs">PnL Fechado:</span>
+          <div className="flex items-center gap-1.5 sm:gap-2" title="Resultado financeiro apenas das ordens fechadas NESTA abertura da página — zera a cada reinício (F5). O histórico completo continua no livro de Auditoria.">
+            <span className="text-slate-400 text-[10px] sm:text-xs">PnL Sessão:</span>
             <span
               className={`font-bold ${
                 stats.netFinancial >= 0 ? 'text-emerald-400' : 'text-rose-400'
@@ -1634,8 +1972,8 @@ export default function App() {
             {activeTab === 'chart' && (
               <div className="h-full w-full rounded-lg border border-slate-800 overflow-hidden flex flex-col">
                 <RenkoFlowChart
-                  boxes={boxes}
-                  currentBox={currentBox}
+                  boxes={chartSeries === 'renko' ? boxes : chartSeries === 'range' ? rangeBoxes : timeBoxes}
+                  currentBox={chartSeries === 'renko' ? currentBox : chartSeries === 'range' ? rangeCurrentBox : timeCurrentBox}
                   currentPrice={currentPrice}
                   openOrders={openOrders}
                   minDeltaThreshold={config.minDeltaThreshold}
@@ -1650,6 +1988,15 @@ export default function App() {
                   partialContracts={config.partialContracts}
                   trailingStop={config.trailingStop}
                   onExecutePyramidDemo={handleExecutePyramidDemo}
+                  chartSeries={chartSeries}
+                  onSeriesChange={handleSeriesChange}
+                  renkoBoxPoints={config.boxPoints}
+                  rangePoints={rangePoints}
+                  onRangePointsChange={setRangePoints}
+                  timeframeSec={timeframeSec}
+                  onTimeframeChange={setTimeframeSec}
+                  dadosWindowOpen={dadosPanelOpen}
+                  onDadosWindowClose={() => setDadosPanelOpen(false)}
                 />
               </div>
             )}
@@ -1667,6 +2014,52 @@ export default function App() {
                   stats={stats}
                   currentPrice={currentPrice}
                 />
+              </div>
+            )}
+
+            {activeTab === 'simulador' && (
+              <div className="h-full w-full">
+                <SimulatorView
+                  isSimulating={isSimulating}
+                  setIsSimulating={setIsSimulating}
+                  simulationSpeed={simulationSpeed}
+                  setSimulationSpeed={setSimulationSpeed}
+                  robotActive={config.active}
+                  onToggleRobot={() => {
+                    setConfig((prev) => {
+                      const updated = { ...prev, active: !prev.active, lastSavedTimestamp: Date.now() };
+                      EaConfigService.saveConfig(updated);
+                      return updated;
+                    });
+                  }}
+                  currentPrice={currentPrice}
+                  mt5Status={mt5State.status}
+                  chartSeries={chartSeries}
+                  rangePoints={rangePoints}
+                  timeframeSec={timeframeSec}
+                  config={config}
+                  boxCounts={{
+                    renko: boxes.length,
+                    range: rangeBoxes.length,
+                    tempo: timeBoxes.length,
+                    renko15r: altEnginesRef.current.renko15r.getBoxes().length,
+                    renko20r: altEnginesRef.current.renko20r.getBoxes().length,
+                    renko25r: altEnginesRef.current.renko25r.getBoxes().length,
+                  }}
+                  tickBufferCount={allTicksRef.current.length}
+                  ordersOpen={openOrders.length}
+                  ordersClosed={orders.filter((o) => o.status.startsWith('CLOSED') || o.status === 'EXPIRED_PULLBACK').length}
+                  onStepTick={handleStepTick}
+                  onInjectAggression={handleInjectLargeAggression}
+                  onReplayHistory={handleReplayHistory}
+                  isReplaying={isReplaying}
+                />
+              </div>
+            )}
+
+            {activeTab === 'comparativo' && (
+              <div className="h-full w-full">
+                <SeriesComparisonView onReplayHistory={handleReplayHistory} isReplaying={isReplaying} />
               </div>
             )}
 
@@ -1745,13 +2138,13 @@ export default function App() {
         )}
       </main>
 
-      {/* Barra de Navegação Inferior Móvel (Exclusiva para Celulares e Tablets pequenos < 1024px) */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 lg:hidden px-1 py-1.5 flex items-center justify-around safe-area-pb shadow-lg">
+      {/* Barra de Navegação Inferior Móvel (< 1024px) — 4 abas principais + menu "Mais" (sem rolagem) */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 lg:hidden px-2 py-1.5 flex items-center justify-around safe-area-pb shadow-lg">
         <button
           onClick={() => setActiveTab('chart')}
           className={`flex flex-col items-center justify-center py-1 px-2 rounded-lg text-[10px] font-medium transition-all ${
             activeTab === 'chart'
-              ? 'text-cyan-400 bg-cyan-950/40 font-semibold'
+              ? 'text-neutral-400 bg-neutral-950/40 font-semibold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -1763,7 +2156,7 @@ export default function App() {
           onClick={() => setActiveTab('tape')}
           className={`flex flex-col items-center justify-center py-1 px-2 rounded-lg text-[10px] font-medium transition-all ${
             activeTab === 'tape'
-              ? 'text-cyan-400 bg-cyan-950/40 font-semibold'
+              ? 'text-neutral-400 bg-neutral-950/40 font-semibold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -1775,7 +2168,7 @@ export default function App() {
           onClick={() => setActiveTab('equity')}
           className={`flex flex-col items-center justify-center py-1 px-2 rounded-lg text-[10px] font-medium transition-all ${
             activeTab === 'equity'
-              ? 'text-cyan-400 bg-cyan-950/40 font-semibold'
+              ? 'text-neutral-400 bg-neutral-950/40 font-semibold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -1787,67 +2180,130 @@ export default function App() {
           onClick={() => setActiveTab('stats')}
           className={`relative flex flex-col items-center justify-center py-1 px-2 rounded-lg text-[10px] font-medium transition-all ${
             activeTab === 'stats'
-              ? 'text-cyan-400 bg-cyan-950/40 font-semibold'
+              ? 'text-neutral-400 bg-neutral-950/40 font-semibold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
           {openOrders.length > 0 && (
-            <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-neutral-400 animate-pulse" />
           )}
           <Layers className="w-4 h-4 mb-0.5" />
           <span>Ordens</span>
         </button>
 
         <button
-          onClick={() => setActiveTab('audit')}
+          onClick={() => setMoreNavOpen(true)}
           className={`relative flex flex-col items-center justify-center py-1 px-2 rounded-lg text-[10px] font-medium transition-all ${
-            activeTab === 'audit'
-              ? 'text-cyan-400 bg-cyan-950/40 font-semibold'
+            mobileMoreTabsActive
+              ? 'text-neutral-400 bg-neutral-950/40 font-semibold'
               : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <ShieldCheck className="w-4 h-4 mb-0.5" />
-          <span>Auditoria</span>
+          {mobileMoreTabsActive && (
+            <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          )}
+          <MoreHorizontal className="w-4 h-4 mb-0.5" />
+          <span>Mais</span>
         </button>
-
-        <button
-          onClick={() => setActiveTab('settings')}
-          className={`flex flex-col items-center justify-center py-1 px-2 rounded-lg text-[10px] font-medium transition-all ${
-            activeTab === 'settings'
-              ? 'text-cyan-400 bg-cyan-950/40 font-semibold'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Sliders className="w-4 h-4 mb-0.5" />
-          <span>Ajustes</span>
-        </button>
-
-        {currentUser.role === 'ADMIN' ? (
-          <button
-            onClick={() => setActiveTab('admin')}
-            className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg text-[10px] font-medium transition-all ${
-              activeTab === 'admin'
-                ? 'text-amber-400 bg-amber-950/40 font-semibold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4 mb-0.5" />
-            <span>Admin</span>
-          </button>
-        ) : (
-          <button
-            onClick={() => setActiveTab('python')}
-            className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg text-[10px] font-medium transition-all ${
-              activeTab === 'python'
-                ? 'text-cyan-400 bg-cyan-950/40 font-semibold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Terminal className="w-4 h-4 mb-0.5" />
-            <span>MT5 Bot</span>
-          </button>
-        )}
       </nav>
+
+      {/* Menu "Mais" — painel que sobe acima da barra inferior com as abas secundárias */}
+      {moreNavOpen && (
+        <div className="fixed inset-0 z-40 lg:hidden" onClick={() => setMoreNavOpen(false)}>
+          <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" />
+          <div
+            className="absolute bottom-20 left-2 right-2 bg-slate-900 border border-slate-700 rounded-xl p-3 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-2 px-1">
+              <span className="text-[10px] font-bold tracking-widest text-slate-500 uppercase">Mais abas</span>
+              <button
+                onClick={() => setMoreNavOpen(false)}
+                className="text-[10px] text-slate-400 hover:text-white px-2 py-1 rounded-md bg-slate-800 font-medium"
+              >
+                Fechar ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              <button
+                onClick={() => { setActiveTab('simulador'); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  activeTab === 'simulador' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <Cpu className="w-5 h-5 mb-1" />
+                <span>Simulador</span>
+              </button>
+              <button
+                onClick={() => { setActiveTab('comparativo'); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  activeTab === 'comparativo' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <BarChart3 className="w-5 h-5 mb-1" />
+                <span>Comparativo</span>
+              </button>
+              <button
+                onClick={() => { setActiveTab('audit'); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  activeTab === 'audit' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <ShieldCheck className="w-5 h-5 mb-1" />
+                <span>Auditoria</span>
+              </button>
+              <button
+                onClick={() => { handleToggleDadosPanel(); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  dadosPanelOpen && activeTab === 'chart' ? 'border-emerald-600 bg-emerald-950/40 text-emerald-200 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <AppWindow className="w-5 h-5 mb-1" />
+                <span>Dados</span>
+              </button>
+              <button
+                onClick={() => { setActiveTab('docs'); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  activeTab === 'docs' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <FileText className="w-5 h-5 mb-1" />
+                <span>Guia</span>
+              </button>
+              <button
+                onClick={() => { setActiveTab('settings'); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  activeTab === 'settings' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <Sliders className="w-5 h-5 mb-1" />
+                <span>Ajustes</span>
+              </button>
+              {currentUser.role === 'ADMIN' ? (
+                <button
+                  onClick={() => { setActiveTab('admin'); setMoreNavOpen(false); }}
+                  className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                    activeTab === 'admin' ? 'border-amber-600 bg-amber-950/40 text-amber-200 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                  }`}
+                >
+                  <ShieldCheck className="w-5 h-5 mb-1 text-amber-400/80" />
+                  <span>Admin</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => { setActiveTab('python'); setMoreNavOpen(false); }}
+                  className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                    activeTab === 'python' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                  }`}
+                >
+                  <Terminal className="w-5 h-5 mb-1" />
+                  <span>MT5 Bot</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal de Renovação Manual / Planos (quando clicado pelo usuário no header) */}
       {showRenewModal && (
@@ -1895,11 +2351,15 @@ export default function App() {
               className={`p-2 rounded-lg shrink-0 ${
                 latestToast.type === 'BUY'
                   ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                  : latestToast.type === 'INFO'
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
                   : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
               }`}
             >
               {latestToast.type === 'BUY' ? (
                 <ArrowUpRight className="w-5 h-5" />
+              ) : latestToast.type === 'INFO' ? (
+                <Activity className="w-5 h-5" />
               ) : (
                 <ArrowDownRight className="w-5 h-5" />
               )}
