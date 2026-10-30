@@ -1,5 +1,6 @@
 import { RenkoBox, AutomationConfig } from '../types/trading';
 import { evaluateBoxConvergence } from '../utils/convergenceEvaluator';
+import type { SessionRegimeMeter, RegimeHourStats, RegimePoint } from '../utils/sessionRegime';
 import {
   PaperStrategyBot,
   PaperTrade,
@@ -36,6 +37,15 @@ export interface SeriesSnapshot {
   stats: PaperStats;
   trades: PaperTrade[];
   equityCurve: EquityPoint[];
+}
+
+/** Leitura do medidor de regime de uma série (exposta pela Avaliação Técnica). */
+export interface SeriesRegimeReading {
+  hourStats: RegimeHourStats[];
+  series: RegimePoint[];
+  currentFactor: number;
+  directional: { buy: number; sell: number };
+  warmedUp: boolean;
 }
 
 export interface CollectorSnapshot {
@@ -79,6 +89,25 @@ class SeriesCollectorService {
   private loaded = false;
   private batchDepth = 0; // >0 durante replay: inibe persistência/notificação por barra
   private hadRealData = false; // coletor já recebeu tick do MT5 hoje?
+  // Medidores de regime dos motores vivos (registrados pelo App na inicialização): leitura pura —
+  // a Avaliação Técnica prova a assimetria intradiária sem depender de estado extra
+  private regimeMeters: Partial<Record<SeriesKey, SessionRegimeMeter>> = {};
+
+  registerRegimeMeter(series: SeriesKey, meter: SessionRegimeMeter) {
+    this.regimeMeters[series] = meter;
+  }
+
+  getRegimeReading(series: SeriesKey, baseThreshold: number): SeriesRegimeReading | null {
+    const m = this.regimeMeters[series];
+    if (!m) return null;
+    return {
+      hourStats: m.getHourStats(baseThreshold),
+      series: m.getSeries(),
+      currentFactor: m.getFactor(),
+      directional: m.getDirectionalFactors(),
+      warmedUp: m.isWarmedUp(),
+    };
+  }
 
   // ------------------------------------------------------------------
   // Ciclo de vida / persistência
@@ -196,7 +225,8 @@ class SeriesCollectorService {
     closedBox: RenkoBox,
     previousBoxes: RenkoBox[],
     config: AutomationConfig,
-    scaleLabel: string
+    scaleLabel: string,
+    meter?: SessionRegimeMeter
   ) {
     this.ensureLoaded();
     const conv = evaluateBoxConvergence(
@@ -207,7 +237,8 @@ class SeriesCollectorService {
         priceLabel: `${SERIES_LABEL[series]} ${scaleLabel}`,
         gainLabelUp: `+${Math.round(Math.abs(closedBox.close - closedBox.open))} pts`,
         gainLabelDown: `-${Math.round(Math.abs(closedBox.close - closedBox.open))} pts`,
-      }
+      },
+      meter
     );
     this.bots[series].onClosedBox(closedBox, conv.signal, config);
     this.updatedAt = Date.now();
@@ -263,7 +294,7 @@ class SeriesCollectorService {
     rows.push(`Dia;${snap.date};Início da sessão;${new Date(snap.sessionStarted).toLocaleString('pt-BR')}`);
     rows.push('');
     rows.push(
-      'SÉRIE;MODO;DIREÇÃO;PAPEL;CTROS;ENTRADA HORA;ENTRADA PREÇO;SAÍDA HORA;SAÍDA PREÇO;MOTIVO SAÍDA;PONTOS;R$'
+      'SÉRIE;MODO;DIREÇÃO;PAPEL;CTROS;ENTRADA HORA;ENTRADA PREÇO;SAÍDA HORA;SAÍDA PREÇO;MOTIVO SAÍDA;PONTOS;R$;FATOR REGIME'
     );
     (Object.keys(snap.series) as SeriesKey[]).forEach((k) => {
       for (const t of snap.series[k].trades) {
@@ -281,6 +312,7 @@ class SeriesCollectorService {
             t.exitReason ?? '',
             (t.points ?? 0).toFixed(1).replace('.', ','),
             (t.financial ?? 0).toFixed(2).replace('.', ','),
+            (t.regimeFactor ?? 1).toFixed(2).replace('.', ','),
           ].join(';')
         );
       }

@@ -6,6 +6,7 @@ import { evaluateBoxConvergence, ConvergenceResult } from './utils/convergenceEv
 import { isSessionCloseLock, SESSION_CLOSE_LOCK_LABEL } from './utils/sessionRules';
 import { getBridgeToken } from './utils/bridgeSecurity';
 import { seriesCollectorService } from './services/seriesCollectorService';
+import type { SessionRegimeMeter } from './utils/sessionRegime';
 import { SimulatorView } from './components/SimulatorView';
 import { B3MarketSimulator, generateHistoricalTicks } from './utils/marketSimulator';
 import { Header } from './components/Header';
@@ -25,6 +26,7 @@ import { OrderAuditService } from './services/orderAuditService';
 import { IntradayOrderAudit } from './components/IntradayOrderAudit';
 import { ProjectDossierPdfModal } from './components/ProjectDossierPdfModal';
 import { SeriesComparisonView } from './components/SeriesComparisonView';
+import { TechnicalEvaluationView } from './components/TechnicalEvaluationView';
 import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Square, Clock } from 'lucide-react';
 
 type ActiveTickResult = {
@@ -39,14 +41,15 @@ function annotateActiveBar(
   box: RenkoBox,
   previousBoxes: RenkoBox[],
   config: AutomationConfig,
-  priceLabel: string
+  priceLabel: string,
+  meter?: SessionRegimeMeter
 ): ConvergenceResult {
   const pts = Math.max(1, Math.round(Math.abs(box.close - box.open)));
   const conv = evaluateBoxConvergence(box, config, previousBoxes, {
     priceLabel,
     gainLabelUp: `+${pts} pts`,
     gainLabelDown: `-${pts} pts`,
-  });
+  }, meter);
   box.isConvergence = conv.isConvergence;
   box.convergenceType = conv.type;
   return conv;
@@ -61,7 +64,7 @@ const ALT_RENKO_SCALES: { key: 'renko15r' | 'renko20r' | 'renko25r'; pts: number
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'admin'>('chart');
+  const [activeTab, setActiveTab] = useState<'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'admin'>('chart');
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => AuthService.getCurrentUser());
   const [showRenewModal, setShowRenewModal] = useState<boolean>(false);
   const [showPdfModal, setShowPdfModal] = useState<boolean>(false);
@@ -188,7 +191,7 @@ export default function App() {
   };
   // Menu "Mais" da barra inferior móvel — agrupa as abas secundárias sem rolagem lateral
   const [moreNavOpen, setMoreNavOpen] = useState<boolean>(false);
-  const mobileMoreTabsActive = ['simulador', 'comparativo', 'audit', 'settings', 'docs', 'admin', 'python'].includes(activeTab);
+  const mobileMoreTabsActive = ['simulador', 'comparativo', 'avaliacao', 'audit', 'settings', 'docs', 'admin', 'python'].includes(activeTab);
   // Motores Renko extras (15R/20R/25R) rodando em paralelo só para o coletor
   const altEnginesRef = useRef<Record<'renko15r' | 'renko20r' | 'renko25r', RenkoFlowEngine>>({
     renko15r: new RenkoFlowEngine(75),
@@ -551,6 +554,17 @@ export default function App() {
     setTimeCurrentBox(eng.getCurrentBox());
   }, [timeframeSec]);
 
+  // Registra os medidores de regime dos 6 motores no coletor (leitura da Avaliação Técnica;
+  // os medidores são alimentados pelos próprios motores, aqui só se expõe a leitura)
+  useEffect(() => {
+    seriesCollectorService.registerRegimeMeter('renko', engineRef.current.getRegimeMeter());
+    seriesCollectorService.registerRegimeMeter('range', rangeEngineRef.current.getRegimeMeter());
+    seriesCollectorService.registerRegimeMeter('tempo', timeEngineRef.current.getRegimeMeter());
+    for (const alt of ALT_RENKO_SCALES) {
+      seriesCollectorService.registerRegimeMeter(alt.key, altEnginesRef.current[alt.key].getRegimeMeter());
+    }
+  }, []);
+
   // Função para processar a execução de um tick
   const handleIncomingTick = useCallback(
     (tick: Tick) => {
@@ -575,6 +589,9 @@ export default function App() {
       if (allTicksRef.current.length < 50000) allTicksRef.current.push(tick);
       const rangeEng = rangeEngineRef.current;
       const timeEng = timeEngineRef.current;
+      // A janela do medidor segue a config (Range/Tempo; Renko sincroniza dentro do próprio motor)
+      rangeEng.getRegimeMeter().setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
+      timeEng.getRegimeMeter().setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
       const rangeRes = rangeEng.processTick(tick);
       setRangeCurrentBox(rangeEng.getCurrentBox());
       if (rangeRes.newBarClosed) setRangeBoxes([...rangeEng.getBoxes()]);
@@ -600,18 +617,19 @@ export default function App() {
           renkoRes.closedBox,
           engine.getBoxes().slice(0, -1),
           config,
-          `${Math.max(1, Math.round(config.boxPoints / 5))}R`
+          `${Math.max(1, Math.round(config.boxPoints / 5))}R`,
+          engine.getRegimeMeter()
         );
       }
       let rangeConv: ConvergenceResult | null = null;
       if (rangeRes.newBarClosed && rangeRes.closedBox) {
-        rangeConv = annotateActiveBar(rangeRes.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`);
-        seriesCollectorService.ingest('range', rangeRes.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`);
+        rangeConv = annotateActiveBar(rangeRes.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`, rangeEng.getRegimeMeter());
+        seriesCollectorService.ingest('range', rangeRes.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`, rangeEng.getRegimeMeter());
       }
       let timeConv: ConvergenceResult | null = null;
       if (timeRes.newBarClosed && timeRes.closedBox) {
-        timeConv = annotateActiveBar(timeRes.closedBox, timeEng.getBoxes().slice(0, -1), config, `Tempo ${tfShortLabel}`);
-        seriesCollectorService.ingest('tempo', timeRes.closedBox, timeEng.getBoxes().slice(0, -1), config, tfShortLabel);
+        timeConv = annotateActiveBar(timeRes.closedBox, timeEng.getBoxes().slice(0, -1), config, `Tempo ${tfShortLabel}`, timeEng.getRegimeMeter());
+        seriesCollectorService.ingest('tempo', timeRes.closedBox, timeEng.getBoxes().slice(0, -1), config, tfShortLabel, timeEng.getRegimeMeter());
       }
 
       // Escalas Renko paralelas (15R/20R/25R): processam os mesmos ticks e alimentam o coletor
@@ -619,7 +637,7 @@ export default function App() {
         const altEng = altEnginesRef.current[alt.key];
         const altRes = altEng.processTick(tick, config);
         if (altRes.newBoxClosed && altRes.closedBox) {
-          seriesCollectorService.ingest(alt.key, altRes.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`);
+          seriesCollectorService.ingest(alt.key, altRes.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`, altEng.getRegimeMeter());
         }
       }
 
@@ -715,7 +733,10 @@ export default function App() {
               }
 
               if (config.tradingHoursEnabled) {
-                const nowHM = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                // A janela compara a hora do TICK (não o relógio de parede): no replay/feed
+                // sintético o robô obedece a barra simulada, ex.: 09:05–17:00.
+                // HH:MM ordena corretamente por comparação lexicográfica.
+                const nowHM = new Date(tick.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
                 if (nowHM < config.tradingStartTime || nowHM >= config.tradingStopEntriesTime) {
                   return updatedPrev;
                 }
@@ -2044,7 +2065,10 @@ export default function App() {
       const engine = engineRef.current;
       const rangeEng = rangeEngineRef.current;
       const timeEng = timeEngineRef.current;
-      const ticks = generateHistoricalTicks(replayTargetDays, 128500);
+      // Sempre +1 dia anterior de contexto: a abertura do 1º dia-alvo passa a ter o
+      // fechamento de ontem como referência na tela (nada é apagado ao virar o dia;
+      // os chips 1d/3d/5d continuam contando os dias de replay efetivos).
+      const ticks = generateHistoricalTicks(replayTargetDays + 1, 128500);
       if (ticks.length === 0) {
         setIsReplaying(false);
         return;
@@ -2073,32 +2097,40 @@ export default function App() {
       // Um tick atravessa os 6 contadores. No modo "OPERA" ele passa pelo MESMO caminho do
       // feed ao vivo (estratégia, ordens, auditoria, PnL e coletor); no modo silencioso só
       // alimenta os contadores do coletor.
-      const stepFor = (t: Tick) => {
-        if (operate) {
-          handleIncomingTick(t);
-          return;
-        }
+      const ingestSilent = (t: Tick) => {
+        if (allTicksRef.current.length < 50000) allTicksRef.current.push(t);
+        seriesCollectorService.markToMarket(t.price, t.timestamp);
         const r = engine.processTick(t, config);
         if (r.newBoxClosed && r.closedBox) {
-          seriesCollectorService.ingest('renko', r.closedBox, engine.getBoxes().slice(0, -1), config, renkoScale);
+          seriesCollectorService.ingest('renko', r.closedBox, engine.getBoxes().slice(0, -1), config, renkoScale, engine.getRegimeMeter());
         }
+        rangeEng.getRegimeMeter().setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
+        timeEng.getRegimeMeter().setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
         const rr = rangeEng.processTick(t);
         if (rr.newBarClosed && rr.closedBox) {
-          annotateActiveBar(rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`);
-          seriesCollectorService.ingest('range', rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`);
+          annotateActiveBar(rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`, rangeEng.getRegimeMeter());
+          seriesCollectorService.ingest('range', rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`, rangeEng.getRegimeMeter());
         }
         const tr = timeEng.processTick(t);
         if (tr.newBarClosed && tr.closedBox) {
-          annotateActiveBar(tr.closedBox, timeEng.getBoxes().slice(0, -1), config, `Tempo ${tfShortLabel}`);
-          seriesCollectorService.ingest('tempo', tr.closedBox, timeEng.getBoxes().slice(0, -1), config, tfShortLabel);
+          annotateActiveBar(tr.closedBox, timeEng.getBoxes().slice(0, -1), config, `Tempo ${tfShortLabel}`, timeEng.getRegimeMeter());
+          seriesCollectorService.ingest('tempo', tr.closedBox, timeEng.getBoxes().slice(0, -1), config, tfShortLabel, timeEng.getRegimeMeter());
         }
         for (const alt of ALT_RENKO_SCALES) {
           const altEng = altEnginesRef.current[alt.key];
           const ar = altEng.processTick(t, config);
           if (ar.newBoxClosed && ar.closedBox) {
-            seriesCollectorService.ingest(alt.key, ar.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`);
+            seriesCollectorService.ingest(alt.key, ar.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`, altEng.getRegimeMeter());
           }
         }
+      };
+
+      const stepFor = (t: Tick) => {
+        if (operate) {
+          handleIncomingTick(t);
+          return;
+        }
+        ingestSilent(t);
       };
 
       // Publica o estado até o cursor atual (o React pinta a tela a cada passo, ~25fps)
@@ -2115,6 +2147,31 @@ export default function App() {
         setTimeCurrentBox(timeEng.getCurrentBox());
       };
 
+      // =======================================================================
+      // DIA ANTERIOR ESTÁTICO: o dia de contexto é processado DE UMA VEZ, sem
+      // animação e SEM nunca operar (só alimenta os contadores — jamais abre ordem).
+      // A animação do replay começa na abertura do dia-alvo, com ontem já desenhado.
+      // =======================================================================
+      const day0 = new Date(ticks[0].timestamp).getDate();
+      let contextEnd = 0;
+      while (contextEnd < ticks.length && new Date(ticks[contextEnd].timestamp).getDate() === day0) {
+        contextEnd += 1;
+      }
+      // Se todos os ticks caírem no mesmo dia (não deveria acontecer com +1 dia), não há contexto
+      if (contextEnd >= ticks.length) contextEnd = 0;
+      for (let i = 0; i < contextEnd; i += 1) ingestSilent(ticks[i]);
+      // O motor marca convergência nesses boxes (análise de fluxo), mas o dia de contexto é
+      // ESTÁTICO e nunca opera. Sinaliza os boxes já existentes como contexto para o gráfico
+      // suprimir as marcas de compra/venda em ontem — só os tijolos crus aparecem.
+      const markStaticContext = (arr: { isStaticContext?: boolean }[]) => {
+        for (const b of arr) b.isStaticContext = true;
+      };
+      markStaticContext(engine.getBoxes());
+      markStaticContext(rangeEng.getBoxes());
+      markStaticContext(timeEng.getBoxes());
+      ALT_RENKO_SCALES.forEach((alt) => markStaticContext(altEnginesRef.current[alt.key].getBoxes()));
+      publish(contextEnd); // ontem já aparece inteiro na tela, antes de o replay começar
+
       const STEP_MS = 40; // ~25 atualizações por segundo em 1x
       // 3000 passos de 40ms ≈ 1min45 de reprodução em 1x (seja 1 dia ou 5). Subir esse número
       // deixa o 1x mais lento; o 10x continua rápido porque queima mais ticks por passo
@@ -2122,8 +2179,10 @@ export default function App() {
       // Velocidade escolhida (vale também para o feed ao vivo): mais rápido = mais ticks por passo
       const speed = Math.max(1, Math.min(10, Math.round(simulationSpeed)));
       const stepMs = speed >= 8 ? 16 : speed >= 4 ? 25 : STEP_MS;
-      const chunk = Math.max(2, Math.ceil((ticks.length * speed) / BASE_STEPS));
-      let cursor = 0;
+      // A animação reproduz apenas os dias-alvo (o contexto já está na tela)
+      const replayTicks = ticks.length - contextEnd;
+      const chunk = Math.max(2, Math.ceil((replayTicks * speed) / BASE_STEPS));
+      let cursor = contextEnd;
       let iters = 0;
       let timerId: number | null = null;
       let done = false;
@@ -2134,7 +2193,7 @@ export default function App() {
         if (timerId !== null) clearTimeout(timerId);
         replayAbortRef.current = null;
         seriesCollectorService.endBatch();
-        if (!operate) allTicksRef.current = ticks.slice(-50000); // no modo opera o próprio feed monta o buffer
+        if (!operate) allTicksRef.current = ticks.slice(0, Math.max(cursor, contextEnd)); // no modo opera o próprio feed monta o buffer
         publish(cursor);
         setReplayProgress(0);
         setIsReplaying(false);
@@ -2146,8 +2205,8 @@ export default function App() {
             : `REPLAY CONCLUÍDO: ${replayTargetDays} DIA(S) DE HISTÓRICO`,
           description: `${
             aborted
-              ? `${cursor.toLocaleString('pt-BR')} ticks já reproduzidos ficaram no gráfico e no coletor; o feed ao vivo retoma do último preço.`
-              : `${ticks.length.toLocaleString('pt-BR')} ticks sintéticos (sessões 09:05–17:45) rodaram da primeira barra até o fim do período nos 6 contadores do coletor.`
+              ? `${Math.max(0, cursor - contextEnd).toLocaleString('pt-BR')} ticks do dia-alvo já reproduzidos ficaram no gráfico e no coletor; o feed ao vivo retoma do último preço.`
+              : `${replayTicks.toLocaleString('pt-BR')} ticks sintéticos do dia-alvo (sessões 09:05–17:45) rodaram da abertura até o fim do período, com o dia anterior desenhado estático como contexto.`
           } ${
             zeroedOrders
               ? ' Ordens abertas, auditoria e PnL da sessão foram zerados antes de começar (nada de real é enviado à corretora).'
@@ -2166,7 +2225,7 @@ export default function App() {
         // No modo OPERA quem preenche o buffer é o próprio handleIncomingTick.
         if (!operate && (iters % 10 === 0 || upto >= ticks.length)) allTicksRef.current = ticks.slice(0, upto);
         iters += 1;
-        setReplayProgress(Math.round((upto / ticks.length) * 100));
+        setReplayProgress(Math.round(((upto - contextEnd) / Math.max(1, replayTicks)) * 100));
         if (upto >= ticks.length) {
           finish(false);
           return;
@@ -2591,6 +2650,12 @@ export default function App() {
               </div>
             )}
 
+            {activeTab === 'avaliacao' && (
+              <div className="h-full w-full">
+                <TechnicalEvaluationView onReplayHistory={handleReplayHistory} isReplaying={isReplaying} config={config} />
+              </div>
+            )}
+
             {activeTab === 'stats' && (
               <div className="h-full w-full">
                 <OrdersAndStats
@@ -2777,6 +2842,15 @@ export default function App() {
               >
                 <BarChart3 className="w-5 h-5 mb-1" />
                 <span>Comparativo</span>
+              </button>
+              <button
+                onClick={() => { setActiveTab('avaliacao'); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  activeTab === 'avaliacao' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <BarChart3 className="w-5 h-5 mb-1" />
+                <span>Avaliação</span>
               </button>
               <button
                 onClick={() => { setActiveTab('audit'); setMoreNavOpen(false); }}

@@ -179,6 +179,13 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
             <span className="font-semibold text-neutral-400">2. Disparo e Envio de Ordens Automáticas:</span>
             <p className="text-slate-400 leading-relaxed">
               O preço 10R é calculado atemporalmente em caixas de {config.boxPoints} pontos. Ao detectar convergência (Delta <code className="text-slate-200 font-mono">≥ ±{config.minDeltaThreshold}</code>), o script chama <code className="text-slate-200 font-mono">mt5.order_send()</code> a mercado com Stop Loss de {config.stopLossPoints} pts e Take Profit de {config.takeProfitPoints} pts diretamente na sua conta da corretora.
+              {config.adaptiveThresholdEnabled ? (
+                <>
+                  {' '}Com o <b className="text-emerald-300">Limiar Adaptativo de Regime</b> ligado, o ±{config.minDeltaThreshold} vira ponto de partida: o script embute um <code className="text-slate-200 font-mono">RegimeMeter</code> (volume dos últimos {config.regimeLookbackBoxes ?? 20} boxes ÷ média do dia, 0,5x–3x) e exige Delta acima de <code className="text-slate-200 font-mono">±{config.minDeltaThreshold} × fator</code> — horas quentes exigem agressão proporcional, horas frias liberam sinais antes travados.
+                </>
+              ) : (
+                <> Limiar adaptativo DESLIGADO nos Ajustes: o script usa o Delta Mínimo fixo para todo o pregão.</>
+              )}
             </p>
           </div>
         </div>

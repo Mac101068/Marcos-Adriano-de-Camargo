@@ -21,12 +21,13 @@ import {
   AppWindow,
   Box,
   Settings,
+  ClipboardCheck,
 } from 'lucide-react';
 import { MT5ConnectionState } from '../types/trading';
 import { UserProfile } from '../types/auth';
 import { SubscriptionStatusBadge } from './SubscriptionStatusBadge';
 
-type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'admin';
+type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'admin';
 
 interface HeaderProps {
   activeTab: TabId;
@@ -97,7 +98,7 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
           groupActive ? 'bg-slate-800/70 text-slate-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
         }`}
       >
-        {GroupIcon && <GroupIcon className={`w-3.5 h-3.5 ${groupActive ? 'text-emerald-400' : 'text-slate-500'}`} />}
+        {GroupIcon && <GroupIcon className={`w-3.5 h-3.5 ${groupActive ? 'text-slate-300' : 'text-slate-500'}`} />}
         {label}
         <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -171,6 +172,7 @@ export const Header: React.FC<HeaderProps> = ({
   const analysisItems: MenuItem[] = [
     { tab: 'stats', label: 'Ordens & Performance', icon: CheckCircle2, badge: openOrdersCount, title: 'Ordens abertas e estatísticas de performance' },
     { tab: 'comparativo', label: 'Comparativo 3 Séries', icon: BarChart3, title: 'Coletor de eficiência: Pontos x Range x Tempo na mesma estratégia (contabilidade interna)' },
+    { tab: 'avaliacao', label: 'Avaliação Técnica', icon: ClipboardCheck, title: 'Diagnóstico da base do coletor: win rate, fator de lucro, expectativa e recortes por motivo de saída, papel, direção e horário de entrada' },
     { tab: 'audit', label: 'Auditoria Intraday', icon: ShieldCheck, title: 'Livro de Auditoria de Ordens Intraday e Exportação CSV' },
   ];
 
@@ -204,7 +206,7 @@ export const Header: React.FC<HeaderProps> = ({
           title="Abrir/fechar a janela de controles do painel Renko (Sinal, Exibição, Escalas, Desenho, Ordem rápida)"
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
             dadosPanelOpen
-              ? 'bg-emerald-500/15 text-emerald-300 font-semibold border border-emerald-500/40'
+              ? 'bg-slate-800/70 text-slate-300 font-semibold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
           }`}
         >
@@ -219,7 +221,7 @@ export const Header: React.FC<HeaderProps> = ({
           title="Abrir/fechar a janela do Box Renko (OHLC, fluxo Heikin-Ashi, CVD e convergência do box ativo)"
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
             boxWindowOpen
-              ? 'bg-emerald-500/15 text-emerald-300 font-semibold border border-emerald-500/40'
+              ? 'bg-slate-800/70 text-slate-300 font-semibold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
           }`}
         >
@@ -272,38 +274,31 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
-        {/* Toggle do Robô Automático */}
+        {/* Toggle do Robô Automático — clean: chrome neutro, cor só no ponto de status */}
         <button
           onClick={() => setRobotActive(!robotActive)}
-          className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
-            robotActive
-              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
-              : 'bg-rose-500/10 border-rose-500/30 text-rose-300 hover:bg-rose-500/20'
-          }`}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-all whitespace-nowrap cursor-pointer"
           title="Ativar/Pausar Envio Automático de Ordens"
         >
           <span className={`w-2 h-2 rounded-full ${robotActive ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-          <span className="hidden md:inline">{robotActive ? 'Robô: LIGADO' : 'Robô: PAUSADO'}</span>
+          <span className="hidden md:inline">{robotActive ? 'On' : 'Off'}</span>
         </button>
 
-        {/* Toggle do Feed de Mercado — retoma/pausa só o feed ao vivo (o replay de pelo
-            menos 1 dia roda na setinha da tira de status, progressivo, do primeiro bloco) */}
+        {/* Toggle do Feed de Mercado — clean: chrome neutro, cor só no ícone de ação */}
         <button
           onClick={() => setIsSimulating(!isSimulating)}
           title="Ligar/desligar apenas o feed de ticks ao vivo. O período de histórico roda no replay da tira de status."
-          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg text-white transition-colors whitespace-nowrap cursor-pointer ${
-            isSimulating ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-emerald-600 hover:bg-emerald-500'
-          }`}
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap cursor-pointer"
         >
           {isSimulating ? (
             <>
-              <Pause className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Pausar feed</span>
+              <Pause className="w-3.5 h-3.5 text-slate-300" />
+              <span className="hidden md:inline">Pausar</span>
             </>
           ) : (
             <>
-              <Play className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Retomar feed</span>
+              <Play className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden md:inline">Rodar</span>
             </>
           )}
         </button>

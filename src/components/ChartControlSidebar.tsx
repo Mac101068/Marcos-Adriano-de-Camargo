@@ -59,6 +59,9 @@ interface ChartControlSidebarProps {
   scaleX: number;
   onScaleX: (v: number) => void;
   onResetX: () => void;
+  /* Janela do eixo X (quantidade de tijolos na tela) */
+  visibleCount: number;
+  onVisibleCount: (v: number) => void;
   scaleFlow: number;
   onScaleFlow: (v: number) => void;
   onResetFlow: () => void;
@@ -143,6 +146,49 @@ const ScaleRow: React.FC<ScaleRowProps> = ({ label, hint, value, min, max, step,
   );
 };
 
+// Linha de contador (janela do eixo X): rótulo + (−) valor + (+), com clique no valor p/ voltar ao padrão
+const CountRow: React.FC<{
+  label: string;
+  hint: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  defaultValue: number;
+  onChange: (v: number) => void;
+}> = ({ label, hint, value, min, max, step, defaultValue, onChange }) => (
+  <div className="flex items-center justify-between gap-2 min-h-[28px]" title={hint}>
+    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+    <div className="flex items-center gap-0.5">
+      <button
+        onClick={() => onChange(clamp(value - step, min, max))}
+        className="w-6 h-6 flex items-center justify-center rounded text-[11px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer border border-slate-800/80 bg-slate-950/60"
+        title={`Menos tijolos na tela`}
+      >
+        −
+      </button>
+      <button
+        onClick={() => onChange(defaultValue)}
+        className={`min-w-[46px] h-6 px-1 rounded text-[10px] font-mono font-bold tabular-nums transition-colors cursor-pointer border ${
+          Math.abs(value - defaultValue) > step / 2
+            ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+            : 'text-slate-400 border-slate-800/80 bg-slate-950/60 hover:text-slate-100'
+        }`}
+        title={`Voltar para ${defaultValue} tijolos`}
+      >
+        {value}
+      </button>
+      <button
+        onClick={() => onChange(clamp(value + step, min, max))}
+        className="w-6 h-6 flex items-center justify-center rounded text-[11px] font-bold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer border border-slate-800/80 bg-slate-950/60"
+        title={`Mais tijolos na tela`}
+      >
+        +
+      </button>
+    </div>
+  </div>
+);
+
 const Section: React.FC<SectionProps> = ({ title, icon: Icon, children, last }) => (
   <section className={`px-3 py-2.5 ${last ? '' : 'border-b border-slate-800/70'}`}>
     <header className="flex items-center gap-1.5 mb-2">
@@ -198,6 +244,8 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
   scaleX,
   onScaleX,
   onResetX,
+  visibleCount,
+  onVisibleCount,
   scaleFlow,
   onScaleFlow,
   onResetFlow,
@@ -362,14 +410,24 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
             />
             <ScaleRow
               label="Tempo (X)"
-              hint="Largura e vão dos tijolos"
+              hint="Largura e vão dos tijolos. Piso 0.15: com Tijolos X alto e zoom no mínimo, cabem vários dias na tela (estudo)"
               value={scaleX}
-              min={0.5}
+              min={0.15}
               max={3.5}
               step={0.15}
               accent="sky"
               onChange={onScaleX}
               onReset={onResetX}
+            />
+            <CountRow
+              label="Tijolos X"
+              hint="Quantidade de tijolos na tela (controle do eixo X). Cada dia guarda ~120-200 blocos: 250 ≈ 1 dia com folga; 600 ≈ 3 dias; 1200-2500 ≈ uma semana de estudo (combine com o zoom X no mínimo). Dica: arraste o gráfico para rolar o histórico; Shift+roda também rola"
+              value={visibleCount}
+              min={14}
+              max={3000}
+              step={20}
+              defaultValue={250}
+              onChange={onVisibleCount}
             />
             <ScaleRow
               label="Fluxo (F)"

@@ -1,5 +1,6 @@
 import { Tick, RenkoBox, AutomationConfig } from '../types/trading';
 import { evaluateBoxConvergence } from './convergenceEvaluator';
+import { SessionRegimeMeter } from './sessionRegime';
 
 /**
  * Calculador de Gráficos Atemporais:
@@ -13,6 +14,18 @@ export class RenkoFlowEngine {
   private currentBox: Partial<RenkoBox> | null = null;
   private currentCvd: number = 0;
   private lastPrice: number = 0;
+  // Chave YYYY-MM-DD da sessão (dia local) em curso. Serve para detectar a virada de dia:
+  // o gap entre o fechamento de ontem e a abertura de hoje NUNCA pode virar box Renko.
+  private lastSessionKey?: string;
+  // Medidor de regime desta série: o box fechado alimenta o medidor ANTES da avaliação de
+  // convergência, então o limiar adaptativo julga o box com o fator com que ele fechou.
+  private regimeMeter = new SessionRegimeMeter(20);
+
+  /** Dia local (YYYY-MM-DD) de um timestamp — âncora de sessão contra o gap de abertura. */
+  private sessionKey(ts: number): string {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
 
   constructor(boxPoints: number = 50) {
     this.boxPoints = boxPoints;
@@ -34,6 +47,10 @@ export class RenkoFlowEngine {
     return this.currentCvd;
   }
 
+  public getRegimeMeter(): SessionRegimeMeter {
+    return this.regimeMeter;
+  }
+
   /**
    * Inicializa com um preço base
    */
@@ -41,6 +58,9 @@ export class RenkoFlowEngine {
     this.boxes = [];
     this.currentCvd = 0;
     this.lastPrice = startPrice;
+    this.lastSessionKey = this.sessionKey(timestamp);
+    // Série reiniciada: o regime medido da série antiga não vale para a nova
+    this.regimeMeter.reset();
 
     // Normaliza para múltiplos de 5 (tick do WIN)
     const basePrice = Math.round(startPrice / 5) * 5;
@@ -75,6 +95,8 @@ export class RenkoFlowEngine {
     signalReason?: string;
   } {
     this.lastPrice = tick.price;
+    // A janela do medidor segue a config (permite ajustar 10–50 boxes em Ajustes sem reiniciar o dia)
+    this.regimeMeter.setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
 
     // Acumula no CVD global
     const tickDelta = tick.aggressor === 'BUY' ? tick.volume : tick.aggressor === 'SELL' ? -tick.volume : 0;
@@ -82,6 +104,33 @@ export class RenkoFlowEngine {
 
     if (!this.currentBox) {
       this.initialize(tick.price, tick.timestamp);
+    }
+
+    // VIRADA DE SESSÃO: descarta a caixa parcial do dia anterior (ela nunca fecha como
+    // box-ponte do gap) e re-ancora a formação no preço real de abertura de hoje.
+    // O CVD NÃO zera (mantém a série); apenas o âncora de preço é reiniciado.
+    // O 1º box do dia nasce no preço de abertura, então o sinal pode sair dele em diante.
+    const tickSession = this.sessionKey(tick.timestamp);
+    if (this.lastSessionKey !== undefined && tickSession !== this.lastSessionKey) {
+      this.lastSessionKey = tickSession;
+      const basePrice = Math.round(tick.price / 5) * 5;
+      this.currentBox = {
+        index: this.boxes.length,
+        direction: 'UP',
+        open: basePrice,
+        close: basePrice,
+        high: basePrice,
+        low: basePrice,
+        timeStart: tick.timestamp,
+        timeEnd: tick.timestamp,
+        ticksCount: 0,
+        totalVolume: 0,
+        buyVolume: 0,
+        sellVolume: 0,
+        delta: 0,
+        cvdAtClose: this.currentCvd,
+        isConvergence: false,
+      };
     }
 
     const curr = this.currentBox!;
@@ -107,7 +156,11 @@ export class RenkoFlowEngine {
 
     // Checagem de formação de Renko
     const lastDirection = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1].direction : 'UP';
-    const lastClose = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1].close : curr.open!;
+    // Origem do último fechamento: só vale o fechamento do box anterior se ele for DO MESMO dia.
+    // Na virada de sessão a referência passa a ser a abertura real de hoje — o gap não vira caixa.
+    const sameSession =
+      this.boxes.length > 0 && this.sessionKey(this.boxes[this.boxes.length - 1].timeEnd) === tickSession;
+    const lastClose = sameSession ? this.boxes[this.boxes.length - 1].close : curr.open!;
 
     if (lastDirection === 'UP') {
       // Continuação de alta: subiu 50 pontos acima do fechamento anterior
@@ -133,8 +186,8 @@ export class RenkoFlowEngine {
           isConvergence: false,
         };
 
-        // Validação de convergência
-        const convergenceCheck = this.evaluateConvergence(closedBox, config);
+        // Validação de convergência (com regime: mede, anota o fator e adapta o limiar)
+        const convergenceCheck = this.checkClosedBox(closedBox, config);
         closedBox.isConvergence = convergenceCheck.isConvergence;
         closedBox.convergenceType = convergenceCheck.type;
         if (convergenceCheck.signal) {
@@ -167,7 +220,7 @@ export class RenkoFlowEngine {
       }
       // Reversão para baixa: caiu 2x o tamanho (100 pontos) a partir do fechamento
       else if (tick.price <= lastClose - (this.boxPoints * 2)) {
-        const prevOpen = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1].open : lastClose - this.boxPoints;
+        const prevOpen = sameSession ? this.boxes[this.boxes.length - 1].open : lastClose + this.boxPoints;
         const newBoxOpen = prevOpen;
         const newBoxClose = prevOpen - this.boxPoints;
 
@@ -189,7 +242,7 @@ export class RenkoFlowEngine {
           isConvergence: false,
         };
 
-        const convergenceCheck = this.evaluateConvergence(closedBox, config);
+        const convergenceCheck = this.checkClosedBox(closedBox, config);
         closedBox.isConvergence = convergenceCheck.isConvergence;
         closedBox.convergenceType = convergenceCheck.type;
         if (convergenceCheck.signal) {
@@ -244,7 +297,7 @@ export class RenkoFlowEngine {
           isConvergence: false,
         };
 
-        const convergenceCheck = this.evaluateConvergence(closedBox, config);
+        const convergenceCheck = this.checkClosedBox(closedBox, config);
         closedBox.isConvergence = convergenceCheck.isConvergence;
         closedBox.convergenceType = convergenceCheck.type;
         if (convergenceCheck.signal) {
@@ -276,7 +329,7 @@ export class RenkoFlowEngine {
       }
       // Reversão para alta: subiu 2x o tamanho (100 pontos) a partir do fechamento
       else if (tick.price >= lastClose + (this.boxPoints * 2)) {
-        const prevOpen = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1].open : lastClose + this.boxPoints;
+        const prevOpen = sameSession ? this.boxes[this.boxes.length - 1].open : lastClose - this.boxPoints;
         const newBoxOpen = prevOpen;
         const newBoxClose = prevOpen + this.boxPoints;
 
@@ -298,7 +351,7 @@ export class RenkoFlowEngine {
           isConvergence: false,
         };
 
-        const convergenceCheck = this.evaluateConvergence(closedBox, config);
+        const convergenceCheck = this.checkClosedBox(closedBox, config);
         closedBox.isConvergence = convergenceCheck.isConvergence;
         closedBox.convergenceType = convergenceCheck.type;
         if (convergenceCheck.signal) {
@@ -339,19 +392,17 @@ export class RenkoFlowEngine {
   }
 
   /**
-   * Avalia a convergência entre Preço 10R e Fluxo de Agressão.
+   * Ciclo do box recém-fechado: alimenta o medidor de regime, anota o fator vigente
+   * no box e AVALIA A CONVERGÊNCIA com o limiar adaptativo.
    * Lógica extraída para convergenceEvaluator.ts (compartilhada com Range e Tempo),
    * mantendo comportamento idêntico: this.boxes ainda não contém o box recém-fechado.
    */
-  private evaluateConvergence(
+  private checkClosedBox(
     box: RenkoBox,
     config: AutomationConfig
-  ): {
-    isConvergence: boolean;
-    type?: 'BUY_CONVERGENCE' | 'SELL_CONVERGENCE' | 'DIVERGENCE';
-    signal?: 'BUY' | 'SELL';
-    reason?: string;
-  } {
-    return evaluateBoxConvergence(box, config, this.boxes);
+  ) {
+    this.regimeMeter.feedClosedBox(box);
+    box.regimeFactor = this.regimeMeter.getFactor();
+    return evaluateBoxConvergence(box, config, this.boxes, {}, this.regimeMeter);
   }
 }

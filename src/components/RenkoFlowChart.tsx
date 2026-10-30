@@ -6,11 +6,17 @@ import { ChartLayout, DrawingOverlay } from './DrawingOverlay';
 import { ChartControlSidebar } from './ChartControlSidebar';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { RenkoBoxCard } from './RenkoBoxCard';
-import { Sliders, ArrowUp, ArrowDown } from 'lucide-react';
+import { Sliders, ArrowUp, ArrowDown, Settings } from 'lucide-react';
 
 const STORAGE_KEY_SCALES = 'fluxo_renko_chart_scales_v2';
 const STORAGE_KEY_FLOW_MODE = 'fluxo_renko_flow_mode_v1';
-const STORAGE_KEY_SPACING_MODE = 'fluxo_renko_spacing_mode_v1';
+// v2: migra quem estava preso em 'compact' (meia tela) para o novo padrão 'fill' (tela inteira)
+const STORAGE_KEY_SPACING_MODE = 'fluxo_renko_spacing_mode_v2';
+// v3: janela inicial de ~1 dia COM folga (250) para o dia de contexto estático e a linha
+// ABERTURA continuarem na tela depois que o replay do dia-alvo terminar (um dia costuma
+// gerar 120-200 tijolos, então 120 apertava e empurrava a fronteira para fora).
+// Teto agora é 3000 tijolos (~15 dias) — modo estudo: máximo de dias possível na tela.
+const STORAGE_KEY_VISIBLE_COUNT = 'fluxo_renko_visible_count_v3';
 
 interface RenkoFlowChartProps {
   boxes: RenkoBox[];
@@ -137,7 +143,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         return {
-          scaleX: Math.max(0.5, Math.min(3.5, Number(parsed.scaleX) || 1.0)),
+          // Piso 0.15: permite abrir o zoom o suficiente para caber vários dias na tela (estudo)
+          scaleX: Math.max(0.15, Math.min(3.5, Number(parsed.scaleX) || 1.0)),
           scaleY: Math.max(0.3, Math.min(4.0, Number(parsed.scaleY) || 1.0)),
           scaleFlow: Math.max(0.3, Math.min(4.0, Number(parsed.scaleFlow) || 1.0)),
           flowPaneRatio: Math.max(0.2, Math.min(0.5, Number(parsed.flowPaneRatio) || 0.33)),
@@ -162,9 +169,26 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   const [flowPaneRatio, setFlowPaneRatio] = useState<number>(initialScales.flowPaneRatio || 0.33); // Divisor: % de altura da janela de fluxo (0.18 a 0.55)
   const [haHistSplit, setHaHistSplit] = useState<number>(initialScales.haHistSplit ?? 0.66); // Divisor interno: % da janela de fluxo para o Heikin-Ashi (0.30 a 0.85)
 
-  const [visibleCount, setVisibleCount] = useState<number>(() =>
-    typeof window !== 'undefined' && window.innerWidth < 640 ? 26 : 40
-  );
+  // Janela do eixo X (tijolos na tela): persistida, com teto alto de propósito — cada sessão
+  // gera ~100-150 blocos, então dá para colocar MAIS DE UM DIA inteiro na tela.
+  const [visibleCount, setVisibleCount] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem(STORAGE_KEY_VISIBLE_COUNT));
+      if (saved >= 14 && saved <= 3000) return saved;
+    } catch (e) {
+      // Ignora
+    }
+    // Desktop: 250 tijolos cobrem um dia inteiro com folga, então o contexto (ontem) e a
+    // linha ABERTURA continuam visíveis mesmo no fim do replay. Mobile: janela menor.
+    return typeof window !== 'undefined' && window.innerWidth < 640 ? 50 : 250;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_VISIBLE_COUNT, String(visibleCount));
+    } catch (e) {
+      // Ignora
+    }
+  }, [visibleCount]);
   const [scrollOffset, setScrollOffset] = useState<number>(0);
 
   // Modo de exibição do painel de fluxo: Heikin-Ashi (solicitado), Histograma Delta tradicional ou Híbrido
@@ -202,6 +226,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Barra lateral de controles: dockada na esquerda no desktop, drawer em telas pequenas
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
 
+  // Painel de ajustes de exibição do gráfico (aberto pela engrenagem no canto inferior direito).
+  // Concentra tijolos/zoom/modo/escala do fluxo + legenda, tirando a tarima miúda sempre-visível.
+  const [chartToolsOpen, setChartToolsOpen] = useState<boolean>(false);
+
   // Preferências visuais
   const [showOrderLines, setShowOrderLines] = useState<boolean>(true);
   const [boxThickness, setBoxThickness] = useState<'thin' | 'ultrathin' | 'medium'>('thin');
@@ -213,11 +241,19 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     } catch (e) {
       // Ignora
     }
-    return 'compact';
+    return 'fill'; // Padrão: aproveitar a tela inteira (compact continua disponível na lateral)
   });
   const [rightMargin, setRightMargin] = useState<number>(() =>
     typeof window !== 'undefined' && window.innerWidth < 640 ? 50 : 90
   );
+
+  // Área clicável do selo "HISTÓRICO −N · VOLTE AO HOJE" (preenchida pelo draw do canvas)
+  const scrollBadgeRef = useRef<{ x0: number; x1: number; y0: number; y1: number } | null>(null);
+
+  // O handler de roda vive num ref para o listener nativo (não-passivo) nunca precisar ser
+  // reanexado: com onWheel do React o preventDefault é ignorado (listener passivo) e a página
+  // inteira rola junto com o zoom do gráfico.
+  const wheelHandlerRef = useRef<(e: WheelEvent) => void>(null);
 
   // Salva no localStorage para persistir a escolha de escalas e layout do operador
   useEffect(() => {
@@ -336,7 +372,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const clampedFlowRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
     const flowPaneHeight = height * clampedFlowRatio;
     const pricePaneHeight = height - flowPaneHeight;
-    const rightAxisWidth = isMobile ? 54 : 80;
+    const rightAxisWidth = isMobile ? 46 : 64;
     const chartWidth = width - rightAxisWidth;
     const effectiveRightMargin = isMobile ? Math.min(rightMargin, 50) : rightMargin;
 
@@ -418,11 +454,32 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       return;
     }
 
-    // Slice de dados baseado no visibleCount e escala X
-    const effectiveVisibleCount = Math.max(10, Math.round(visibleCount / Math.sqrt(scaleX)));
+    // Janela de visualização do EIXO X: o scrollOffset agora REALMENTE revela tijolos
+    // antigos (antes ele só empurrava os últimos para fora da tela, deixando vazio).
     const totalCount = allBoxes.length;
-    const startIdx = Math.max(0, totalCount - effectiveVisibleCount);
-    const displayedBoxes = allBoxes.slice(startIdx);
+    // No "Preencher" a janela é exatamente o "Tijolos X" pedido (o auto-ajuste de passo é que
+    // cuida de caber na tela), senão o zoom X encolheria a janela por baixo do controle e
+    // nunca daria para ver mais dias no zoom mínimo. No Compacto o zoom ainda corta a janela.
+    const baseVisible =
+      spacingMode === 'fill'
+        ? Math.max(10, visibleCount)
+        : Math.max(10, Math.round(visibleCount / Math.sqrt(scaleX)));
+    // Passo base antes de fatiar os dados (o modo "Preencher" precisa dele para calcular
+    // quantos tijolos cabem na tela inteira)
+    const baseSpacingStep = isMobile ? 14 : 17;
+    const availableWidth = Math.max(100, chartWidth - effectiveRightMargin - (isMobile ? 16 : 30));
+    const effectiveScroll = Math.max(0, Math.min(scrollOffset, Math.max(0, totalCount - 2)));
+    // Janela visível: no "Preencher" vale o "Tijolos X" pedido pelo operador (até 3000 — até
+    // ~15 dias de uma só vez, para estudo); o auto-ajuste abaixo calcula o passo para que TODOS
+    // caibam na largura da tela. No Compacto o vão fica no passo base (transborda = pan).
+    const screenFitMax = Math.max(10, Math.floor(availableWidth / Math.max(2, baseSpacingStep * scaleX)));
+    const viewCount = Math.max(
+      10,
+      Math.min(totalCount, spacingMode === 'fill' ? baseVisible : Math.min(baseVisible, screenFitMax))
+    );
+    const endIdx = Math.max(1, Math.min(totalCount, totalCount - Math.round(effectiveScroll)));
+    const startIdx = Math.max(0, endIdx - viewCount);
+    const displayedBoxes = allBoxes.slice(startIdx, endIdx);
 
     if (displayedBoxes.length === 0) return;
 
@@ -437,24 +494,30 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         : isMobile
         ? 12
         : 14;
-    const boxWidth = Math.max(5, Math.min(28, Math.round(baseBoxWidth * Math.sqrt(scaleX))));
+    let boxWidth = Math.max(5, Math.min(28, Math.round(baseBoxWidth * Math.sqrt(scaleX))));
 
     // Posicionamento X com ancoragem à direita
-    const baseSpacingStep = isMobile ? 14 : 17;
-    // Garante que o scrollOffset nunca seja negativo (o que jogaria os blocos para a esquerda, deixando o lado direito vazio)
-    const effectiveScroll = Math.max(0, scrollOffset);
-
-    const availableWidth = Math.max(100, chartWidth - effectiveRightMargin - (isMobile ? 16 : 30));
-    // Auto-fit discreto do modo "Preencher": limita o vão máximo entre tijolos
+    // Auto-fit do modo "Preencher": distribui a janela escolhida pela largura TODA da tela
+    // (vão máximo de 170px quando há poucos tijolos; aperta abaixo do passo base quando há
+    // muitos — é assim que vários dias inteiros cabem juntos para estudo).
     const autoFitStep =
       displayedBoxes.length > 1
-        ? Math.min(isMobile ? 26 : 30, Math.max(baseSpacingStep, availableWidth / (displayedBoxes.length + 1)))
+        ? Math.min(isMobile ? 100 : 170, Math.max(1, availableWidth / (displayedBoxes.length + 1)))
         : baseSpacingStep;
 
     const dynamicStep = spacingMode === 'fill' ? autoFitStep : baseSpacingStep;
     const stepX = dynamicStep * scaleX;
 
-    const lastBoxX = chartWidth - effectiveRightMargin + effectiveScroll * stepX;
+    // No Preencher denso (multidia) o tijolo encolhe junto com o vão, para nunca sobrepor;
+    // piso 1px: com milhares de tijolos o gráfico vira um "bloco" contínuo legível como silhueta
+    boxWidth = Math.min(boxWidth, Math.max(1, stepX - (stepX >= 8 ? 2 : stepX >= 3 ? 0.5 : 0.2)));
+
+    // Último tijolo VISÍVEL encostado na margem direita; ao rolar para o histórico a ancora
+    // volta para a margem (antes o scroll empurrava a barra nova para fora da tela).
+    const newestVisibleIsLast = endIdx >= totalCount && effectiveScroll === 0;
+    const lastBoxX = newestVisibleIsLast
+      ? chartWidth - effectiveRightMargin
+      : chartWidth - effectiveRightMargin - (totalCount - endIdx) * stepX;
     const xs: number[] = new Array(displayedBoxes.length);
     let currX = lastBoxX;
 
@@ -462,6 +525,23 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       xs[i] = currX;
       if (i > 0) {
         currX -= stepX;
+      }
+    }
+
+    // =======================================================================
+    // MARCADOR DE ABERTURA DE DIA: linha vertical tracejada onde o dia vira.
+    // Deixa o dia de contexto (ontem) e o dia-alvo visualmente separados, tanto
+    // no replay (ontem estático) quanto ao vivo na virada do pregão.
+    // =======================================================================
+    const dayBoundaries: { x: number; label: string }[] = [];
+    for (let i = 1; i < displayedBoxes.length; i++) {
+      const prevDay = new Date(displayedBoxes[i - 1].timeEnd || displayedBoxes[i - 1].timeStart).getDate();
+      const curDay = new Date(displayedBoxes[i].timeEnd || displayedBoxes[i].timeStart).getDate();
+      if (curDay !== prevDay) {
+        dayBoundaries.push({
+          x: (xs[i] + xs[i - 1]) / 2,
+          label: new Date(displayedBoxes[i].timeEnd || displayedBoxes[i].timeStart).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+        });
       }
     }
 
@@ -706,7 +786,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.lineWidth = 1;
     ctx.fillStyle = '#71717a';
     ctx.font = isMobile ? '8.5px "JetBrains Mono", monospace' : '10px "JetBrains Mono", monospace';
-    ctx.textAlign = 'left';
+    ctx.textAlign = 'center';
 
     const startGridPrice = Math.ceil(effectiveMinPrice / gridStep) * gridStep;
     for (let p = startGridPrice; p <= effectiveMaxPrice; p += gridStep) {
@@ -716,7 +796,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.moveTo(0, y);
         ctx.lineTo(chartWidth, y);
         ctx.stroke();
-        ctx.fillText(p.toLocaleString('pt-BR'), chartWidth + (isMobile ? 3 : 6), y + 3.5);
+        ctx.fillText(p.toLocaleString('pt-BR'), chartWidth + rightAxisWidth / 2, y + 3.5);
       }
     }
 
@@ -762,10 +842,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.setLineDash([]);
 
           ctx.fillStyle = isZero ? '#a1a1aa' : '#71717a';
-          ctx.textAlign = 'left';
+          ctx.textAlign = 'center';
           const sign = v > 0 ? '+' : '';
           const formatted = Math.abs(v) >= 1000 ? `${sign}${(v / 1000).toFixed(1)}k` : `${sign}${v}`;
-          ctx.fillText(formatted, chartWidth + (isMobile ? 3 : 6), y + 3);
+          ctx.fillText(formatted, chartWidth + rightAxisWidth / 2, y + 3);
           lastDrawnFlowY = y;
         }
       }
@@ -806,43 +886,95 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         if (flowViewMode === 'histogram') {
           ctx.fillStyle = '#a1a1aa';
           ctx.font = isMobile ? '8px "JetBrains Mono"' : '9px "JetBrains Mono"';
-          ctx.textAlign = 'left';
-          ctx.fillText('0Δ', chartWidth + (isMobile ? 3 : 6), zeroY + 3);
+          ctx.textAlign = 'center';
+          ctx.fillText('0Δ', chartWidth + rightAxisWidth / 2, zeroY + 3);
         }
       }
 
-      const upperThresholdY = deltaToY(minDeltaThreshold);
-      const lowerThresholdY = deltaToY(-minDeltaThreshold);
+      // Limiares ±: degraus do regime (fator por box fechado) quando o medidor anotou os boxes;
+      // sem fator (toggle adaptativo desligado em boxes novos) continuam linhas retas do fixo.
+      const drawStepThresholds = (mapY: (v: number) => number, bandTop: number, bandBottom: number) => {
+        const segs: { x0: number; x1: number; upY: number; dnY: number }[] = [];
+        let prevEdge: number | null = null;
+        displayedBoxes.forEach((bx, idx) => {
+          const cx = xs[idx];
+          const edge = cx + boxWidth / 2;
+          const f = bx.regimeFactor ?? 1;
+          const upY = mapY(minDeltaThreshold * f);
+          const dnY = mapY(-minDeltaThreshold * f);
+          if (prevEdge !== null) segs.push({ x0: prevEdge, x1: edge - boxWidth, upY, dnY });
+          prevEdge = edge;
+        });
+        for (const s of segs) {
+          if (s.x1 < 0) continue;
+          const x0 = Math.max(0, s.x0);
+          const x1 = Math.min(chartWidth, s.x1);
+          if (x1 <= x0) continue;
+          for (const [y, color] of [
+            [s.upY, 'rgba(16, 185, 129, 0.35)'],
+            [s.dnY, 'rgba(239, 68, 68, 0.35)'],
+          ] as const) {
+            if (y < bandTop || y > bandBottom) continue;
+            ctx.strokeStyle = color;
+            ctx.setLineDash([2, 4]);
+            ctx.beginPath();
+            ctx.moveTo(x0, y);
+            ctx.lineTo(x1, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
+      };
 
-      if (upperThresholdY >= pricePaneHeight + 10) {
-        ctx.strokeStyle = 'rgba(16, 185, 129, 0.35)';
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, upperThresholdY);
-        ctx.lineTo(chartWidth, upperThresholdY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        if (flowViewMode === 'histogram') {
+      const lastClosedBox = displayedBoxes[displayedBoxes.length - 1];
+      const anyAdaptive = displayedBoxes.some((bx) => bx.regimeFactor !== undefined);
+      if (anyAdaptive) {
+        drawStepThresholds(deltaToY, pricePaneHeight + 8, height - 12);
+      } else {
+        // Compatibilidade: linhas retas do limiar fixo
+        const upperThresholdY = deltaToY(minDeltaThreshold);
+        const lowerThresholdY = deltaToY(-minDeltaThreshold);
+
+        if (upperThresholdY >= pricePaneHeight + 10) {
+          ctx.strokeStyle = 'rgba(16, 185, 129, 0.35)';
+          ctx.setLineDash([2, 4]);
+          ctx.beginPath();
+          ctx.moveTo(0, upperThresholdY);
+          ctx.lineTo(chartWidth, upperThresholdY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        if (lowerThresholdY <= height - 14) {
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.35)';
+          ctx.setLineDash([2, 4]);
+          ctx.beginPath();
+          ctx.moveTo(0, lowerThresholdY);
+          ctx.lineTo(chartWidth, lowerThresholdY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      if (flowViewMode === 'histogram') {
+        // Rótulo na régua lateral: limiar efetivo do último box fechado (com o fator do momento)
+        const lastF = lastClosedBox?.regimeFactor ?? 1;
+        const upLbl = anyAdaptive && lastClosedBox
+          ? `+${Math.round(minDeltaThreshold * lastF)}Δ${lastF !== 1 ? ` (${lastF.toFixed(1)}x)` : ''}`
+          : `+${minDeltaThreshold}Δ`;
+        const upYLbl = deltaToY(anyAdaptive && lastClosedBox ? minDeltaThreshold * lastF : minDeltaThreshold);
+        if (upYLbl >= pricePaneHeight + 10) {
           ctx.fillStyle = '#10b981';
           ctx.font = isMobile ? '8px "JetBrains Mono"' : '9px "JetBrains Mono"';
-          ctx.textAlign = 'left';
-          ctx.fillText(`+${minDeltaThreshold}Δ`, chartWidth + (isMobile ? 3 : 6), upperThresholdY + 3);
+          ctx.textAlign = 'center';
+          ctx.fillText(upLbl, chartWidth + rightAxisWidth / 2, upYLbl + 3);
         }
-      }
-
-      if (lowerThresholdY <= height - 14) {
-        ctx.strokeStyle = 'rgba(239, 68, 68, 0.35)';
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, lowerThresholdY);
-        ctx.lineTo(chartWidth, lowerThresholdY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        if (flowViewMode === 'histogram') {
+        const dnYLbl = deltaToY(anyAdaptive && lastClosedBox ? -minDeltaThreshold * lastF : -minDeltaThreshold);
+        if (dnYLbl <= height - 14) {
           ctx.fillStyle = '#ef4444';
           ctx.font = isMobile ? '8px "JetBrains Mono"' : '9px "JetBrains Mono"';
-          ctx.textAlign = 'left';
-          ctx.fillText(`-${minDeltaThreshold}Δ`, chartWidth + (isMobile ? 3 : 6), lowerThresholdY + 3);
+          ctx.textAlign = 'center';
+          ctx.fillText(anyAdaptive && lastClosedBox ? `-${Math.round(minDeltaThreshold * lastF)}Δ` : `-${minDeltaThreshold}Δ`, chartWidth + rightAxisWidth / 2, dnYLbl + 3);
         }
       }
 
@@ -929,7 +1061,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const histStep = Math.max(1, Math.round(hFactor * hPow));
 
       ctx.font = isMobile ? '7px "JetBrains Mono"' : '8px "JetBrains Mono"';
-      ctx.textAlign = 'left';
+      ctx.textAlign = 'center';
       let lastHistLblY = -999;
       const histTickStart = -Math.ceil(effectiveMaxAbsDelta / histStep) * histStep;
       for (let v = histTickStart; v <= effectiveMaxAbsDelta; v += histStep) {
@@ -950,29 +1082,36 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const sign = v > 0 ? '+' : '';
         const lbl =
           Math.abs(v) >= 1000 ? `${sign}${(v / 1000).toFixed(1)}kΔ` : `${sign}${Math.round(v)}Δ`;
-        ctx.fillText(lbl, chartWidth + (isMobile ? 3 : 6), y + 3);
+        ctx.fillText(lbl, chartWidth + rightAxisWidth / 2, y + 3);
         lastHistLblY = y;
       }
 
-      // Guias de limiar (+/-) para decisão visual de agressão forte
-      const upThY = histDeltaToY(minDeltaThreshold);
-      const dnThY = histDeltaToY(-minDeltaThreshold);
-      if (upThY >= histBandTop && upThY <= histBandBottom) {
-        ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+      // Guias de limiar na subfaixa de histórico: degraus do regime (idem), com recorte vertical
+      {
+        const clipped = (y: number) => Math.max(histBandTop, Math.min(histBandBottom, y));
+        let prevEdge: number | null = null;
         ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, upThY);
-        ctx.lineTo(chartWidth, upThY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      if (dnThY >= histBandTop && dnThY <= histBandBottom) {
-        ctx.strokeStyle = 'rgba(239, 68, 68, 0.3)';
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, dnThY);
-        ctx.lineTo(chartWidth, dnThY);
-        ctx.stroke();
+        displayedBoxes.forEach((bx, idx) => {
+          const edge = xs[idx] + boxWidth / 2;
+          if (prevEdge === null) return void (prevEdge = edge);
+          const f = bx.regimeFactor ?? 1;
+          const upY = clipped(histDeltaToY(minDeltaThreshold * f));
+          const dnY = clipped(histDeltaToY(-minDeltaThreshold * f));
+          const x0 = Math.max(0, prevEdge);
+          const x1 = Math.min(chartWidth, edge - boxWidth);
+          prevEdge = edge;
+          if (x1 <= x0) return;
+          ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+          ctx.beginPath();
+          ctx.moveTo(x0, upY);
+          ctx.lineTo(x1, upY);
+          ctx.stroke();
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.3)';
+          ctx.beginPath();
+          ctx.moveTo(x0, dnY);
+          ctx.lineTo(x1, dnY);
+          ctx.stroke();
+        });
         ctx.setLineDash([]);
       }
 
@@ -1108,6 +1247,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }
 
       // Sinais de Entrada e Convergência no Gráfico de Preço (sem poluição visual repetitiva)
+      // O dia de contexto (ontem, estático) nunca operou: suas marcas de compra/venda e
+      // convergência ficam suprimidas — só os tijolos crus aparecem.
+      const hideSignals = b.isStaticContext === true;
       const prevBox = i > 0 ? displayedBoxes[i - 1] : null;
       const isFirstBuyConvergence =
         b.convergenceType === 'BUY_CONVERGENCE' &&
@@ -1117,14 +1259,16 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         (!prevBox || prevBox.convergenceType !== 'SELL_CONVERGENCE');
 
       const shouldDrawBuy =
-        b.orderDispatched === 'BUY' ||
-        isFirstBuyConvergence ||
-        (b.convergenceType === 'BUY_CONVERGENCE' && centerX - lastBuySignalX >= 65);
+        !hideSignals &&
+        (b.orderDispatched === 'BUY' ||
+          isFirstBuyConvergence ||
+          (b.convergenceType === 'BUY_CONVERGENCE' && centerX - lastBuySignalX >= 65));
 
       const shouldDrawSell =
-        b.orderDispatched === 'SELL' ||
-        isFirstSellConvergence ||
-        (b.convergenceType === 'SELL_CONVERGENCE' && centerX - lastSellSignalX >= 65);
+        !hideSignals &&
+        (b.orderDispatched === 'SELL' ||
+          isFirstSellConvergence ||
+          (b.convergenceType === 'SELL_CONVERGENCE' && centerX - lastSellSignalX >= 65));
 
       if (shouldDrawBuy) {
         ctx.fillStyle = '#10b981';
@@ -1133,7 +1277,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const label = isMobile ? '▲ C' : b.orderDispatched === 'BUY' ? '▲ MÃE' : '▲ COMPRA';
         ctx.fillText(label, centerX, lowY + (isMobile ? 12 : 16));
         lastBuySignalX = centerX;
-      } else if (b.convergenceType === 'BUY_CONVERGENCE' && !isMobile && centerX - lastBuySignalX >= 22) {
+      } else if (!hideSignals && b.convergenceType === 'BUY_CONVERGENCE' && !isMobile && centerX - lastBuySignalX >= 22) {
         ctx.fillStyle = '#059669';
         ctx.font = '8px "Plus Jakarta Sans"';
         ctx.textAlign = 'center';
@@ -1147,7 +1291,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const label = isMobile ? '▼ V' : b.orderDispatched === 'SELL' ? '▼ MÃE' : '▼ VENDA';
         ctx.fillText(label, centerX, highY - (isMobile ? 6 : 10));
         lastSellSignalX = centerX;
-      } else if (b.convergenceType === 'SELL_CONVERGENCE' && !isMobile && centerX - lastSellSignalX >= 22) {
+      } else if (!hideSignals && b.convergenceType === 'SELL_CONVERGENCE' && !isMobile && centerX - lastSellSignalX >= 22) {
         ctx.fillStyle = '#dc2626';
         ctx.font = '8px "Plus Jakarta Sans"';
         ctx.textAlign = 'center';
@@ -1172,7 +1316,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           if (barHeight < 1) barHeight = 1;
         }
 
-        const strongFlow = Math.abs(b.delta) >= minDeltaThreshold;
+        // "fluxo forte" segue o limiar efetivo do box (fixo × fator do momento), quando medido
+        const strongFlow = Math.abs(b.delta) >= minDeltaThreshold * (b.regimeFactor ?? 1);
         const opacity = flowViewMode === 'hybrid' ? '0.35' : haSplitHist ? '0.9' : '1.0';
 
         ctx.fillStyle = isPositiveDelta
@@ -1230,6 +1375,57 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
     boxPositionsRef.current = boxPositions;
 
+    // =======================================================================
+    // LINHA DE ABERTURA DE DIA (contexto ↔ dia-alvo): tracejado vertical full-height
+    // =======================================================================
+    dayBoundaries.forEach((db) => {
+      if (db.x < 4 || db.x > chartWidth - 4) return;
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(db.x, 6);
+      ctx.lineTo(db.x, height - 26);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Etiqueta "ABERTURA · dd/mm" num pequeno selo acima da linha
+      ctx.font = isMobile ? 'bold 7.5px "Plus Jakarta Sans"' : 'bold 8.5px "Plus Jakarta Sans"';
+      ctx.textAlign = 'center';
+      const labelTxt = `ABERTURA ${db.label}`;
+      const lw = ctx.measureText(labelTxt).width + 10;
+      const lx = Math.min(Math.max(db.x, lw / 2 + 2), chartWidth - lw / 2 - 2);
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.14)';
+      ctx.beginPath();
+      ctx.roundRect(lx - lw / 2, 8, lw, 14, 3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillText(labelTxt, lx, 18);
+    });
+
+    // Selo "HISTÓRICO -N": avisa que o operador rolou para trás; um clique nele volta ao hoje
+    if (effectiveScroll >= 1) {
+      ctx.font = isMobile ? 'bold 8px "Plus Jakarta Sans"' : 'bold 9px "Plus Jakarta Sans"';
+      ctx.textAlign = 'right';
+      const backTxt = `⟨ HISTÓRICO −${Math.round(effectiveScroll)} · VOLTE AO HOJE`;
+      const bw = ctx.measureText(backTxt).width + 14;
+      const bx = chartWidth - effectiveRightMargin - 6;
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
+      ctx.beginPath();
+      ctx.roundRect(bx - bw, 26, bw, 17, 4);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#7dd3fc';
+      ctx.fillText(backTxt, bx - 7, 38);
+      scrollBadgeRef.current = { x0: bx - bw, x1: bx, y0: 26, y1: 43 };
+    } else {
+      scrollBadgeRef.current = null;
+    }
+
     // Publica o layout do painel de preço para a camada de desenho (SVG),
     // mantendo os desenhos ancorados em (índice do tijolo, preço) mesmo com zoom/pan
     const layoutSig = [width, height, pricePaneHeight, effectiveMinPrice, effectiveMaxPrice, startIdx, lastBoxX, stepX].join('|');
@@ -1240,8 +1436,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         pricePaneHeight,
         priceToY,
         yToPrice,
-        indexToX: (k: number) => lastBoxX - (totalCount - 1 - k) * stepX + effectiveScroll * stepX,
-        xToIndex: (x: number) => totalCount - 1 - (lastBoxX + effectiveScroll * stepX - x) / stepX,
+        indexToX: (k: number) => lastBoxX - (endIdx - 1 - k) * stepX,
+        xToIndex: (x: number) => endIdx - 1 - (lastBoxX - x) / stepX,
       };
       setCanvasSize((prev) => (prev.w === width && prev.h === height ? prev : { w: width, h: height }));
       setLayoutVersion((v) => v + 1);
@@ -1708,7 +1904,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   /** Espelha o layout do canvas para hit-testing: onde fica cada divisor e a altura útil do fluxo. */
   const getFlowDividerLayout = (canvasW: number, canvasH: number) => {
     const isMobile = canvasW < 640;
-    const rightAxisWidth = isMobile ? 54 : 80;
+    const rightAxisWidth = isMobile ? 46 : 64;
     const chartW = canvasW - rightAxisWidth;
     const clampedRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
     const flowPaneH = canvasH * clampedRatio;
@@ -1734,6 +1930,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const { chartW, pricePaneH, histDividerY } = getFlowDividerLayout(rect.width, rect.height);
+
+    // 0. Clique no selo "VOLTE AO HOJE": zera o scroll e ancora de novo na barra mais recente
+    const badge = scrollBadgeRef.current;
+    if (badge && x >= badge.x0 && x <= badge.x1 && y >= badge.y0 && y <= badge.y1) {
+      setScrollOffset(0);
+      return;
+    }
 
     // 1. Clique no divisor entre o gráfico de preço e a janela de fluxo
     if (Math.abs(y - pricePaneH) <= 8 && x < chartW) {
@@ -1843,12 +2046,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       } else if (dragMode === 'X_AXIS') {
         const deltaX = e.clientX - dragStartX;
         const factor = Math.exp(deltaX * 0.006);
-        const newScaleX = Math.max(0.5, Math.min(3.5, dragStartScaleX * factor));
+        const newScaleX = Math.max(0.15, Math.min(3.5, dragStartScaleX * factor));
         setScaleX(newScaleX);
       } else if (dragMode === 'CHART') {
         const deltaX = e.clientX - dragStartX;
         const offsetDelta = deltaX / (22 * scaleX);
-        const maxScroll = Math.max(0, allBoxes.length - 2);
+        // Limite real do histórico: dá para rolar até o primeiro tijolo encostar na direita
+        const maxScroll = Math.max(0, allBoxes.length - 10);
         setScrollOffset(Math.max(0, Math.min(maxScroll, dragStartScroll + offsetDelta)));
 
         if (e.shiftKey) {
@@ -1905,13 +2109,15 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     }
   };
 
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+  const handleWheel = (e: WheelEvent) => {
     e.preventDefault();
-    const rect = e.currentTarget.getBoundingClientRect();
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) return;
+    const rect = canvasEl.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const isMobile = rect.width < 640;
-    const rightAxisWidth = isMobile ? 54 : 80;
+    const rightAxisWidth = isMobile ? 46 : 64;
     const chartW = rect.width - rightAxisWidth;
     const clampedRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
     const flowPaneH = rect.height * clampedRatio;
@@ -1936,23 +2142,34 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         setScaleY((prev) => Math.max(0.25, Math.min(4.0, prev * zoomFactor)));
       }
     } else if (e.shiftKey) {
-      // Shift + roda: pan horizontal
-      setScrollOffset((prev) => Math.max(0, prev - (e.deltaY > 0 ? 2 : -2)));
+      // Shift + roda: pan horizontal pelo histórico (com limite real de barras)
+      setScrollOffset((prev) => Math.max(0, Math.min(Math.max(0, allBoxes.length - 10), prev - (e.deltaY > 0 ? 2 : -2))));
     } else if (e.ctrlKey) {
-      // Ctrl + roda: zoom fino na escala X
+      // Ctrl + roda: zoom fino na escala X (piso 0.15 permite abrir até caber vários dias)
       const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
-      setScaleX((prev) => Math.max(0.5, Math.min(3.5, prev * zoomFactor)));
+      setScaleX((prev) => Math.max(0.15, Math.min(3.5, prev * zoomFactor)));
     } else {
       // Roda normal no gráfico: ajusta zoom horizontal e densidade dos blocos
       if (e.deltaY < 0) {
         setScaleX((prev) => Math.min(3.5, prev * 1.05));
         setVisibleCount((prev) => Math.max(14, prev - 2));
       } else {
-        setScaleX((prev) => Math.max(0.5, prev * 0.95));
-        setVisibleCount((prev) => Math.min(100, prev + 2));
+        setScaleX((prev) => Math.max(0.15, prev * 0.95));
+        setVisibleCount((prev) => Math.min(3000, prev + 2));
       }
     }
   };
+
+  wheelHandlerRef.current = handleWheel;
+
+  // Anexa a roda como listener nativo não-passivo (permite preventDefault de verdade)
+  useEffect(() => {
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) return;
+    const onWheelNative = (e: WheelEvent) => wheelHandlerRef.current?.(e);
+    canvasEl.addEventListener('wheel', onWheelNative, { passive: false });
+    return () => canvasEl.removeEventListener('wheel', onWheelNative);
+  }, []);
 
   // =========================================================================
   // GESTOS DE TOUCH (CELULARES & TABLETS): PINCH MULTI-EIXO
@@ -2043,7 +2260,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
       const deltaX = touch.clientX - touchStartRef.current.x;
       const offsetDelta = deltaX / (20 * scaleX);
-      const maxScroll = Math.max(0, allBoxes.length - 2);
+      const maxScroll = Math.max(0, allBoxes.length - 10);
       setScrollOffset(Math.max(0, Math.min(maxScroll, touchStartRef.current.scroll + offsetDelta)));
 
       const rect = e.currentTarget.getBoundingClientRect();
@@ -2073,7 +2290,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       } else if (touchStartRef.current.distX) {
         const diffX = dx - touchStartRef.current.distX;
         if (Math.abs(diffX) > 6) {
-          setScaleX((prev) => Math.max(0.35, Math.min(3.5, prev * (diffX > 0 ? 1.04 : 0.96))));
+          setScaleX((prev) => Math.max(0.15, Math.min(3.5, prev * (diffX > 0 ? 1.04 : 0.96))));
           touchStartRef.current.distX = dx;
         }
       }
@@ -2165,6 +2382,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Props compartilhadas entre a barra lateral dockada (desktop) e o drawer (telas pequenas)
   const sidebarProps = {
     blockCount: boxes.length,
+    visibleCount,
+    onVisibleCount: setVisibleCount,
     pnl: openPnL,
     activePosCount: openOrders.length,
     flowViewMode,
@@ -2349,7 +2568,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseLeave}
           onDoubleClick={handleDoubleClick}
-          onWheel={handleWheel}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleMouseUp}
@@ -2410,6 +2628,131 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         {/* ========================================================================= */}
 
         {/* ========================================================================= */}
+        {/* ENGRENAGEM DE AJUSTES: atalho no canto inferior direito que abre o painel  */}
+        {/* de exibição (tijolos/zoom/modo/escala do fluxo + legenda). Limpa a tela.     */}
+        {/* ========================================================================= */}
+        {chartToolsOpen && (
+          <div className="absolute bottom-11 right-2 z-30 w-[252px] rounded-lg bg-zinc-900/96 backdrop-blur-md border border-zinc-700/80 p-2.5 shadow-2xl pointer-events-auto select-none space-y-2.5">
+            {/* Tijolos na tela (eixo X) */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-semibold text-zinc-400">Tijolos na tela (eixo X)</span>
+                <span className="text-[10px] font-mono text-zinc-500 tabular-nums">≈ {Math.round(visibleCount / 140)} dia(s)</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setVisibleCount((prev) => Math.max(14, prev - 20))}
+                  className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 text-sm font-bold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
+                  title="Menos tijolos na tela"
+                >
+                  −
+                </button>
+                <button
+                  onClick={() => {
+                    // Atalho multidia: 40 → 300 → 600 → 1200 → 2500 → 40
+                    const next =
+                      visibleCount < 250 ? 300 : visibleCount < 500 ? 600 : visibleCount < 1000 ? 1200 : visibleCount < 2000 ? 2500 : 40;
+                    setVisibleCount(next);
+                  }}
+                  className="flex-1 h-7 rounded bg-zinc-800 text-xs font-mono font-bold text-zinc-100 hover:bg-zinc-700 cursor-pointer tabular-nums"
+                  title="Clique para alternar 40 → 300 → 600 → 1200 → 2500 tijolos (mais dias na tela)"
+                >
+                  {visibleCount}
+                </button>
+                <button
+                  onClick={() => setVisibleCount((prev) => Math.min(3000, prev + 20))}
+                  className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 text-sm font-bold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
+                  title="Mais tijolos na tela (até ~15 dias para estudo)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {/* Zoom horizontal + modo de preenchimento */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setScaleX((prev) => Math.max(0.15, Number((prev * 0.9).toFixed(2))))}
+                className="flex-1 h-7 rounded bg-zinc-800 text-[10px] font-semibold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
+                title="Zoom horizontal para fora (comprimir tijolos) — ou Ctrl+roda"
+              >
+                ⤡ Zoom −
+              </button>
+              <button
+                onClick={() => setScaleX((prev) => Math.min(3.5, Number((prev * 1.1).toFixed(2))))}
+                className="flex-1 h-7 rounded bg-zinc-800 text-[10px] font-semibold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
+                title="Zoom horizontal para dentro — ou Ctrl+roda"
+              >
+                ⤢ Zoom +
+              </button>
+              <button
+                onClick={() => setSpacingMode((prev) => (prev === 'fill' ? 'compact' : 'fill'))}
+                className={`w-14 h-7 rounded text-[10px] font-bold cursor-pointer border ${
+                  spacingMode === 'fill'
+                    ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                    : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white'
+                }`}
+                title="Preencher: tela inteira | Compacto: tijolos agrupados à direita"
+              >
+                {spacingMode === 'fill' ? 'FILL' : 'STD'}
+              </button>
+            </div>
+
+            {scrollOffset > 0 && (
+              <button
+                onClick={() => setScrollOffset(0)}
+                className="w-full h-7 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 cursor-pointer"
+                title={`Você rolou ${Math.round(scrollOffset)} tijolos para o histórico — voltar à barra mais recente`}
+              >
+                ⟳ Voltar ao HOJE
+              </button>
+            )}
+
+            {/* Escala do fluxo (reset) */}
+            <button
+              onClick={() => {
+                setScaleFlow(1.0);
+                setFlowPanOffset(0);
+              }}
+              className="w-full h-7 rounded text-[10px] font-semibold bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 cursor-pointer"
+              title="Clique para resetar a escala do painel de fluxo para 100%"
+            >
+              Escala do fluxo: {Math.round(scaleFlow * 100)}% · resetar
+            </button>
+
+            {/* Legenda (antes no rodapé, agora dentro do painel) */}
+            <div className="border-t border-zinc-800 pt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[9.5px] text-zinc-400">
+              <div className="flex items-center gap-1">
+                <span className="w-2 h-3 bg-emerald-500 rounded-xs" /> <span>10R Alta</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="w-2 h-3 bg-rose-500 rounded-xs" /> <span>10R Baixa</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="w-2 h-2.5 bg-emerald-500 rounded-xs" /> <span>HA Subida</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="w-2 h-2.5 bg-rose-500 rounded-xs" /> <span>HA Descida</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="w-2 h-2.5 bg-zinc-400 rounded-xs" /> <span>HA Reversão</span>
+              </div>
+            </div>
+          </div>
+        )}
+        <button
+          onClick={() => setChartToolsOpen((o) => !o)}
+          className={`absolute bottom-8 sm:bottom-2 right-[9px] sm:right-[18px] z-30 flex h-7 w-7 items-center justify-center rounded-md border backdrop-blur-sm shadow-lg pointer-events-auto cursor-pointer transition-colors ${
+            chartToolsOpen
+              ? 'bg-sky-500/25 text-sky-200 border-sky-500/50'
+              : 'bg-zinc-900/85 text-zinc-300 border-zinc-700/70 hover:text-white'
+          }`}
+          title="Ajustes do gráfico: tijolos, zoom, modo de tela, escala do fluxo e legenda"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
+
+        {/* ========================================================================= */}
         {/* BOX RENKO: HUD compacto em telas pequenas                                 */}
         {/* ========================================================================= */}
         {activeBox && (
@@ -2442,63 +2785,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* RODAPÉ INFORMATIVO COM LEGENDA DE FLUXO HEIKIN-ASHI                       */}
+      {/* RODAPÉ ENXUTO: só a dica de interação (a legenda migrou para a engrenagem)  */}
       {/* ========================================================================= */}
-      <div className="flex items-center justify-between px-3 sm:px-4 py-1 sm:py-1.5 bg-zinc-950 border-t border-zinc-900 text-[10px] sm:text-[11px] text-zinc-400 font-mono shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto no-scrollbar">
-          {/* Legenda dos Boxes Renko 10R */}
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="w-2 h-3 bg-emerald-500 rounded-xs" />
-            <span>10R Alta</span>
-          </div>
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="w-2 h-3 bg-rose-500 rounded-xs" />
-            <span>10R Baixa</span>
-          </div>
-
-          <div className="h-3 w-[1px] bg-zinc-800 shrink-0" />
-
-          {/* Legenda Solicitada do Fluxo Heikin-Ashi */}
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-zinc-500 font-semibold">Fluxo HA:</span>
-            <div className="flex items-center gap-1">
-              <span className="w-2 h-2.5 bg-emerald-500 rounded-xs" />
-              <span className="text-emerald-300">Subida</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="w-2 h-2.5 bg-rose-500 rounded-xs" />
-              <span className="text-rose-300">Descida</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="w-2 h-2.5 bg-zinc-400 rounded-xs" />
-              <span className="text-zinc-200 font-semibold">Reversão</span>
-            </div>
-
-            <div className="h-3 w-[1px] bg-zinc-800 shrink-0 hidden sm:block" />
-
-            <button
-              onClick={() => {
-                setScaleFlow(1.0);
-                setFlowPanOffset(0);
-              }}
-              className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9.5px] cursor-pointer shrink-0 whitespace-nowrap"
-              title="Clique para resetar escala do fluxo para 100%"
-            >
-              <span>Escala Fluxo:</span>
-              <strong className="font-mono">{Math.round(scaleFlow * 100)}%</strong>
-            </button>
-          </div>
-        </div>
-
-        <div className="text-zinc-500 text-[9px] sm:text-[10px] min-w-0 truncate flex items-center justify-end gap-2 pl-2">
-          <span className="hidden lg:inline truncate">
-            💡 Controles na barra lateral · arraste réguas para zoom Y/Fluxo · arraste o Box Renko pelo título · duplo clique auto-escala
-          </span>
-          <span className="hidden sm:inline lg:hidden truncate">
-            💡 Arraste réguas para zoom Y/Fluxo · Divisor para altura
-          </span>
-          <span className="sm:hidden truncate">Arraste réguas para zoom</span>
-        </div>
+      <div className="flex items-center justify-end px-3 sm:px-4 py-0.5 bg-zinc-950 border-t border-zinc-900 text-[9px] sm:text-[10px] text-zinc-600 font-mono shrink-0">
+        <span className="truncate">
+          ⚙ Ajustes no canto inferior direito · arraste as réguas para zoom Y/Fluxo · duplo clique auto-escala
+        </span>
       </div>
     </div>
   );

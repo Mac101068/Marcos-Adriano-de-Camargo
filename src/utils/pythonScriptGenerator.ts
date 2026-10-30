@@ -88,6 +88,13 @@ BOX_POINTS = ${config.boxPoints || 50}                 # Tamanho do box: 50 pont
 MIN_DELTA_THRESHOLD = ${config.minDeltaThreshold || 0}   # Delta mínimo de agressão
 REQUIRE_CVD_EXTREME = ${config.requireCvdNewExtreme ? 'True' : 'False'}
 
+# LIMIAR ADAPTIVO DE REGIME — assimetria intradiária (curva em U de volume).
+# Mesma fórmula do medidor web (SessionRegimeMeter): fator = volume médio dos
+# últimos N boxes ÷ média do dia até agora, clampado em 0,5x–3,0x com aquecimento
+# de 20 boxes / 15 minutos. Limiar efetivo = MIN_DELTA_THRESHOLD x fator x lado.
+ADAPTIVE_THRESHOLD_ENABLED = ${config.adaptiveThresholdEnabled ? 'True' : 'False'}
+REGIME_LOOKBACK_BOXES = ${config.regimeLookbackBoxes || 20}      # Janela rolling do medidor
+
 STOP_LOSS_POINTS = ${config.stopLossPoints || 0}
 TAKE_PROFIT_POINTS = ${config.takeProfitPoints || 0}
 
@@ -191,6 +198,87 @@ def check_trade_allowed(state, data, action):
 
 
 # ==============================================================================
+# MEDIDOR DE REGIME DE SESSÃO (paridade com o app web)
+# ==============================================================================
+class RegimeMeter:
+    """Mede o regime da sessão a cada box fechado:
+    fator de volume (janela recente vs média do dia) e fatores direcionais
+    de pressão compradora x vendedora. Zera sozinho na virada de dia."""
+
+    MIN_BOXES_WARMUP = 20
+    MIN_MINUTES_WARMUP = 15
+    MAX_RECORDS = 2000
+
+    def __init__(self, lookback_boxes=20):
+        self.lookback = max(5, min(100, int(lookback_boxes) or 20))
+        self.reset()
+
+    @staticmethod
+    def _clamp(v, lo, hi):
+        return max(lo, min(hi, v))
+
+    def reset(self):
+        self.records = []          # (hora, volume_total, delta, fator)
+        self.day_key = None
+        self.day_vol_sum = 0
+        self.day_pos_sum = 0
+        self.day_pos_n = 0
+        self.day_neg_sum = 0       # magnitude (positiva)
+        self.day_neg_n = 0
+        self.session_start = 0
+        self.last_factor = 1.0
+        self.last_buy = 1.0
+        self.last_sell = 1.0
+
+    def feed_closed_box(self, ts_msc, total_volume, delta):
+        key = datetime.fromtimestamp(ts_msc / 1000).strftime("%Y-%m-%d")
+        if self.day_key != key:
+            self.reset()
+            self.day_key = key
+            self.session_start = ts_msc
+
+        vol = max(0, int(total_volume or 0))
+        dlt = int(delta or 0)
+
+        day_boxes = len(self.records) + 1
+        day_mean_vol = (self.day_vol_sum + vol) / day_boxes
+        win = self.records[-self.lookback:]
+        win_mean_vol = sum(r[1] for r in win) / len(win) if win else day_mean_vol
+
+        day_pos_mean = self.day_pos_sum / self.day_pos_n if self.day_pos_n > 0 else 0
+        day_neg_mean = self.day_neg_sum / self.day_neg_n if self.day_neg_n > 0 else 0
+        win_pos = [r[2] for r in win if r[2] > 0]
+        win_neg = [-r[2] for r in win if r[2] < 0]
+        win_pos_mean = sum(win_pos) / len(win_pos) if win_pos else day_pos_mean
+        win_neg_mean = sum(win_neg) / len(win_neg) if win_neg else day_neg_mean
+
+        warm = (day_boxes >= self.MIN_BOXES_WARMUP
+               and ts_msc - self.session_start >= self.MIN_MINUTES_WARMUP * 60 * 1000)
+
+        self.last_factor = self._clamp(win_mean_vol / day_mean_vol, 0.5, 3.0) if (warm and day_mean_vol > 0) else 1.0
+        self.last_buy = self._clamp(win_pos_mean / day_pos_mean, 0.5, 3.0) if (warm and day_pos_mean > 0) else 1.0
+        self.last_sell = self._clamp(win_neg_mean / day_neg_mean, 0.5, 3.0) if (warm and day_neg_mean > 0) else 1.0
+
+        hour = datetime.fromtimestamp(ts_msc / 1000).hour
+        self.records.append((hour, vol, dlt, self.last_factor))
+        if len(self.records) > self.MAX_RECORDS:
+            self.records = self.records[-self.MAX_RECORDS:]
+        self.day_vol_sum += vol
+        if dlt > 0:
+            self.day_pos_sum += dlt
+            self.day_pos_n += 1
+        elif dlt < 0:
+            self.day_neg_sum += -dlt
+            self.day_neg_n += 1
+        return self.last_factor
+
+    def get_adaptive_limit(self, base_threshold, side):
+        """Limiar efetivo = fixo x fator de volume x fator direcional (clamp 0,5–3,0)."""
+        dir_factor = self.last_buy if side == "BUY" else self.last_sell
+        return round(base_threshold * self._clamp(self.last_factor * dir_factor, 0.5, 3.0))
+
+
+# ==============================================================================
 # MOTOR RENKO 10R E FLUXO ATEMPORAL
 # ==============================================================================
 class RenkoFlowEngine:
@@ -199,6 +287,7 @@ class RenkoFlowEngine:
         self.boxes = []
         self.current_box = None
         self.cvd = 0.0
+        self.regime_meter = RegimeMeter(REGIME_LOOKBACK_BOXES)
 
     def init_engine(self, initial_price, timestamp):
         base_price = round(initial_price / 5.0) * 5.0
@@ -259,6 +348,10 @@ class RenkoFlowEngine:
 
         if new_box:
             self.boxes.append(new_box)
+            # Medidor alimentado ANTES da avaliação: o box carrega o fator com que foi julgado
+            new_box["regime_factor"] = self.regime_meter.feed_closed_box(
+                new_box["timestamp"], new_box["buy_volume"] + new_box["sell_volume"], new_box["delta"]
+            )
             signal, reason = self.check_convergence(new_box)
 
             self.current_box = {
@@ -297,18 +390,27 @@ class RenkoFlowEngine:
     def check_convergence(self, box):
         delta = box["delta"]
         direction = box["direction"]
+        adaptive = ADAPTIVE_THRESHOLD_ENABLED
+        limit_buy = self.regime_meter.get_adaptive_limit(MIN_DELTA_THRESHOLD, "BUY") if adaptive else MIN_DELTA_THRESHOLD
+        limit_sell = self.regime_meter.get_adaptive_limit(MIN_DELTA_THRESHOLD, "SELL") if adaptive else MIN_DELTA_THRESHOLD
+        factor_lbl = f" | volume factor {self.regime_meter.last_factor:.2f}x" if adaptive else ""
 
         if STRATEGY_MODE == "PYRAMID_FLOW_CONFLUENCE":
             if direction == "UP":
-                return "BUY", f"Pirâmide Confluência Alta: Bloco Verde #{box['index']}"
+                # Com limiar adaptativo ligado, bloco verde fraco para o regime atual NÃO sinaliza
+                if adaptive and delta < limit_buy:
+                    return None, ""
+                return "BUY", f"Pirâmide Confluência Alta: Bloco Verde #{box['index']} (Δ {delta} vs limiar {limit_buy}{factor_lbl})"
             elif direction == "DOWN":
-                return "SELL", f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']}"
+                if adaptive and delta > -limit_sell:
+                    return None, ""
+                return "SELL", f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']} (Δ {delta} vs limiar {-limit_sell}{factor_lbl})"
 
-        if direction == "UP" and delta >= MIN_DELTA_THRESHOLD:
-            reason = f"Convergência COMPRA: Box 10R Alta + Delta +{delta} ctros"
+        if direction == "UP" and delta >= limit_buy:
+            reason = f"Convergência COMPRA: Box 10R Alta + Delta +{delta} ctros (limiar {limit_buy}{factor_lbl})"
             return "BUY", reason
-        elif direction == "DOWN" and delta <= -MIN_DELTA_THRESHOLD:
-            reason = f"Convergência VENDA: Box 10R Baixa + Delta {delta} ctros"
+        elif direction == "DOWN" and delta <= -limit_sell:
+            reason = f"Convergência VENDA: Box 10R Baixa + Delta {delta} ctros (limiar {-limit_sell}{factor_lbl})"
             return "SELL", reason
 
         return None, ""

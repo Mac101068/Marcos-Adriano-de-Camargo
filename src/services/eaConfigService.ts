@@ -9,6 +9,8 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   boxPoints: 50, // 10R no Mini-Índice
   contracts: 1, // 1 contrato padrão na Ordem Mãe
   minDeltaThreshold: 100, // Delta mínimo de agressão líquida
+  adaptiveThresholdEnabled: true, // Limiar adaptativo ligado por padrão: ±mín × fator de regime do momento
+  regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
   requireCvdNewExtreme: false,
   confirmationMode: 'BOX_CLOSE',
   stopLossPoints: 0, // Sem Stop Loss fixo (zeragem pela virada do fluxo)
@@ -207,6 +209,8 @@ export class EaConfigService {
           holdMainUntilFlip: parsed.holdMainUntilFlip ?? DEFAULT_EA_CONFIG.holdMainUntilFlip,
           closeAllOnFlowFlip: parsed.closeAllOnFlowFlip ?? DEFAULT_EA_CONFIG.closeAllOnFlowFlip,
           noFixedStopLoss: parsed.noFixedStopLoss ?? DEFAULT_EA_CONFIG.noFixedStopLoss,
+          adaptiveThresholdEnabled: parsed.adaptiveThresholdEnabled ?? DEFAULT_EA_CONFIG.adaptiveThresholdEnabled,
+          regimeLookbackBoxes: parsed.regimeLookbackBoxes ?? DEFAULT_EA_CONFIG.regimeLookbackBoxes,
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
           mt5MaxOrdersPerMinute: parsed.mt5MaxOrdersPerMinute ?? DEFAULT_EA_CONFIG.mt5MaxOrdersPerMinute,
           enablePartialExit: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? false : (parsed.enablePartialExit ?? true),

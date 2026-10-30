@@ -27,6 +27,10 @@ export interface RenkoBox {
   isConvergence: boolean; // Se fechou com confirmação de fluxo
   convergenceType?: 'BUY_CONVERGENCE' | 'SELL_CONVERGENCE' | 'DIVERGENCE';
   orderDispatched?: 'BUY' | 'SELL';
+  regimeFactor?: number; // Fator de regime (volume recente ÷ média do dia) vigente no fechamento do box
+  // Box que pertence ao DIA DE CONTEXTO estático do replay (ontem): entra só para dar
+  // contexto de posição ao gráfico e por isso NUNCA deve exibir marcas de ordem/convergência.
+  isStaticContext?: boolean;
 }
 
 export interface OrderAuditEvent {
@@ -118,6 +122,8 @@ export interface AutomationConfig {
   boxPoints: number; // 50 pontos (10R no Mini-Índice)
   contracts: number; // Lote (ex: 1, 2, 5 contratos)
   minDeltaThreshold: number; // Delta mínimo para validar convergência (ex: 200 contratos)
+  adaptiveThresholdEnabled: boolean; // Limiar adaptativo: ±minDeltaThreshold × fator de regime do momento
+  regimeLookbackBoxes: number; // Nº de boxes recentes na janela do medidor de regime (padrão 20)
   requireCvdNewExtreme: boolean; // Exige que o CVD faça nova máxima/mínima
   confirmationMode: 'BOX_CLOSE' | 'TICK_BREAKOUT'; // Disparar no fechamento ou no rompimento
   stopLossPoints: number; // Stop Loss (ex: 100 pontos = 2 boxes)

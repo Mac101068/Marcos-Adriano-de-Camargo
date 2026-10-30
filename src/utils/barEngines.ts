@@ -1,4 +1,5 @@
 import { Tick, RenkoBox } from '../types/trading';
+import { SessionRegimeMeter } from './sessionRegime';
 
 /**
  * Motores de séries experimentais para o gráfico principal:
@@ -14,6 +15,12 @@ export type ChartSeries = 'renko' | 'range' | 'tempo';
 export interface BarEngineResult {
   newBarClosed: boolean;
   closedBox?: RenkoBox;
+}
+
+/** Dia local (YYYY-MM-DD) de um timestamp — usada pela âncora de sessão do Range. */
+function sessionKeyOf(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function makeBlankBar(price: number, timestamp: number): Partial<RenkoBox> {
@@ -78,9 +85,17 @@ export class RangeBarEngine {
   private boxes: RenkoBox[] = [];
   private currentBox: Partial<RenkoBox> | null = null;
   private cvd: number = 0;
+  // Dia local (YYYY-MM-DD) da sessão em curso — impede o gap de virar barra-ponte.
+  private lastSessionKey?: string;
+  // Medidor de regime desta série (alimentado a cada barra fechada; leitura sempre ligada)
+  private regimeMeter = new SessionRegimeMeter(20);
 
   constructor(rangePoints: number = 50) {
     this.rangePoints = Math.max(5, rangePoints);
+  }
+
+  public getRegimeMeter(): SessionRegimeMeter {
+    return this.regimeMeter;
   }
 
   public setRangePoints(points: number) {
@@ -102,6 +117,8 @@ export class RangeBarEngine {
   public initialize(startPrice: number, timestamp: number = Date.now()) {
     this.boxes = [];
     this.cvd = 0;
+    this.lastSessionKey = sessionKeyOf(timestamp);
+    this.regimeMeter.reset();
     this.currentBox = makeBlankBar(startPrice, timestamp);
     this.currentBox.cvdAtClose = 0;
   }
@@ -111,12 +128,24 @@ export class RangeBarEngine {
       this.initialize(tick.price, tick.timestamp);
     }
 
+    // VIRADA DE SESSÃO (mesma âncora do Renko): a barra parcial de ontem é descartada e a
+    // barra de hoje nasce no preço real de abertura — o gap noturno nunca vira barra-ponte.
+    const tickSession = sessionKeyOf(tick.timestamp);
+    if (this.lastSessionKey !== undefined && tickSession !== this.lastSessionKey) {
+      this.lastSessionKey = tickSession;
+      this.currentBox = makeBlankBar(tick.price, tick.timestamp);
+      this.currentBox.cvdAtClose = this.cvd;
+    }
+
     const curr = this.currentBox!;
     this.cvd = accumulateTick(curr, tick, this.cvd);
 
     const reached = (curr.high || 0) - (curr.low || 0) >= this.rangePoints;
     if (reached) {
       const closed = finalizeBar(curr, this.boxes.length);
+      // Regime: alimenta o medidor e grava o fator vigente antes de qualquer avaliação
+      this.regimeMeter.feedClosedBox(closed);
+      closed.regimeFactor = this.regimeMeter.getFactor();
       this.boxes.push(closed);
       this.currentBox = makeBlankBar(tick.price, tick.timestamp);
       this.currentBox.cvdAtClose = this.cvd;
@@ -136,9 +165,14 @@ export class TimeBarEngine {
   private boxes: RenkoBox[] = [];
   private currentBox: Partial<RenkoBox> | null = null;
   private cvd: number = 0;
+  private regimeMeter = new SessionRegimeMeter(20);
 
   constructor(intervalMs: number = 30000) {
     this.intervalMs = Math.max(1000, intervalMs);
+  }
+
+  public getRegimeMeter(): SessionRegimeMeter {
+    return this.regimeMeter;
   }
 
   public setIntervalMs(ms: number) {
@@ -160,6 +194,7 @@ export class TimeBarEngine {
   public initialize(startPrice: number, timestamp: number = Date.now()) {
     this.boxes = [];
     this.cvd = 0;
+    this.regimeMeter.reset();
     this.currentBox = makeBlankBar(startPrice, timestamp);
     this.currentBox.cvdAtClose = 0;
   }
@@ -177,6 +212,9 @@ export class TimeBarEngine {
     // Virada de intervalo: fecha a barra atual e abre a próxima no fechamento anterior
     if (tickBucket > currBucket) {
       closed = finalizeBar(this.currentBox!, this.boxes.length);
+      // Regime: mede a barra fechada e grava o fator vigente (leitura sempre ligada)
+      this.regimeMeter.feedClosedBox(closed);
+      closed.regimeFactor = this.regimeMeter.getFactor();
       this.boxes.push(closed);
       this.currentBox = makeBlankBar(closed.close, Math.min(tick.timestamp, tickBucket * this.intervalMs));
       this.currentBox.cvdAtClose = this.cvd;

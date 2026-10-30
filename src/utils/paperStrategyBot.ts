@@ -44,6 +44,7 @@ export interface PaperTrade {
   points?: number;
   financial?: number;
   triggerReason: string;
+  regimeFactor?: number; // Fator de regime do box de entrada (medição sempre ativa; exportado no CSV)
 }
 
 export interface EquityPoint {
@@ -282,6 +283,17 @@ export class PaperStrategyBot {
   }
 
   /**
+   * Paridade terminal x coletor: a janela de entradas configurada é comparada com a HORA
+   * DA BARRA (box.timeEnd), exatamente como o App faz com o timestamp do tick. Fora da
+   * janela não abrem entradas novas — posições abertas continuam geridas normalmente.
+   */
+  private entryWindowBlocked(ts: number, config: AutomationConfig): boolean {
+    if (!config.tradingHoursEnabled) return false;
+    const hm = new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    return hm < config.tradingStartTime || hm >= config.tradingStopEntriesTime;
+  }
+
+  /**
    * Ciclo principal: chamado pelo Coletor para CADA barra fechada da série,
    * com o sinal já avaliado pelo convergenceEvaluator compartilhado.
    */
@@ -324,17 +336,21 @@ export class PaperStrategyBot {
       this.pendingEntries = this.pendingEntries.filter((p) => p.direction === signal);
     }
 
-    // 2) Execução das ordens LIMITADAS de entrada: só entram se o preço recuar até o nível
-    for (const pend of [...this.pendingEntries]) {
-      const waitBoxes = Math.max(1, config.pullbackMaxBoxesWait ?? 2);
-      if (box.index - pend.placedIndex >= waitBoxes) {
+    // 2) Execução das ordens LIMITADAS de entrada: só entram se o preço recuar até o nível.
+    // Fora da janela de horários nenhuma nova entrada se materializa (paridade com a tela).
+    const windowBlocked = this.entryWindowBlocked(box.timeEnd, config);
+    if (!windowBlocked) {
+      for (const pend of [...this.pendingEntries]) {
+        const waitBoxes = Math.max(1, config.pullbackMaxBoxesWait ?? 2);
+        if (box.index - pend.placedIndex >= waitBoxes) {
+          this.pendingEntries = this.pendingEntries.filter((p) => p !== pend);
+          continue;
+        }
+        const filled = pend.direction === 'BUY' ? box.low <= pend.level : box.high >= pend.level;
+        if (!filled) continue;
         this.pendingEntries = this.pendingEntries.filter((p) => p !== pend);
-        continue;
+        this.openPyramidPosition(pend.direction, pend.role, pend.contracts, pend.level, box.timeEnd, config, pend.triggerReason, box.regimeFactor);
       }
-      const filled = pend.direction === 'BUY' ? box.low <= pend.level : box.high >= pend.level;
-      if (!filled) continue;
-      this.pendingEntries = this.pendingEntries.filter((p) => p !== pend);
-      this.openPyramidPosition(pend.direction, pend.role, pend.contracts, pend.level, box.timeEnd, config, pend.triggerReason);
     }
 
     // 3) Saídas: TP das pirâmides (+pyramidTpPoints), stop opcional e breakeven liberado na ordem mãe
@@ -376,6 +392,8 @@ export class PaperStrategyBot {
 
     // 4) Nova entrada/piramidação no sinal
     if (!signal) return;
+    // Janela de horários desligada para ENTRADAS (mesmo gate do terminal; saídas seguem livres)
+    if (windowBlocked) return;
     const sameSide = this.openPositions.filter((p) => p.trade.direction === signal);
     const pendingSameSide = this.pendingEntries.filter((p) => p.direction === signal);
     const hasMain =
@@ -406,7 +424,7 @@ export class PaperStrategyBot {
       return;
     }
 
-    this.openPyramidPosition(signal, role, contracts, box.close, box.timeEnd, config, reason);
+    this.openPyramidPosition(signal, role, contracts, box.close, box.timeEnd, config, reason, box.regimeFactor);
   }
 
   /** Registra a posição aberta da Pirâmide no preço de entrada (fechamento do box ou nível do Limit). */
@@ -417,7 +435,8 @@ export class PaperStrategyBot {
     entryPrice: number,
     entryTime: number,
     config: AutomationConfig,
-    triggerReason: string
+    triggerReason: string,
+    regimeFactor?: number
   ) {
     // Stop opcional apenas das ordens da pirâmide (ordem mãe continua sem SL fixo)
     const entrySl =
@@ -436,6 +455,7 @@ export class PaperStrategyBot {
       entryPrice,
       entryTime,
       triggerReason,
+      regimeFactor,
     };
     this.openPositions.push({
       trade,
@@ -579,6 +599,8 @@ export class PaperStrategyBot {
 
     // 2) Nova entrada por convergência (uma por lado por vez)
     if (!signal) return;
+    // Paridade com a tela: fora da janela de horários configurada não abre entrada nova
+    if (this.entryWindowBlocked(box.timeEnd, config)) return;
     if (this.openPositions.some((p) => p.trade.direction === signal)) return;
     const entry = box.close;
     const trade: PaperTrade = {
@@ -591,6 +613,7 @@ export class PaperStrategyBot {
       entryPrice: entry,
       entryTime: box.timeEnd,
       triggerReason: `Box #${box.index} @ ${entry.toFixed?.(0) ?? entry}`,
+      regimeFactor: box.regimeFactor,
     };
     this.openPositions.push({
       trade,

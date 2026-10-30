@@ -12,12 +12,12 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
 
 ### Pilares Centrais:
 1. **Gráfico Renko 10R (50 pontos)**: Construção atemporal com tijolos finos, corpo 100% preenchido e aproximação temporal progressiva.
-2. **Fluxo & Tape Reading Tick-a-Tick**: Agressão compradora vs. vendedora, saldo Delta e CVD (*Cumulative Volume Delta*).
+2. **Fluxo & Tape Reading Tick-a-Tick**: Agressão compradora vs. vendedora, saldo Delta e CVD (*Cumulative Volume Delta*), com **Limiar Adaptativo de Regime** (o Delta Mínimo acompanha a assimetria intradiária: abertura forte, almoço fraco).
 3. **Duas estratégias selecionáveis**: **Reteste (Pullback)** clássico, com parcial/breakeven/trailing, e **Pirâmide & Confluência de Fluxo**, com mãe de surfe + pirâmides de TP 50 pts.
 4. **Gatilho de Entrada configurável**: a mercado no fechamento do box, Limit a 50% do box ou Limit na abertura (reteste), com validade em boxes.
 5. **Gerenciamento de Risco Institucional**: Stop Loss, Take Profit, Realização Parcial (com Stop no Breakeven), **Proteção da Ordem Mãe em dois estágios (gatilho → piso → acompanhamento)** e trava de fim de pregão às 17:30.
 6. **Curva de Patrimônio Acumulado (Equity Curve)**: Rastreamento trade-a-trade, High-Water Mark, Underwater Drawdown e métricas de risco.
-7. **Coletor Multi-Série & Robôs Sombra**: seis motores (Renko 10R, Renko 15R, Range, Tempo…) rodando a mesma régua de regras em paralelo, com aba **Comparativo** para escolher qual escala merece ordem real.
+7. **Coletor Multi-Série & Robôs Sombra**: seis motores (Renko 10R, Renko 15R, Range, Tempo…) rodando a mesma régua de regras em paralelo, com aba **Comparativo** para escolher qual escala merece ordem real e aba **Avaliação Técnica** que decompõe o resultado por motivo de saída, papel, direção, horário e regime.
 8. **Simulador & Replay**: feed autônomo B3, reprodução progressiva de dias úteis e modo **OPERA**, que roda a estratégia de verdade pelo mesmo `handleIncomingTick` do terminal.
 9. **Responsividade Mobile Completa**: gestos touch (Pan, Pinch-to-Zoom, arrasto dos divisores com o dedo), Bottom Navigation com "Mais" e HUD adaptativo.
 10. **Integração MetaTrader 5 (Python Bridge) blindada**: WebSocket com handshake de token, armamento `ARM`/`DISARM` e tetos de risco impostos pela própria ponte.
@@ -53,6 +53,9 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
     - Arrasto interativo na régua de tempo inferior (`ew-resize`) para comprimir ou expandir o horizonte temporal.
     - Rótulos de tempo nos blocos com formatação HH:MM:SS na base do gráfico.
     - Zoom inteligente pela roda do mouse (Roda sobre o gráfico altera X; Roda sobre o eixo Y altera Y).
+    - **Modo estudo multidia**: o modo Preencher honra o "Tijolos X" diretamente (até **3000** boxes ≈ 15 dias na tela), com piso de zoom X de 0,15 e auto‑ajuste de passo até 1px — vários dias cabem juntos para estudo, com a linha âmbar `ABERTURA` separando cada pregão.
+    - **Engrenagem ⚙ sobreposta à régua de preços** (canto inferior direito, centralizada na escala): abre painel retrátil com tijolos, zoom, FILL/STD, HOJE, escala do fluxo e legenda — a antiga tira de rodapé e a legenda full foram removidas.
+    - Régua de preços estreita (64px desktop / 46px mobile) com rótulos centralizados.
     - Gestos de pinça touch (Pinch vertical no celular ajusta escala Y, Pinch horizontal ajusta escala X).
     - Persistência automática das preferências de escala (`scaleX` e `scaleY`) em `localStorage`.
 - **Seletor de Série do Gráfico (Só duas opções visíveis)**:
@@ -68,7 +71,7 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
   - **BUY**: Comprador agrediu o book de venda (Delta positivo).
   - **SELL**: Vendedor agrediu o book de compra (Delta negativo).
 - **CVD (Cumulative Volume Delta)**: Soma cumulativa do Delta ao longo da sessão.
-- **Filtro de Validação**: Apenas boxes com Delta líquido acima de `minDeltaThreshold` (ex: 250 contratos) qualificam sinal.
+- **Filtro de Validação**: apenas boxes com Delta líquido acima de `minDeltaThreshold` (ex: 250 contratos) qualificam sinal — e com o **Limiar Adaptativo de Regime** ligado esse limiar deixa de ser fixo e vira `±minDeltaThreshold × fator do momento` (ver seção G).
 - **Painel Inferior de Fluxo, Modo Heikin-Ashi & Escala Ajustável**:
   - Seletor de 3 modos na barra de ferramentas: **`[ Heikin-Ashi | Delta | Híbrido ]`** (preferência persistida em `localStorage`).
   - **Ajuste Dinâmico da Altura da Janela (Divisor Interativo)**:
@@ -154,6 +157,14 @@ A mãe nasce **sem TP e sem SL fixos** (`stopLoss: 0`, `takeProfit: 0`). Quando 
 - Permite manter posições compradas e vendidas simultaneamente.
 - Envio de ordens no Python com `position = ticket` em `TRADE_ACTION_DEAL` para fechamento individual de posições.
 
+### G. Limiar Adaptativo de Regime (assimetria intradiária)
+- **Problema**: o volume por box na abertura roda várias vezes acima do almoço (curva em U) e a agressão compradora × vendedora tem distribuições diferentes — um limiar FIXO para o dia inteiro ou é frouxo de manhã ou trava à tarde.
+- **Medidor (`src/utils/sessionRegime.ts`)**: `fator = volume médio dos últimos N boxes ÷ média do dia até agora` (clamp 0,5×–3,0×) + dois fatores direcionais (magnitude de delta positivo/negativo). A janela `regimeLookbackBoxes` é configurável (10–50, padrão 20). Reset automático na virada de dia.
+- **Gate**: com `adaptiveThresholdEnabled` (padrão ligado), o `convergenceEvaluator` exige `|Δ| ≥ minDeltaThreshold × fator` do lado correspondente — vale para as DUAS estratégias (Pirâmide e Clássica) e para as três séries do coletor. O box guarda o fator vigente (`regimeFactor`) e o motivo do sinal traz `vs ≥N | fator X.XXx`.
+- **Medição sempre ativa**: o medidor é alimentado mesmo com o gate desligado (é a fonte da seção "Regime do Mercado" da Avaliação Técnica e da coluna FATOR REGIME do CSV).
+- **Ponte MT5**: o script gerado embute um `RegimeMeter` equivalente em Python (mesma fórmula e clamp) — paridade terminal × sombra × script.
+- **Simulador equilibrado**: o gerador de dias sorteia ~40% alta / ~40% baixa / ~20% lateral (sem viés comprador embutido), para o adaptativo poder ser testado em dias baixistas.
+
 ---
 
 ## 📈 3. Curva de Patrimônio Acumulado (Equity Curve)
@@ -213,9 +224,13 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 - **Continuidade contábil**: os **acumulados contínuos** (`PaperCounters`) são persistidos separadamente da lista de trades (limitada a 1200 por série), para que um F5 nunca encolha win rate, fator de lucro ou expectativa.
 - **Dado real × replay sintético**: o coletor marca o dia com `real` no primeiro tick vindo do MT5 (`markRealData()` / `hasRealData()`). Essa marca é o **portão** que impede o replay automático de abertura de apagar um pregão verdadeiro já coletado.
 - **Aba Comparativo**: mesmas métricas lado a lado por série, para decidir qual escala merece ordem real.
-- **Aba Simulador**: visão do feed (preço, ritmo, buffer, robô), cartões dos motores e replay.
+- **Aba Avaliação Técnica (`TechnicalEvaluationView.tsx`)**: 100% leitura do MESMO snapshot do coletor — win rate, fator de lucro e expectativa decompostos por **motivo de saída** (quanto é liquidação forçada de fim de pregão?), **papel** (MAIN × Pirâmide), **direção** e **faixa de horário de entrada**, mais a seção **Regime do Mercado** (estatísticas por hora lidas direto dos medidores vivos via `registerRegimeMeter`/`getRegimeReading`). Nada aqui dispara ordem.
+- **CSV do coletor** com coluna **FATOR REGIME** por trade (`PaperTrade.regimeFactor`), para provar no Excel a qualidade das entradas por momento de pregão.
+- **Simulador**: visão do feed (preço, ritmo, buffer, robô), cartões dos motores e replay.
+  - **Dias equilibrados**: o gerador sorteia ~40% alta / ~40% baixa / ~20% lateral (sem viés comprador embutido), com o viés valendo a sessão inteira e perdendo força no almoço.
   - **Ritmo**: o 1x foi desacelerado para ficar assistível — agora é **compasso por tick** (1x ≈ 2,0 s/tick; um dia leva ~1min45 no replay; 10x ≈ 5 s), e o mesmo controle vive na tira de status abaixo do menu.
   - **Replay progressivo**: começa na primeira barra e desenha o período todo (mínimo 1 dia), dispara sozinho na abertura da plataforma.
+  - **Dia anterior ESTÁTICO**: sempre +1 dia de contexto na tela (a abertura do dia‑alvo tem o fechamento de ontem como referência), processado de uma vez, sem animação, **sem nunca operar** e **sem nenhuma marca ▲/▼** (`isStaticContext` suprime as setas no gráfico) — a linha âmbar `ABERTURA` separa os dias.
   - **Modo OPERA**: o replay roda a estratégia **de verdade** pelo mesmo `handleIncomingTick` do terminal — abre mãe e pirâmides, enche a auditoria e move o PnL (precisa do Robô LIGADO).
   - **Zera a sessão**: o replay limpa ordens abertas, livro de auditoria e PnL (pregão limpo), mas **não apaga** coleta marcada como real.
 - ⚠️ **Nenhum caminho de simulação, coleta ou replay envia ordens reais** — a ponte só é tocada quando há conexão MT5 estabelecida.
@@ -236,7 +251,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
   - Arraste com 1 dedo para navegar pelo histórico anterior (Pan horizontal).
   - Pinça com 2 dedos (*Pinch-to-Zoom*) para aumentar ou reduzir a escala dos boxes.
 - **Eixo de Preço e Margem Adaptativos**:
-  - Eixo de preço reduzido de 80px para 54px em telas `< 640px`, liberando 26px para visualização de candles sem cortar os 5 dígitos do Mini-Índice (`128.500`).
+  - Eixo de preço reduzido a **64px no desktop e 46px no mobile**, com rótulos centralizados na régua, liberando largura para os tijolos sem cortar os 5 dígitos do Mini‑Índice (`128.500`).
   - Margem direita ajustada de 90px para 50px no mobile.
 - **Times & Trades Otimizado**: Ocultamento de colunas de corretoras (`Compradora`/`Vendedora`) no celular, garantindo visibilidade total de Horário, Preço, Quantidade e Agressor sem scroll horizontal.
 - **Quadro Flutuante HUD no Mobile**: Transforma-se em uma pílula recolhível de 32px (`Detalhes ▾`), expandindo apenas quando clicada.
@@ -331,7 +346,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     ├── index.css                     # Tailwind v4 + @media print do dossiê
     ├── App.tsx                       # ≈3.0k linhas: ticks, estado das ordens, WebSocket MT5, abas, bottom nav, toast
     ├── types/
-    │   ├── trading.ts                # RenkoBox, Tick, TradeOrder (role MAIN/PYRAMID, PENDING_LIMIT), AuditEvent, AutomationConfig
+    │   ├── trading.ts                # RenkoBox (regimeFactor, isStaticContext), Tick, TradeOrder (role MAIN/PYRAMID, PENDING_LIMIT), AuditEvent, AutomationConfig
     │   ├── auth.ts                   # Usuários, licenças e transações SaaS
     │   └── drawing.ts                # Formas desenhadas no canvas (linha, retângulo, fibra, zona)
     ├── services/
@@ -342,15 +357,16 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     ├── utils/
     │   ├── renkoCalculator.ts        # Construção dos boxes Renko + CVD/delta por box e Heikin-Ashi de fluxo
     │   ├── barEngines.ts             # Motores de barra das séries (Renko 10R, Renko 15R, Range, Tempo…)
-    │   ├── convergenceEvaluator.ts   # Regra de confluência preço × fluxo que qualifica o sinal
-    │   ├── marketSimulator.ts        # Feed autônomo de ticks simulando o WIN$
+    │   ├── convergenceEvaluator.ts   # Regra de confluência preço × fluxo que qualifica o sinal (com limiar adaptativo)
+    │   ├── sessionRegime.ts          # Medidor de regime de sessão: fator de volume/direção que adapta o Delta Mínimo
+    │   ├── marketSimulator.ts        # Feed autônomo de ticks simulando o WIN$ (dias equilibrados alta/baixa/lateral)
     │   ├── paperStrategyBot.ts       # Robô sombra: espelho fiel das regras do terminal (mesma proteção da mãe)
     │   ├── sessionRules.ts           # Trava de fim de pregão 17:30 → 18:05 (DAY_CLOSE / DAY_CLOSE_FORCED)
     │   ├── bridgeSecurity.ts         # Token da ponte (gerar, ler, rotacionar, mascarar) em fluxo_bridge_token_v1
     │   └── pythonScriptGenerator.ts  # Gera o .py da ponte MT5 já com AUTH/ARM/tetos — o script não vive no repo
     └── components/
-        ├── Header.tsx                # 3 zonas, selo de conexão MT5 (· ARMADO / · SEGURO), badge do EA, PDF
-        ├── RenkoFlowChart.tsx        # ≈2.4k linhas de canvas: séries, 2 divisores arrastáveis, escalas adaptativas, linhas de ordens, desenho
+        ├── Header.tsx                # 3 zonas, selo de conexão MT5 (· ARMADO / · SEGURO), badge do EA, PDF — botões clean (chrome neutro, cor só no acento)
+        ├── RenkoFlowChart.tsx        # ≈2.8k linhas de canvas: séries, 2 divisores arrastáveis, escalas adaptativas, zoom multidia (3000 tijolos), engrenagem de ajustes, linhas de ordens, desenho
         ├── ChartControlSidebar.tsx   # Controles de série, escala, preset de janela e reset
         ├── DadosPanelWindow.tsx      # Janela flutuante arrastável que hospeda o painel de dados
         ├── RenkoBoxCard.tsx          # Quadro do box (fixo no canto, HUD mobile e variante `window`)
@@ -359,6 +375,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
         ├── AutomationPanel.tsx       # Ajustes: blocos por estratégia, proteção da mãe, limites da ponte, perfis
         ├── SimulatorView.tsx         # Aba Simulador: feed, cartões dos motores, replay e modo OPERA
         ├── SeriesComparisonView.tsx  # Aba Comparativo: métricas lado a lado por série
+        ├── TechnicalEvaluationView.tsx # Aba Avaliação Técnica: recortes por saída/papel/direção/horário + Regime do Mercado
         ├── EquityCurveView.tsx       # Curva de patrimônio, High-Water Mark e underwater drawdown
         ├── OrdersAndStats.tsx        # Posições fechadas e cartões de métricas
         ├── IntradayOrderAudit.tsx    # Auditoria, filtros, timeline e exportação CSV
@@ -372,9 +389,21 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 ---
 
-## 🆕 9. Ciclo 6 (29–30/10/2026) — resumo do que mudou
+## 🆕 9. Resumo dos últimos ciclos
 
 > Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+### Ciclo 7 (30/10/2026) — limiar adaptativo, Avaliação Técnica e gráfico de estudo
+
+- ✅ **Limiar Adaptativo de Regime** (`sessionRegime.ts`): Delta Mínimo vira `±base × fator do momento` (curva em U de volume + assimetria buy/sell, clamp 0,5×–3,0×), válido para as duas estratégias e para as três séries do coletor; medição sempre ativa; `RegimeMeter` equivalente embutido no script MT5 gerado.
+- ✅ **Aba Avaliação Técnica** (`TechnicalEvaluationView.tsx`): recortes por motivo de saída, papel, direção e horário + seção Regime do Mercado lida dos medidores vivos; CSV ganhou a coluna FATOR REGIME.
+- ✅ **Simulador equilibrado**: ~40% dias de alta / ~40% de baixa / ~20% laterais (sem viés comprador), para testar o adaptativo de verdade.
+- ✅ **Replay com dia anterior estático**: contexto processado de uma vez, sem operar e **sem marcas ▲/▼** (`isStaticContext`), linha âmbar ABERTURA separando os dias; paridade de janela de entradas (hora da barra no coletor = hora do tick no terminal).
+- ✅ **Zoom multidia para estudo**: modo Preencher honra o "Tijolos X" (até 3000 ≈ 15 dias), piso de zoom 0,15, auto‑ajuste de passo até 1px; chave `fluxo_renko_visible_count_v3`.
+- ✅ **Engrenagem ⚙ de ajustes** sobreposta e centralizada na régua de preços (painel retrátil com tudo rotulado), régua 64/46px com rótulos centralizados, rodapé‑legenda removido.
+- ✅ **Header clean**: botões Robô (só ponto colorido + On/Off) e Pausar/Rodar com chrome neutro, palavra "feed" removida, ícones do menu todos cinzas (Dados e Box Renko perderam o verde).
+
+### Ciclo 6 (29–30/10/2026) — o que já havia sido consolidado
 
 - ✅ **Ponte WebSocket blindada**: handshake `AUTH` com token, `ARM`/`DISARM`, tetos de contratos e de ordens/min impostos pelo próprio Python, `RISK_REJECT` com motivo, log por IP e fim do vazamento de ticks. Token editável/rotacionável na aba Guia.
 - ✅ **Proteção da Ordem Mãe em dois estágios** (gatilho → piso → acompanhamento), corrigindo o trailing que estava morto na Pirâmide e o stop que nunca era criado em venda (`currentSL = 0`).
@@ -440,11 +469,12 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 | `fluxo_renko_ea_config_v3` | Configuração ativa do robô (`AutomationConfig`) |
 | `fluxo_renko_ea_profiles_v3` | Perfis customizados salvos pelo operador |
 | `fluxo_renko_chart_scales_v2` | `scaleX`, `scaleY`, `scaleFlow`, `flowPaneRatio`, `flowPanOffset`, `haHistSplit` |
+| `fluxo_renko_visible_count_v3` | Janela "Tijolos X" do gráfico (padrão 250 desktop / 50 mobile; teto 3000 — modo estudo) |
+| `fluxo_renko_spacing_mode_v2` | Modo de espaçamento (Preencher/Compacto; padrão `fill`) |
 | `fluxo_renko_flow_mode_v1` | Modo do painel de fluxo (Heikin-Ashi / Delta / Híbrido) |
 | `fluxo_bridge_token_v1` | **Token da ponte** — fora do config de propósito, para nunca ser exportado em JSON |
 | `fluxo_renko_intraday_audit_v3` | Livro de auditoria intraday |
 | `fluxo_series_collector_v1` | Snapshot do coletor multi-série (com marca `real` por dia) |
-| `fluxo_renko_spacing_mode_v1` | Modo de espaçamento progressivo dos boxes |
 | `fluxo_renko_hud_pos_v1` | Posição do quadro HUD/Box Renko |
 | `fluxo_chart_series_v1` / `fluxo_chart_range_pts_v1` / `fluxo_chart_time_sec_v1` | Série ativa do gráfico e escalas de Range/Tempo |
 | `fluxo_dados_window_v1` / `fluxo_renko_box_window_v1` | Posição das janelas flutuantes (Dados e Box Renko) |

@@ -16,7 +16,7 @@ const BROKERS = [
 
 export class B3MarketSimulator {
   private currentPrice: number = 128500;
-  private trend: number = 0.15; // ligeiro viés inicial
+  private trend: number = 0; // neutro: sem deriva compradora embutida
   private volatility: number = 1.0;
   private tickCounter: number = 0;
 
@@ -39,9 +39,9 @@ export class B3MarketSimulator {
     this.tickCounter++;
     const now = Date.now();
 
-    // Probabilidade de mudança de tendência estocástica
+    // Probabilidade de mudança de tendência estocástica (centrada em 0: dias de alta e baixa simétricos)
     if (Math.random() < 0.04) {
-      this.trend = (Math.random() - 0.48) * 1.5;
+      this.trend = (Math.random() - 0.5) * 1.5;
     }
 
     // Agressor baseado na tendência e ruído de mercado
@@ -103,10 +103,12 @@ export class B3MarketSimulator {
  * - Abertura (09:05–10:30): alta volatilidade e volume
  * - Meio da manhã: fluxo ainda forte
  * - Almoço (11:30–13:30): mercado lateral e quieto
- * - Tarde: com probabilidade de dia tendência direcional
+ * - Tarde: mantém o viés do dia (alta/baixa/lateral sorteado no início da sessão)
  * - Fechamento (16:30–17:45): decruzação de D+1, movimento intenso
  *
- * Serve para testar a estratégia em horários diferentes sem esperar o pregão real.
+ * Cada dia sorteia um tipo EQUILIBRADO (~40% alta / ~40% baixa / ~20% lateral), então a base
+ * já traz dias de viés baixista — necessário para testar o limiar adaptativo sem o antigo
+ * enviesamento comprador. Serve para testar a estratégia em horários diferentes sem esperar o pregão real.
  * Os ticks retornam em ordem cronológica, terminando no preço que o replay deve adotar.
  */
 export function generateHistoricalTicks(days: number, startPrice: number = 128500): Tick[] {
@@ -132,9 +134,15 @@ export function generateHistoricalTicks(days: number, startPrice: number = 12850
     price += (Math.random() - 0.5) * 80;
     price = Math.round(price / 5) * 5;
 
-    // Viés direcional do dia: 40% de chance de ser "dia tendência" na parte da tarde
-    const trendDay = Math.random() < 0.4 ? (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.5) : 0;
-    let trend = (Math.random() - 0.5) * 0.6;
+    // Tipo de dia EQUILIBRADO (a base precisa ter dias baixistas para testar o limiar adaptativo):
+    // ~40% dia de ALTA, ~40% dia de BAIXA, ~20% LATERAL. O viés do dia vale a sessão inteira
+    // (não só a tarde), com peso reduzido no almoço — que é lateral por natureza.
+    const dayRoll = Math.random();
+    const dayBias =
+      dayRoll < 0.4 ? 0.4 + Math.random() * 0.5
+      : dayRoll < 0.8 ? -(0.4 + Math.random() * 0.5)
+      : (Math.random() - 0.5) * 0.2; // lateral, quase sem direção
+    let trend = (Math.random() - 0.5) * 0.6; // ruído intradiário (neutro)
 
     const open = new Date(day); open.setHours(9, 5, 0, 0);
     const close = new Date(day); close.setHours(17, 45, 0, 0);
@@ -151,11 +159,13 @@ export function generateHistoricalTicks(days: number, startPrice: number = 12850
       else if (minutes < 16 * 60 + 30) activity = 1.0;
       else activity = 1.5; // fechamento / decruzação D+1
 
-      // Mudanças de regime de tendência (mais frequentes fora do almoço)
+      // Mudanças de regime de tendência (mais frequentes fora do almoço) — neutras, sem deriva comprador
       if (Math.random() < 0.04 * activity) {
-        trend = (Math.random() - 0.48) * 1.5;
+        trend = (Math.random() - 0.5) * 1.5;
       }
-      const effectiveTrend = minutes >= 13 * 60 + 30 && minutes < 16 * 60 ? trend + trendDay * 0.55 : trend;
+      // O viés do dia (dayBias) permeia a sessão toda; no almoço perde força (mercado quieto/lateral)
+      const lunchDamp = minutes >= 11 * 60 + 30 && minutes < 13 * 60 + 30 ? 0.35 : 1.0;
+      const effectiveTrend = trend + dayBias * 0.55 * lunchDamp;
 
       const buyProb = 0.5 + effectiveTrend * 0.25;
       const isBuy = Math.random() < buyProb;

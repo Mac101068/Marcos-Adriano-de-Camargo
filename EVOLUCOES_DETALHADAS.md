@@ -8,6 +8,151 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 7 — 30/10/2026 · Limiar adaptativo de regime, Avaliação Técnica e gráfico de estudo
+
+Metade estratégia, metade usabilidade: o Delta Mínimo deixou de ser um número único para o dia
+inteiro (passa a acompanhar a assimetria real do pregão), nasceu a aba **Avaliação Técnica** para
+provar essa assimetria com dados, o replay ganhou dia de contexto estático sem marcas, o gráfico
+virou ferramenta de estudo (vários dias na tela + engrenagem de ajustes) e o Header recebeu o
+passe "clean" definitivo.
+
+### 7.1 ✅ Limiar Adaptativo de Regime (assimetria intradiária)
+
+**Causa raiz do problema.** O mercado é assimétrico dentro do dia: o volume por box na abertura
+roda várias vezes acima do almoço (curva em U) e a agressão compradora × vendedora tem
+distribuições diferentes. Um limiar de delta FIXO para o dia inteiro ou é frouxo de manhã ou
+trava à tarde.
+
+**O que foi implementado.**
+
+*Novo módulo `src/utils/sessionRegime.ts` (`SessionRegimeMeter`, ~230 linhas):*
+- `fator = volume médio dos últimos N boxes ÷ média do dia até agora` (clamp 0,5×–3,0×), mais dois
+  fatores direcionais (magnitude de delta positivo × negativo, mesma ideia) — `getAdaptiveLimit(base, lado, delta)`.
+- Medição **sempre ativa** (o medidor é alimentado mesmo com o gate desligado) — é a base da seção
+  "Regime do Mercado" da Avaliação Técnica. Reset automático na virada de dia (chave YYYY‑MM‑DD local,
+  mesma âncora dos motores de barra). Nada aqui envia ordem ou toca o MT5.
+
+*Integração (`convergenceEvaluator.ts`, `renkoCalculator.ts`, `barEngines.ts`, `types/trading.ts`):*
+- `evaluateBoxConvergence(..., meter?)` recebe o medidor da série; com `adaptiveThresholdEnabled`, o
+  limiar efetivo vira `±minDeltaThreshold × fator do momento` nos DOIS modos (Pirâmide: blocos com
+  agressão abaixo do limiar do momento não sinalizam; Clássico: gate idêntico por lado).
+- Cada motor alimenta seu medidor a cada barra fechada **antes** da avaliação de convergência — o
+  box é julgado com o fator com que ele fechou. O fator vigente fica gravado no box (`regimeFactor`).
+- Motivos de sinal exportados no log/trade ganham ` vs ≥N | fator X.XXx` para auditoria.
+- Config nova: `adaptiveThresholdEnabled` (padrão **ligado**) e `regimeLookbackBoxes` (padrão 20, 10–50
+  em slider no painel), com merge defensivo no `eaConfigService`.
+- UI em Ajustes: card "Regime do Mercado — Limiar Adaptativo" (vale para as DUAS estratégias, é gate
+  de fluxo) com toggle, slider da janela do medidor e explicação da fórmula.
+- **Script MT5**: `pythonScriptGenerator.ts` embute um `RegimeMeter` equivalente em Python na ponte
+  gerada (mesma fórmula, mesmo clamp), com nota explicativa na aba Código Python condicionada ao toggle.
+
+**Como foi verificado.** `npx tsc --noEmit` e build limpos; parity do gate (terminal × robôs sombra ×
+script gerado) conferida na planilha do plano; desligado o toggle, comportamento antigo restaurado
+sem reiniciar o dia.
+
+### 7.2 ✅ Aba "Avaliação Técnica" (diagnóstico da base do coletor)
+
+**O que foi implementado.**
+- Novo `src/components/TechnicalEvaluationView.tsx` (~600 linhas): 100% leitura do MESMO snapshot em
+  memória do coletor — win rate, fator de lucro e expectativa decompostos por **motivo de saída**
+  (incluindo quanto do resultado é liquidação forçada de fim de pregão), **papel** (MAIN × Pirâmide),
+  **direção** e **faixa de horário de entrada** — mais a seção **Regime do Mercado** (estatísticas
+  por hora, série do fator, aquecimento do medidor).
+- `seriesCollectorService.ts` expõe os medidores vivos: `registerRegimeMeter(series, meter)` (o App
+  registra os 6 motores na inicialização) e `getRegimeReading(series, baseThreshold)` — leitura pura.
+- CSV do coletor ganhou a coluna **FATOR REGIME** por trade (`PaperTrade.regimeFactor`), permitindo
+  provar no Excel que as entradas em hora quente × limiar alto têm qualidade diferente.
+- Menu do Header: novo item "Avaliação Técnica" (grupo Análise, ícone `ClipboardCheck`).
+
+**Como foi verificado.** typecheck/build limpos; aba renderiza com dados do replay do dia no navegador.
+
+### 7.3 ✅ Replay com dia anterior ESTÁTICO e sem marcas de ordem
+
+**Causa raiz.** O objetivo de visualização pedia sempre +1 dia de contexto na tela (a abertura do
+dia‑alvo precisa do fechamento de ontem como referência), mas o ingest silencioso chamava
+`engine.processTick` e marcava ▲/▼ de convergência nos boxes de ontem — sugerindo sinais que
+nunca foram (e nunca podem ser) operados.
+
+**O que foi implementado.**
+- `App.tsx`: contexto processado de uma vez, sem animação e **sem nunca operar**; depois do loop os
+  boxes recebem `isStaticContext = true` (em todos os motores: principal, range, tempo e escalas
+  alternativas).
+- `types/trading.ts`: flag `isStaticContext?: boolean` em `RenkoBox`.
+- `RenkoFlowChart.tsx`: `hideSignals = b.isStaticContext === true` suprime setas de ordem e marcas de
+  convergência — só os tijolos crus aparecem; linha tracejada âmbar `ABERTURA` separa os dias e o
+  divisor de dia (`dayBoundaries`) continua desenhado.
+- Paridade de janela de entradas: o coletor (`paperStrategyBot.entryWindowBlocked`) compara a hora da
+  **barra**, exatamente como o App compara a hora do **tick** — fora da janela não abrem entradas novas.
+
+**Como foi verificado.** Inspeção da fiber React no navegador: boxes de ontem com `isStaticContext=true`
+(e os com `convergenceType` interno) sem nenhum ▲/▼ desenhado; tipo 205/215.
+
+### 7.4 ✅ Simulador com dias EQUILIBRADOS (para testar o adaptativo)
+
+**Causa raiz.** O gerador antigo tinha viés comprador embutido (`trend` partia positivo), então dias
+baixistas eram raros e o limiar adaptativo não podia ser testado de verdade na simulação.
+
+**O que foi implementado.** `marketSimulator.ts` sorteia o tipo de dia EQUILIBRADO (~40% alta /
+~40% baixa / ~20% lateral), o viés vale a sessão inteira (não só a tarde) e perde força no almoço
+(lateral por natureza); `trend` neutro centrado em 0 com mudanças de regime estocásticas.
+
+### 7.5 ✅ Zoom multidia para estudo (máximo de dias na tela)
+
+**Causa raiz.** No zoom mínimo a tela inteira mostrava exatamente 1 dia. Três travas competiam:
+o `baseVisible` do modo Preencher era dividido por `√scaleX` (o zoom nunca alargava a janela),
+o piso de zoom era 0,5 e o teto de tijolos 1200.
+
+**O que foi implementado.** (`RenkoFlowChart.tsx` + `ChartControlSidebar.tsx`)
+- Modo Preencher agora honra o "Tijolos X" diretamente (`baseVisible = visibleCount`); o auto‑ajuste
+de passo distribui TODOS na largura da tela (piso do passo 1px, tijolo mínimo 1px — a silhueta
+continua legível com milhares de boxes).
+- Piso de zoom X 0,5 → **0,15** em todos os caminhos (roda, ctrl+roda, arrasto, pinça, parse do
+  localStorage, escalas iniciais); teto de "Tijolos X" 1200 → **3000** (~15 dias).
+- Ciclo multidia do preset: 40 → 300 → 600 → 1200 → 2500 → 40. Chave de persistência versionada
+  para `fluxo_renko_visible_count_v3` (o valor antigo travado em 1200/v1 seria lido como teto velho).
+
+**Como foi verificado.** 500 eventos de roda disparados via script: `visibleCount` chegou a 1250,
+`scaleX` encostou no piso 0,15, a linha ABERTURA de ontem permaneceu na tela e o dia de contexto
+ficou visível — conferido via pixel sampling e inspeção da fiber.
+
+### 7.6 ✅ Engrenagem de ajustes no canto da escala + escala de preços mais estreita
+
+**Causa raiz.** A tira flutuante de controles no rodapé tinha muita informação que nem o operador
+sabia o que era, o rodapé inteiro era uma legenda, e a régua de preços de 80px roubava largura do gráfico.
+
+**O que foi implementado.** (`RenkoFlowChart.tsx`)
+- Botão **engrenagem** (só o ícone, 28×28) sobreposto e **centralizado na régua de preços**, que abre
+  um painel retrátil de 252px com tudo rotulado: tijolos −/+ , zoom −/+, FILL/STD, HOJE, escala do
+  fluxo (reset) e legenda. Estado `chartToolsOpen`.
+- Régua de preços 80→**64px** desktop e 54→**46px** mobile; rótulos **centralizados** na régua
+  (`textAlign center`, x = `chartWidth + rightAxisWidth/2`) — as 3 cópias de `rightAxisWidth`
+  (draw, hit‑test do divisor e wheel) atualizadas juntas.
+- Rodapé da legenda removido (56 linhas → 1 linha de dica: "⚙ Ajustes no canto inferior direito ·
+  arraste as réguas · duplo clique auto‑escala").
+
+**Como foi verificado.** Centro da engrenagem × centro da régua medidos no DOM: offBy 0; painel abre,
+fechamento pela engrenagem, botão + funcional (1250→1270); console limpo.
+
+### 7.7 ✅ Passe "clean" no Header (chrome neutro, cor só no acento)
+
+**O que foi implementado.** (`Header.tsx`)
+- **Robô**: fundo/borda tintados em esmeralda‑rosa → chrome neutro (`bg-slate-900 border-slate-700`),
+  texto reduzido ao mínimo de caracteres: só o ponto colorido + **On/Off** (antes "Robô: LIGADO/PAUSADO").
+- **Pausar/Rodar**: antes botão verde cheio "Retomar feed" → chrome neutro igual, acento apenas no
+  ícone (Play esmeralda / Pause cinza) e a palavra *feed* saiu dos rótulos.
+- **Ícones do menu todos cinzas**: grupos ativos (Gráficos/Análise/Sistema) `text-slate-300`; atalhos
+  **Dados** e **Box Renko** perderam o fundo/borda esmeralda quando abertos (viraram `bg-slate-800/70`,
+  iguais aos grupos) — o único acento continua sendo o micro‑dot de status.
+
+**Como foi verificado.** `npx tsc --noEmit` + `npx vite build` limpos após cada corte.
+
+### Verificações deste ciclo
+
+- `npx tsc --noEmit` e `npx vite build` limpos após cada entrega do ciclo.
+- Nada tocou a ponte MT5 real: regime, avaliação, simulador e gráfico são 100% locais.
+
+---
+
 ## 📆 Ciclo 6 — 29 e 30/10/2026 · Ponte blindada, mãe protegida e gráfico sob medida
 
 Este foi o ciclo mais denso até agora: fechou o único buraco de segurança que podia custar

@@ -1099,6 +1099,46 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 <span>Exigir CVD em Nova Máxima/Mínima</span>
               </label>
             </div>
+
+            {/* Regime do Mercado — limiar adaptativo (vale para as DUAS estratégias: é gate de fluxo) */}
+            <div className="pt-2 mt-1 border-t border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.adaptiveThresholdEnabled}
+                    onChange={(e) => handleConfigChange('adaptiveThresholdEnabled', e.target.checked)}
+                    className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer"
+                  />
+                  <span className="font-semibold">Limiar Adaptativo de Regime</span>
+                </label>
+                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Assimetria Intradia</span>
+              </div>
+              {config.adaptiveThresholdEnabled && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-400">Janela do Medidor</label>
+                    <span className="font-mono text-emerald-400 font-semibold">{config.regimeLookbackBoxes} boxes</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="10"
+                    max="50"
+                    step="5"
+                    value={config.regimeLookbackBoxes}
+                    onChange={(e) => handleConfigChange('regimeLookbackBoxes', Number(e.target.value))}
+                    className="w-full accent-emerald-500"
+                  />
+                </div>
+              )}
+              <p className="text-[10px] text-slate-500 leading-snug">
+                O mercado é assimétrico dentro do dia (abertura forte, almoço fraco). Ligado, o Delta Mínimo deixa
+                de ser fixo e vira ±{config.minDeltaThreshold} × fator do momento (volume dos últimos{' '}
+                {config.regimeLookbackBoxes} boxes ÷ média do dia, entre 0,5x e 3x) — na Pirâmide, blocos com
+                agressão abaixo do limiar do momento não sinalizam. A medição roda sempre (desligado só volta
+                ao comportamento antigo); o histórico do fator está na aba Avaliação Técnica.
+              </p>
+            </div>
           </div>
         </div>
 
