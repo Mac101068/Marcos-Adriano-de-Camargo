@@ -472,4 +472,4 @@ Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto
 - Módulo SaaS/paywall continua **maquete em `localStorage`**, sem backend nem gateway de pagamento real.
 - A pergunta de infraestrutura “até 100 clientes pagantes” segue em aberto (hoje cada cliente precisa do próprio Windows com MT5 logado).
 - Recomenda-se **rotacionar o token** da ponte antes de operar em conta real e aplicar a regra de firewall `New-NetFirewallRule` na porta 8765.
-- Reconferência visual do card “Segurança da Ponte” depois de um F5 (a verificação via MCP de navegador caiu no reload).
+- ✅ Card “Segurança da Ponte” e o selo `· ARMADO`/`· SEGURO` do Header **reconferidos no navegador** em 30/10/2026 (recarga limpa + stub WebSocket local que só ecoa o protocolo, sem tocar o corretor).

@@ -87,10 +87,14 @@ entrada recusada desarmada, saídas ainda permitidas, `ARM` liberando a ordem, t
 tick entregue quando autenticado e o caminho legado de auto‑armamento. Arquivos temporários de
 teste foram removidos depois.
 
-⚠️ **Limitação honesta:** o teste comportamental acima cobriu o script Python; a validação visual do
-card no navegador foi feita antes de um F5, e a reconferência pós‑recarga falhou porque a conexão do
-MCP de navegador caiu no reload. O card renderiza (visto), mas convém você olhar de novo na próxima
-abertura.
+✅ **Reconferido no navegador (30/10/2026):** o teste comportamental acima cobriu o script Python; a
+validação visual tinha ficado marcada como pendente de pós‑recarga. Ela foi refeita agora: carregando o
+terminal do zero, o card “Segurança da Ponte” na aba Guia **Sistema → Guia MT5** renderiza com token,
+“Gerar token novo”, os dois tetos (contratos por ordem / ordens por minuto) e o trecho de
+`New‑NetFirewallRule`. O selo do Header foi exercitado nos **dois estados** com um stub WebSocket local
+(127.0.0.1:8765, só ecoando `AUTH_RESULT`/`ARM_RESULT`, sem tocar nenhum corretor): com o robô ligado,
+“Ponte autenticada e **ARMADA**”; ao desligá‑lo, “Ponte autenticada e **EM SEGURO**”. O stub foi removido
+depois e nunca esteve no repositório.
 
 ### 6.2 ✅ Tipo de entrada na Pirâmide (Limit na metade ou na abertura do box)
 
