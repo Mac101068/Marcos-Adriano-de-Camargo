@@ -150,6 +150,9 @@ fechamento pela engrenagem, botão + funcional (1250→1270); console limpo.
 
 - `npx tsc --noEmit` e `npx vite build` limpos após cada entrega do ciclo.
 - Nada tocou a ponte MT5 real: regime, avaliação, simulador e gráfico são 100% locais.
+- **Evidência**: commit `ee07ee7` em `origin/main` (19 arquivos, 2.037 inserções / 276 remoções),
+  incluindo os módulos novos `src/utils/sessionRegime.ts` (228 linhas) e
+  `src/components/TechnicalEvaluationView.tsx` (606 linhas).
 
 ---
 
