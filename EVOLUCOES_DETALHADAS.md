@@ -319,8 +319,12 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 - 🧪 Firewall do Windows restringindo a porta 8765 à sua rede (o trecho do comando já está no Guia).
 - 🧪 Token de exemplo gerado durante os testes ainda é o mesmo do seu navegador: gire um novo antes
   de rodar o script no Windows ("Gerar token novo" no Guia).
-- 🔧 Commit das mudanças deste ciclo ainda não tinha sido feito até a escrita deste arquivo; a
-  consolidação abaixo registra tudo de uma vez.
+- ✅ **Commit `3037273`** — "feat: hardened MT5 bridge, two-stage mother protection, pyramid limit
+  entries, session lock and chart dividers": 20 arquivos, **3.005 inserções / 563 remoções** — cerca de
+  2,6 mil linhas de código (17 arquivos em `src/`, incluindo os novos `bridgeSecurity.ts` e
+  `sessionRules.ts`) e cerca de 1 mil linhas de documentação (este arquivo, `PROJECT_SUMMARY.md` e
+  `PROJECT_CONSOLIDATION_CHAT_SEED.md`).
+  Enviado para `origin/main` em 30/10/2026 depois de `npx tsc --noEmit` limpo e `npx vite build` OK (3,60 s).
 
 ## 🔁 Como retomar / verificar
 

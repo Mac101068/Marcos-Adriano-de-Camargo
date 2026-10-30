@@ -372,6 +372,22 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 ---
 
+## 🆕 9. Ciclo 6 (29–30/10/2026) — resumo do que mudou
+
+> Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+- ✅ **Ponte WebSocket blindada**: handshake `AUTH` com token, `ARM`/`DISARM`, tetos de contratos e de ordens/min impostos pelo próprio Python, `RISK_REJECT` com motivo, log por IP e fim do vazamento de ticks. Token editável/rotacionável na aba Guia.
+- ✅ **Proteção da Ordem Mãe em dois estágios** (gatilho → piso → acompanhamento), corrigindo o trailing que estava morto na Pirâmide e o stop que nunca era criado em venda (`currentSL = 0`).
+- ✅ **Tipo de entrada na Pirâmide**: `MARKET_ON_CLOSE`, `BOX_50_LIMIT` e `BOX_OPEN_LIMIT`, com validade em boxes e TP/SL ancorados no preço real de execução.
+- ✅ **Coletor honesto**: marca `real` por dia impede o replay de apagar pregão verdadeiro; replay progressivo; modo **OPERA** roda a estratégia pelo mesmo caminho do terminal.
+- ✅ **Trava de 17:30** compartilhada (`sessionRules.ts`) entre terminal e robôs sombra.
+- ✅ **Gráfico**: dois divisores arrastáveis idênticos (preço↔fluxo e Heikin-Ashi↔histograma), ambos com arraste no dedo, escalas adaptativas com passo “limpo”, régua `Δ` no histograma e etiquetas de faixa.
+- ✅ **Ajustes por estratégia** (Pirâmide com bloco dedicado) e **pop-up de execução discretizado** (linha fina, sem perder o preço de entrada).
+- ✅ **Série TEMPO fora do gráfico** (só Pontos e Range), continuando no coletor como histórico.
+- ✅ **Consolidação**: commit `3037273` em `origin/main` (3.005 inserções / 563 remoções), com `npx tsc --noEmit` limpo e build OK.
+
+---
+
 ## 🛠️ 10. Correções Recentes & Melhorias Operacionais
 
 ### A. Diagnóstico & Correção das Linhas de Ordens no Gráfico
@@ -434,21 +450,6 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 | `fluxo_dados_window_v1` / `fluxo_renko_box_window_v1` | Posição das janelas flutuantes (Dados e Box Renko) |
 | `fluxo_replay_days_v1` / `fluxo_replay_operate_v1` / `fluxo_sim_speed_v1` | Replay: dias, modo OPERA e velocidade |
 | `quant_terminal_current_user_v2` / `quant_terminal_users_v2` / `quant_terminal_transactions_v2` | SaaS (administrador, clientes e transações) |
-
----
-
-## 🆕 9. Ciclo 6 (29–30/10/2026) — resumo do que mudou
-
-> Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
-
-- ✅ **Ponte WebSocket blindada**: handshake `AUTH` com token, `ARM`/`DISARM`, tetos de contratos e de ordens/min impostos pelo próprio Python, `RISK_REJECT` com motivo, log por IP e fim do vazamento de ticks. Token editável/rotacionável na aba Guia.
-- ✅ **Proteção da Ordem Mãe em dois estágios** (gatilho → piso → acompanhamento), corrigindo o trailing que estava morto na Pirâmide e o stop que nunca era criado em venda (`currentSL = 0`).
-- ✅ **Tipo de entrada na Pirâmide**: `MARKET_ON_CLOSE`, `BOX_50_LIMIT` e `BOX_OPEN_LIMIT`, com validade em boxes e TP/SL ancorados no preço real de execução.
-- ✅ **Coletor honesto**: marca `real` por dia impede o replay de apagar pregão verdadeiro; replay progressivo; modo **OPERA** roda a estratégia pelo mesmo caminho do terminal.
-- ✅ **Trava de 17:30** compartilhada (`sessionRules.ts`) entre terminal e robôs sombra.
-- ✅ **Gráfico**: dois divisores arrastáveis idênticos (preço↔fluxo e Heikin-Ashi↔histograma), ambos com arraste no dedo, escalas adaptativas com passo “limpo”, régua `Δ` no histograma e etiquetas de faixa.
-- ✅ **Ajustes por estratégia** (Pirâmide com bloco dedicado) e **pop-up de execução discretizado** (linha fina, sem perder o preço de entrada).
-- ✅ **Série TEMPO fora do gráfico** (só Pontos e Range), continuando no coletor como histórico.
 
 ---
 
