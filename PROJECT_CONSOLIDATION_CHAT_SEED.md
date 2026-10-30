@@ -1,100 +1,158 @@
 # 🚀 PROMPT MESTRE DE CONTINUIDADE & CONSOLIDAÇÃO DO PROJETO
 ## Para migração / inicialização em um Novo Bate-Papo (Chat Seed)
 
-> **Instruções ao Usuário**: Para transferir ou continuar este projeto em um novo bate-papo sem perder nenhum detalhe, copie e cole o bloco delimitado abaixo como a sua primeira mensagem.
+> **Instruções ao Usuário**: para continuar este projeto em um bate-papo novo sem perder contexto, cole o bloco delimitado abaixo como primeira mensagem.
+> O estado atual detalhado está em `PROJECT_SUMMARY.md` e o "porquê" de cada decisão está em `EVOLUCOES_DETALHADAS.md` — o assistente deve ler os dois.
 
 ---
 
 \`\`\`markdown
-# CONTEXTO DE CONTINUIDADE: FLUXO & RENKO 10R MT5 QUANT TERMINAL (B3 WIN$)
+# CONTEXTO DE CONTINUIDADE: FLUXO & RENKO 10R — MT5 QUANT TERMINAL (B3 WIN$)
 
-Você está assumindo o projeto institucional **Fluxo & Renko 10R - MT5 Quant Terminal**.
-Trata-se de uma aplicação web de trading quantitativo de alta performance para o Mini-Índice B3 (WIN$), conectada ao MetaTrader 5 via WebSocket local (Python Bridge).
+Você está assumindo o projeto **Fluxo & Renko 10R - MT5 Quant Terminal**: aplicação web de trading
+quantitativo para Mini-Índice B3 (`WIN$`), que envia ordens automatizadas ao MetaTrader 5 por uma
+ponte WebSocket em Python.
 
-## 1. ESCOPO & PILARES DA ESTRATÉGIA QUANTITATIVA
-1. **Gráfico Renko 10R (50 pontos no Mini-Índice)**:
-   - Tijolos com corpo sólido 100% preenchido (#10b981 / #ef4444).
-   - Reversão exige 2 boxes (100 pontos).
-   - Aproximação temporal progressiva (boxes recentes arejados, compactando-se ao envelhecer).
-   - Escalas ajustáveis independentes: Eixo Y (preço), Eixo X (tempo/espaçamento) e Janela de Fluxo.
-   - Pílula/Quadro informativo Renko no canto inferior direito.
-2. **Painel de Fluxo Heikin-Ashi & Delta/CVD**:
-   - 3 modos de visualização selecionáveis na barra: [ Heikin-Ashi | Delta | Híbrido ].
-   - Heikin-Ashi de Fluxo com coloração tricolor:
-     * 🟢 Verde (#10b981): Subida contínua de agressão compradora.
-     * 🔴 Vermelho (#ef4444): Descida contínua de agressão vendedora.
-     * ⚪ Cinza (#94a3b8): Reversão de fluxo, absorção institucional ou indecisão.
-   - Divisor interativo arrastável (redimensiona entre 18% e 55% da tela) com presets (25%, 33%, 46%).
-   - Escala vertical independente do fluxo (+F, -F, reset auto, pan vertical e régua calibrada com badges numéricos).
-3. **Gatilho de Entrada por Reteste (Pullback na Abertura)**:
-   - Sinal disparado no fechamento de box com fluxo divergente/convergente (mínimo de Delta ±250 ctros).
-   - Ordem limite enviada no preço de abertura do box gerador (reteste), reduzindo slippage.
-4. **Gestão de Risco Institucional**:
-   - Stop Loss base: 100 pontos (2 boxes 10R).
-   - Take Profit base: 150 pontos (3 boxes 10R).
-   - Saída Parcial: 50 pontos (1 box a favor) com 1 contrato.
-   - Breakeven Automático: Stop movido para Entrada + 5 pontos (offset de taxas da B3) imediatamente na execução da parcial.
-   - Trailing Stop Dinâmico: Ativação a 60 pontos, mantendo stop a 50 pontos atrás da máxima/mínima.
-5. **Livro de Auditoria de Ordens Intraday**:
-   - Trilha imutável e cronológica de cada evento por ordem (envio, reteste limite, parcial, breakeven, trailing e encerramento).
-   - Exportação em planilha CSV no padrão brasileiro (UTF-8 com BOM, delimitador ponto e vírgula, formatação R$ e pontos).
-   - Modal de Timeline cronológica com badges visuais.
-6. **Linhas de Ordens no Gráfico**:
-   - Entrada/Reteste (Verde/Vermelho ou Âmbar tracejado para PENDING_LIMIT) com tag descritiva à esquerda e badge no eixo Y.
-   - Saída Parcial (Ciano tracejado com tag +50p).
-   - Stop Loss (Vermelho/Âmbar tracejado com tag SL/Breakeven).
-   - Take Profit (Verde tracejado com tag TP +150p).
-   - Indicadores fixados nas bordas se SL ou TP estiverem fora da área visível devido ao zoom vertical.
-   - Botão de alternar visibilidade ("Linhas Ordens") no topo do gráfico.
-7. **Ponte MetaTrader 5 (Python Bridge WebSocket)**:
-   - Script Python nativo (\`bot_mt5_convergencia_10r.py\`) ouvindo em ws://localhost:8765.
-   - Suporte completo a contas Hedge e Netting, transmissão de ticks reais e retorno de tickets.
-8. **Módulo SaaS & Painel Master do Administrador**:
-   - Licenciamento por dias restantes, Paywall simulado com PIX e Cartão, e painel para conceder dias e gerenciar usuários.
-9. **Exportação Executiva em PDF**:
-   - Dossiê técnico completo formatado para impressão ou exportação em PDF via botão na Top Bar e Guia MT5.
-10. **Estratégia Pirâmide & Confluência (TP 50p + Surfe até Inversão)**:
-    - Compra a cada box verde fechado: primeira ordem abre Ordem Mãe de Surfe (sem TP/SL fixo); boxes verdes seguintes abrem ordens de Pirâmide com TP de +50 pontos.
-    - Na virada de fluxo/mercado (box vermelho): zera todas as posições abertas (`FLIP_REVERSAL`) e abre a Ordem Mãe de Venda, empilhando vendas com TP de 50 pontos.
-    - Zero stops fixos em pontos: o stop é dinâmico e operado pela reversão do mercado.
-11. **Boleta Rápida Integrada no Canto Superior Esquerdo do Gráfico**:
-    - Botões sempre visíveis de Compra a mercado, Venda a mercado e Zeragem de Posições fixados no canvas.
+## 0. QUEM É O USUÁRIO E COMO TRABALHAR
+- Brasileiro, iniciante em programação. **Toda a UI, comentários e documentação em português.**
+- Duas máquinas: **Mac** (aqui, onde o código é editado) e **Windows** (MT5 + conta demo XP, onde roda
+  o script Python da ponte). Testa também no **celular Android via LAN**.
+- Servidor: `npm run dev` na **porta 3002** com `--host=0.0.0.0` (para abrir de outros aparelhos).
+- Regras fixas:
+  1. Rodar `npx tsc --noEmit` ao final de cada entrega (e `npx vite build` quando mexer no gráfico/canvas).
+  2. **Simulação, Coletor, Replay e Robôs Sombra jamais podem tocar a corretora real.**
+  3. **Commitar e fazer push somente quando ele pedir explicitamente.**
+  4. Preferir agir no alvo óbvio a fazer pergunta de múltipla escolha quando o pedido for claro.
+  5. Ser honesto sobre o que foi verificado e o que não foi — ele valoriza saber o que ficou sem teste.
 
-## 2. ESTRUTURA COMPLETA DE DIRETÓRIOS E ARQUIVOS
+## 1. PILARES DA ESTRATÉGIA
+1. **Renko 10R = 50 pontos** por box; reversão exige 2 boxes (100 pts); corpo 100% sólido
+   (`#10b981` / `#ef4444`), pavios centralizados; aproximação temporal progressiva dos boxes.
+2. **Fluxo tick-a-tick**: delta por box, CVD, filtro `minDeltaThreshold` (ex.: 250 contratos).
+3. **Duas estratégias selecionáveis**:
+   - **Reteste (Pullback)**: SL/TP fixos, realização parcial, breakeven e trailing clássicos.
+   - **Pirâmide & Confluência**: **Ordem Mãe** (`role:'MAIN'`) nasce **sem TP e sem SL** (`takeProfit=0,
+     stopLoss=0`) e surfa até a virada (`FLIP_REVERSAL`); cada box consecutivo abre **pirâmide**
+     (`role:'PYRAMID'`) com **TP de 50 pts**; máximo 10 níveis.
+4. **Gatilho de entrada em 3 modos** (vale para mãe e pirâmides): `MARKET_ON_CLOSE`,
+   `BOX_50_LIMIT` (limitada a 50% do box) e `BOX_OPEN_LIMIT` (limitada na abertura = recuo de 100%),
+   com validade `pullbackMaxBoxesWait` (1–10 boxes). Ordens limitadas nascem `status:'PENDING_LIMIT'`
+   com `limitPrice` e `pendingBoxIndex`; TP/SL são ancorados no **preço real de execução**.
+5. **Proteção da Ordem Mãe em dois estágios** (a regra que ele descreveu com palavras próprias):
+   - **Gatilho** (`trailingActivationPoints`, padrão 60 pts): enquanto não corre X pts a favor, não existe stop.
+   - **Piso** (`breakevenOffsetPoints`, padrão 5 pts): no gatilho o stop aparece em `entrada ± piso` (taxas da B3).
+   - **Acompanhamento** (`trailingDistancePoints`, padrão 50 pts): o stop segue o **extremo da perna**
+     (máxima na compra / mínima na venda) a essa distância, escolhendo a posição que **mais protege**
+     (`Math.max` na compra, `Math.min` na venda). O stop só anda a favor.
+   - ⚠️ Armadilhão histórico: a mãe nasce com `stopLoss: 0`, então a lógica precisa aceitar
+     `currentSL <= 0` como "ainda sem stop" — caso contrário **o primeiro stop nunca é criado** e o ramo
+     de venda fica morto. E na Pirâmide o trailing se aplica **só à mãe** (as pirâmides morrem no próprio TP).
+   - `moveMainToBreakevenOnPyramidTp` é um atalho separado: a cada TP de pirâmide, a mãe vai ao breakeven.
+   - As **mesmas regras** vivem em `src/utils/paperStrategyBot.ts` (`trailMainStop`), para os robôs sombra
+     não operarem regra diferente da tela.
+6. **Trava de fim de pregão**: `src/utils/sessionRules.ts` — janela **17:30 → 18:05**; liquida tudo a
+   mercado (`DAY_CLOSE` / `DAY_CLOSE_FORCED`) e bloqueia novas entradas. Usada pelo terminal **e** pelo coletor.
+7. **Coletor Multi-Série & Robôs Sombra** (`seriesCollectorService.ts`): seis motores em paralelo
+   (Renko 10R, Renko 15R, Range, Tempo…) com contadores `PaperCounters`; aba **Comparativo** decide qual
+   escala merece ordem real. Dia com dado verdadeiro é marcado `real` (`markRealData`/`hasRealData`) e
+   **o replay nunca apaga**.
+8. **Simulador & Replay**: feed autônomo B3; replay **progressivo** (1x ≈ 2,0 s/tick, um dia ≈ 1min45;
+   10x ≈ 5 s); modo **OPERA** roda a estratégia de verdade pelo mesmo `handleIncomingTick` do terminal.
+9. **Gráfico** (canvas, `RenkoFlowChart.tsx`): só **Pontos (Renko)** e **Range** como séries desenháveis
+   (Tempo saiu do gráfico, ficou no coletor). **Dois divisores arrastáveis idênticos** (linha + alça +
+   3 pontos + destaque verde no hover/arraste): preço↔fluxo (`flowPaneRatio` 18–55%, padrão 33%) e, no
+   modo Heikin-Ashi, **Heikin-Ashi↔histograma** (`haHistSplit` 30–85%, padrão 66%). Os dois arrastam com
+   o **dedo** no mobile (tolerância 12 px). Hit-test único via `getFlowDividerLayout()` — desenho, cursor,
+   mouse e toque compartilham a mesma matemática. **Escalas adaptativas com passo "limpo"**
+   (1/2/2,5/5/10 × 10ⁿ) no preço, no Heikin-Ashi e no histograma (régua `+50Δ` / `1.2kΔ`); grades e badges
+   presos à própria banda; etiquetas de faixa em desktop (`PREÇO · RENKO`, `FLUXO · HEIKIN-ASHI`,
+   `HISTOGRAMA · DELTA`). Duplo clique reseta cada divisor; escalas persistidas.
+10. **Heikin-Ashi de fluxo tricolor**: 🟢 subida contínua de agressão compradora, 🔴 descida contínua
+    vendedora, ⚪ reversão/indecisão/absorção.
+11. **Linhas de ordem no gráfico** com tags (`🟢 COMPRA MÃE (SURFE)`, `🔺 PIRÂMIDE #N (+50p TP)`,
+    `⏳ RETESTE LIMITE`, `🎯 PARCIAL`, `🛡️ SL BREAKEVEN`, `🏁 TAKE PROFIT`), badges no eixo Y e setas de
+    borda quando SL/TP saem do zoom. `openOrders` inclui `OPEN` **e** `PENDING_LIMIT`.
+12. **Auditoria intraday** (`IntradayOrderAudit` + `orderAuditService`): trilha por ordem, filtros,
+    timeline e CSV padrão BR (UTF-8 **com BOM**, `;`).
+13. **SaaS & Admin Master** (`authService`, `AdminPanel`, `SubscriptionPaywall`): ⚠️ ainda **maquete em
+    `localStorage`**, sem backend. Admin: `marcos.a.camargo@gmail.com`, vitalício.
+14. **Dossiê executivo em PDF** (`ProjectDossierPdfModal`, `@media print`, A4).
+
+## 2. PONTE MT5 — SEGURANÇA (não regredir isso nunca)
+- O script Python **não existe no repositório**: ele é **gerado em runtime** por
+  `src/utils/pythonScriptGenerator.ts` e baixado pelo navegador para o Windows. Portanto, qualquer mudança
+  de protocolo precisa ser feita **no gerador**, não num `.py` do repo.
+- Topologia: `websockets.serve(handler, "0.0.0.0", 8765)`; o navegador aponta **Ajustes → MT5 Host** para
+  o IP do Windows (`mt5.initialize()` entra no terminal já logado).
+- Protocolo: o **primeiro quadro** deve ser `{action:'AUTH', token, armed}` → `AUTH_RESULT{ok, requireToken,
+  armed, maxContractsPerOrder, maxOrdersPerMinute}`; token errado ⇒ `close(code=4001, reason="token invalido")`;
+  conferência com `secrets.compare_digest`. `ARM`/`DISARM` → `ARM_RESULT`. `check_trade_allowed()` exige,
+  nesta ordem: autenticado → armado → `mt5MaxContractsPerOrder` (padrão **2**) → `mt5MaxOrdersPerMinute`
+  (padrão **12**, janela deslizante de 60 s); recusa volta como `RISK_REJECT`. **Saídas sempre liberadas**
+  (`ORDER_MODIFY_SL`, `CLOSE_POSITIONS`, `ORDER_PARTIAL_CLOSE`). `broadcast_to_web` ignora clientes não
+  autenticados. Cada recusa é logada com o IP (`get_peer_ip`). `AUTH_TOKEN=""` = modo legado compatível.
+- O app detecta ponte antiga quando `ACCOUNT_INFO` chega **antes** de `AUTH_RESULT` (flag `bridgeLegacy`).
+- Token: `src/utils/bridgeSecurity.ts`, 28 caracteres via `crypto.getRandomValues`, chave
+  **`fluxo_bridge_token_v1`** — **deliberadamente fora do `AutomationConfig`** para preset/import JSON
+  nunca sobrescreverem nem exportarem o segredo. UI no card "Segurança da Ponte" (aba Guia) com mostrar,
+  copiar, rotacionar, os dois tetos e o comando `New-NetFirewallRule`. Header mostra `· ARMADO` / `· SEGURO`.
+
+## 3. STACK & ESTRUTURA REAL DE ARQUIVOS
+React 19 + Vite + TypeScript (sem `strict`) + Tailwind CSS v4 + lucide-react + Recharts. `main.tsx` **sem
+StrictMode** (senão os loops de tick duplicam).
+
+\`\`\`text
+src/
+├── App.tsx                       # ≈3.0k linhas: ticks, ordens, WebSocket MT5, abas, bottom nav, toast discreto
+├── types/{trading,auth,drawing}.ts
+├── services/
+│   ├── eaConfigService.ts        # config + presets + perfis + merge defensivo de defaults
+│   ├── orderAuditService.ts      # auditoria + CSV BR
+│   ├── seriesCollectorService.ts # coletor multi-série, marca real/replay
+│   └── authService.ts            # SaaS (localStorage)
+├── utils/
+│   ├── renkoCalculator.ts        # boxes Renko, delta/CVD por box, Heikin-Ashi
+│   ├── barEngines.ts             # motores de barra por série
+│   ├── convergenceEvaluator.ts   # confluência preço × fluxo
+│   ├── marketSimulator.ts        # feed simulado WIN$
+│   ├── paperStrategyBot.ts       # robô sombra (espelho das regras do terminal)
+│   ├── sessionRules.ts           # trava 17:30 → 18:05
+│   ├── bridgeSecurity.ts         # token da ponte
+│   └── pythonScriptGenerator.ts  # gera o .py da ponte com AUTH/ARM/tetos
+└── components/
+    ├── RenkoFlowChart.tsx (≈2.4k linhas), ChartControlSidebar, DadosPanelWindow, RenkoBoxCard,
+    │   DrawingOverlay, DrawingToolbar
+    ├── AutomationPanel.tsx       # Ajustes em BLOCOS por estratégia (Pirâmide tem bloco dedicado:
+    │                             #   🏄 Ordem Mãe · 🔺 Pirâmides · 🔄 Regras de Saída com "🛡️ Proteção da Ordem Mãe")
+    ├── SimulatorView, SeriesComparisonView, TimesAndTrades, EquityCurveView, OrdersAndStats,
+    │   IntradayOrderAudit
+    ├── Header, PythonScriptView, DocumentationView, ProjectDossierPdfModal
+    └── AdminPanel, SubscriptionPaywall, SubscriptionStatusBadge
 \`\`\`
-├── src/
-│   ├── types/
-│   │   ├── trading.ts                # Interfaces de RenkoBox, Tick, TradeOrder, Eventos de Auditoria e Config
-│   │   └── auth.ts                   # Modelos de usuário, assinaturas e perfis SaaS
-│   ├── services/
-│   │   ├── renkoFlowEngine.ts        # Motor matemático de tijolos 10R e cálculo acumulado do CVD
-│   │   ├── eaConfigService.ts        # Persistência no localStorage de presets e perfis customizados
-│   │   ├── orderAuditService.ts      # Livro de auditoria intraday e gerador de CSV no padrão brasileiro
-│   │   ├── authService.ts            # Gerenciador de licenças, contagem regressiva e controle de acesso
-│   │   └── marketSimulator.ts        # Simulador autônomo de mercado B3 tick-a-tick para modo offline
-│   ├── components/
-│   │   ├── Header.tsx                # Top Bar de 3 zonas, status de conexão MT5, botões e Dossiê PDF
-│   │   ├── RenkoFlowChart.tsx        # Gráfico Canvas de alta performance com Renko 10R, Fluxo Heikin-Ashi e Linhas
-│   │   ├── AutomationPanel.tsx       # Configuração do EA, perfis salvos com lixeira/modais e import/export JSON
-│   │   ├── IntradayOrderAudit.tsx    # Livro de auditoria intraday, filtros, timeline modal e exportação CSV
-│   │   ├── EquityCurveView.tsx       # Curva de patrimônio acumulado trade-a-trade, High-Water Mark e Drawdown
-│   │   ├── OrdersAndStats.tsx        # Histórico de posições fechadas e cartões de métricas (Win Rate, Profit Factor)
-│   │   ├── TimesAndTrades.tsx        # Fita de negócios ao vivo e saldo de agressão institucional
-│   │   ├── PythonScriptView.tsx      # Código-fonte Python gerado dinamicamente para download
-│   │   ├── DocumentationView.tsx     # Manual técnico passo a passo e testador de WebSocket
-│   │   ├── ProjectDossierPdfModal.tsx# Dossiê executivo completo formatado para impressão em PDF
-│   │   ├── AdminUsersModal.tsx       # Painel Master do Administrador para gerenciar licenças de clientes
-│   │   ├── SubscriptionPaywallModal.tsx # Checkout com simulação PIX (QR Code) e Cartão de Crédito
-│   │   └── SubscriptionStatusBadge.tsx  # Badge de status de assinatura no topo
-│   ├── App.tsx                       # Orquestrador central de estado, ordens e roteador de abas
-│   └── index.css                     # Configurações do Tailwind CSS e regras de impressão (@media print)
-├── bot_mt5_convergencia_10r.py       # Script Python autônomo para ponte com o MetaTrader 5
-├── PROJECT_SUMMARY.md                # Registro vivo e histórico completo de desenvolvimento
-└── PROJECT_CONSOLIDATION_CHAT_SEED.md# Este prompt mestre de inicialização
+
+Chaves de `localStorage`: `fluxo_renko_ea_config_v3`, `fluxo_renko_ea_profiles_v3`,
+`fluxo_renko_chart_scales_v2` (inclui `haHistSplit`), `fluxo_renko_flow_mode_v1`, `fluxo_bridge_token_v1`,
+`fluxo_renko_intraday_audit_v3`, `fluxo_series_collector_v1`, `fluxo_renko_spacing_mode_v1`,
+`fluxo_renko_hud_pos_v1`, `fluxo_chart_series_v1`, `fluxo_chart_range_pts_v1`, `fluxo_chart_time_sec_v1`,
+`fluxo_dados_window_v1`, `fluxo_renko_box_window_v1`, `fluxo_replay_days_v1`, `fluxo_replay_operate_v1`,
+`fluxo_sim_speed_v1`, `quant_terminal_{current_user,users,transactions}_v2`.
+
+## 4. DOCUMENTAÇÃO
+- `PROJECT_SUMMARY.md` — estado atual consolidado (regras, arquitetura, árvore de arquivos).
+- `EVOLUCOES_DETALHADAS.md` — diário de obra por ciclo, com causa raiz, implementação e verificação.
+- `PROJECT_CONSOLIDATION_CHAT_SEED.md` — este prompt.
+
+## 5. COMO VERIFICAR
+\`\`\`bash
+npx tsc --noEmit          # tem que sair limpo em toda entrega
+npx vite build            # quando mexer em canvas/estilos
+npm run dev               # porta 3002, --host=0.0.0.0
 \`\`\`
 
-## 3. STATUS DAS ÚLTIMAS CORREÇÕES REALIZADAS
-- **Bug das Linhas de Ordens**: Corrigido! A propriedade \`openOrders\` agora inclui tanto ordens ativas (\`OPEN\`) quanto ordens limitadas de reteste (\`PENDING_LIMIT\`). A renderização gráfica no Canvas inclui tags laterais com preço, badges no eixo Y e indicadores de borda caso o SL/TP esteja fora do zoom vertical atual.
-- **Bug da Lixeira dos Perfis Salvos**: Corrigido! Eliminado qualquer uso de \`window.confirm\` (que falhava silenciosamente em iframes sandboxed). Agora é utilizado um modal in-app elegante com confirmação visual, remoção da memória local, atualização imediata da lista de perfis e fallback automático para o setup recomendado caso o perfil ativo seja excluído.
-- **Dossiê em PDF**: Implementado componente \`ProjectDossierPdfModal\` com botão de impressão nativa (\`window.print()\`), download em Markdown e estilos dedicados para A4.
+## 6. PENDÊNCIAS ABERTAS
+- SaaS/paywall sem backend; infra para "100 clientes" em aberto (cada cliente precisa do próprio Windows).
+- Rotacionar o token da ponte e aplicar o firewall antes de qualquer conta real.
+- Reconferir visualmente o card "Segurança da Ponte" após F5 (a verificação por navegador caiu no reload).
+
+Leia `PROJECT_SUMMARY.md` e `EVOLUCOES_DETALHADAS.md`, alinhe o contexto e me avise quando estiver pronto.
 \`\`\`

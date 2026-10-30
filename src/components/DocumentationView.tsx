@@ -13,18 +13,22 @@ import {
   Download,
   Wifi,
   ShieldCheck,
+  Lock,
+  RefreshCw,
   TrendingUp,
   Layers,
   ArrowRightLeft,
   Zap,
 } from 'lucide-react';
 import { generatePythonMT5Script } from '../utils/pythonScriptGenerator';
+import { getBridgeToken, maskBridgeToken, rotateBridgeToken, setBridgeToken } from '../utils/bridgeSecurity';
 
 interface DocumentationViewProps {
   config: AutomationConfig;
   mt5State: MT5ConnectionState;
   onToggleMT5Connect: () => void;
   onOpenPdfModal?: () => void;
+  onConfigChange?: (partial: Partial<AutomationConfig>) => void;
 }
 
 export const DocumentationView: React.FC<DocumentationViewProps> = ({
@@ -32,11 +36,16 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
   mt5State,
   onToggleMT5Connect,
   onOpenPdfModal,
+  onConfigChange,
 }) => {
   const [copiedPip, setCopiedPip] = useState<boolean>(false);
   const [copiedRun, setCopiedRun] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState<boolean>(false);
+  // segredo da ponte: fica no navegador; o script baixado recebe exatamente este valor
+  const [bridgeToken, setBridgeTokenState] = useState<string>(() => getBridgeToken());
+  const [tokenVisible, setTokenVisible] = useState<boolean>(false);
+  const [copiedToken, setCopiedToken] = useState<boolean>(false);
 
   const scriptContent = generatePythonMT5Script(config);
 
@@ -56,6 +65,17 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Girar o token invalida o script atual: precisa baixar de novo e reiniciar a ponte
+  const handleRotateToken = () => {
+    setBridgeTokenState(rotateBridgeToken());
+    setTokenVisible(true);
+  };
+
+  // Editar/colar um token serve para outro computador usar o MESMO segredo da ponte
+  const handleTokenEdited = (value: string) => {
+    setBridgeTokenState(setBridgeToken(value));
   };
 
   // Testador de conexão local WebSocket
@@ -171,6 +191,164 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
             {testResult}
           </div>
         )}
+      </div>
+
+      {/* SEGURANÇA DA PONTE: TOKEN + ARMA/DESATURA + TETOS DE RISCO */}
+      <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800 space-y-4">
+        <div className="flex items-start gap-2">
+          <ShieldCheck className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+          <div>
+            <span className="text-xs font-bold text-slate-200">Segurança da Ponte (token + travas de risco)</span>
+            <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+              A porta <code className="text-slate-200 font-mono">{config.mt5Port || 8765}</code> do PC do MT5 mexe na conta que já está
+              logada no terminal. Sem token, <b>qualquer</b> aparelho da rede — ou qualquer site aberto no seu
+              navegador — conseguiria mandar ordem aqui, porque WebSocket <b>não</b> obedece a CORS. O app entrega o
+              token no primeiro frame (<code className="text-slate-200 font-mono">AUTH</code>) e, enquanto o Robô estiver
+              desligado, a ponte fica <b>em seguro</b>: recusa ordens de entrada (saídas e “zerar terminal” seguem livres).
+            </p>
+          </div>
+        </div>
+
+        {/* Estado real da conexão, lido do handshake AUTH */}
+        {mt5State.status === 'CONNECTED' ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`px-2 py-1 rounded border font-mono text-[10px] font-semibold ${
+                mt5State.bridgeLegacy
+                  ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
+                  : mt5State.bridgeAuthOk
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                  : 'border-slate-700 bg-slate-800 text-slate-300'
+              }`}
+            >
+              {mt5State.bridgeLegacy
+                ? '⚠ PONTE SEM TOKEN (script antigo)'
+                : mt5State.bridgeAuthOk
+                ? '✓ TOKEN ACEITO'
+                : '… AGUARDANDO TOKEN'}
+            </span>
+            {!mt5State.bridgeLegacy && (
+              <span
+                className={`px-2 py-1 rounded border font-mono text-[10px] font-semibold ${
+                  mt5State.bridgeArmed
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : 'border-slate-700 bg-slate-800 text-slate-300'
+                }`}
+              >
+                {mt5State.bridgeArmed
+                  ? 'PONTE ARMADA — entradas liberadas'
+                  : 'PONTE EM SEGURO — nenhuma entrada'}
+              </span>
+            )}
+          </div>
+        ) : (
+          <p className="text-[11px] text-slate-500">
+            Conecte o MT5 (botão acima no topo) para ver aqui se o token foi aceito e se a ponte está armada.
+          </p>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* Token compartilhado */}
+          <div className="space-y-2">
+            <label className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-neutral-400" />
+              Token da ponte
+            </label>
+            <div className="flex items-center gap-1.5">
+              <input
+                type={tokenVisible ? 'text' : 'password'}
+                value={bridgeToken}
+                onChange={(e) => handleTokenEdited(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+                className="flex-1 min-w-0 px-2.5 py-1.5 rounded bg-slate-950 border border-slate-700 hover:border-slate-600 focus:border-emerald-500/60 focus:outline-none font-mono text-[11px] text-slate-100"
+                title="Este valor precisa ser igual no app e no script .py"
+              />
+              <button
+                onClick={() => setTokenVisible((v) => !v)}
+                className="px-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] font-semibold text-slate-300 cursor-pointer whitespace-nowrap"
+                title={tokenVisible ? 'Esconder o token na tela' : 'Mostrar o token inteiro'}
+              >
+                {tokenVisible ? 'esconder' : 'mostrar'}
+              </button>
+              <button
+                onClick={() => copyToClipboard(bridgeToken, setCopiedToken)}
+                className="px-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] font-semibold text-slate-300 cursor-pointer flex items-center gap-1 whitespace-nowrap"
+                title="Copiar o token (para colar em outro computador)"
+              >
+                {copiedToken ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                copiar
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleRotateToken}
+                className="px-2.5 py-1.5 rounded bg-neutral-700 hover:bg-neutral-600 text-[10px] font-bold text-white cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                title="Criar um segredo novo (baixe o script de novo depois disso)"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Gerar token novo
+              </button>
+              <span className="text-[10px] text-slate-500 font-mono">{maskBridgeToken(bridgeToken)}</span>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Mudou o token? <b>Baixe o script de novo</b> e rode o arquivo novo no PC do MT5 — as duas pontas
+              precisam ter o mesmo valor. O segredo mora neste navegador; em outro computador, cole aqui o token que
+              está no script. E não compartilhe o arquivo .py: ele carrega o segredo.
+            </p>
+          </div>
+
+          {/* Tetos de risco */}
+          <div className="space-y-2">
+            <label className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 text-neutral-400" />
+              Tetos que a ponte aceita
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <span className="text-[10px] text-slate-500">Contratos por ordem</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={config.mt5MaxContractsPerOrder}
+                  onChange={(e) => onConfigChange?.({ mt5MaxContractsPerOrder: Math.max(1, Number(e.target.value) || 1) })}
+                  className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-700 hover:border-slate-600 focus:border-emerald-500/60 focus:outline-none font-mono text-[11px] text-slate-100"
+                />
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-500">Entradas por minuto</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={300}
+                  value={config.mt5MaxOrdersPerMinute}
+                  onChange={(e) => onConfigChange?.({ mt5MaxOrdersPerMinute: Math.max(1, Number(e.target.value) || 1) })}
+                  className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-700 hover:border-slate-600 focus:border-emerald-500/60 focus:outline-none font-mono text-[11px] text-slate-100"
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              O que passar daqui é recusado na hora pela ponte (aparece o aviso “ORDEM RECUSADA PELA PONTE” e o motivo
+              no console do script). É a trava que segura um loop descontrolado ou um comando perdido — o robô
+              continua calculando normalmente, só não abre posição fora do teto. Mexeu aqui? Baixe o script de novo.
+            </p>
+          </div>
+        </div>
+
+        {/* O que sobra para você fazer fora do app */}
+        <div className="pt-3 border-t border-slate-800 space-y-1.5 text-[11px] text-slate-400 leading-relaxed">
+          <p className="font-bold text-slate-300">Ajustes que só dependem de você (fora do código):</p>
+          <p>
+            • Firewall do Windows, como Administrador, liberando a porta só para o computador do app (troque o IP pelo
+            seu):{' '}
+            <code className="text-slate-300 font-mono break-all">
+              {'New-NetFirewallRule -DisplayName "FlowQuant Bridge" -Direction Inbound -Protocol TCP -LocalPort 8765 -RemoteAddress 192.168.18.171 -Action Allow'}
+            </code>
+          </p>
+          <p>• Nunca abra <i>port forwarding</i> no roteador para a porta da ponte: ela é só para a rede local.</p>
+          <p>• Em conta real, comece com os tetos baixos e acompanhe o console do script: cada recusa aparece lá com o IP de origem.</p>
+        </div>
       </div>
 
       {/* ARQUITETURA EM 3 CAMADAS */}

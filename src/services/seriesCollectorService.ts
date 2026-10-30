@@ -55,6 +55,9 @@ interface PersistShape {
   // Acumulados contínuos: garantem que um F5 não encolhe win rate/PF/expectativa
   // (a lista de trades é limitada a 1200 por série, os contadores não)
   counters?: Record<SeriesKey, PaperCounters>;
+  // true quando algum tick REAL do MT5 alimentou o coletor neste dia — é o que impede o
+  // replay automático de abertura (boot) de apagar um pregão verdadeiro já coletado
+  real?: boolean;
 }
 
 const todayKey = () => new Date().toISOString().slice(0, 10);
@@ -75,6 +78,7 @@ class SeriesCollectorService {
   private listeners = new Set<() => void>();
   private loaded = false;
   private batchDepth = 0; // >0 durante replay: inibe persistência/notificação por barra
+  private hadRealData = false; // coletor já recebeu tick do MT5 hoje?
 
   // ------------------------------------------------------------------
   // Ciclo de vida / persistência
@@ -92,6 +96,7 @@ class SeriesCollectorService {
         return;
       }
       this.sessionStarted = data.sessionStarted;
+      this.hadRealData = data.real === true;
       (Object.keys(this.bots) as SeriesKey[]).forEach((k) => {
         const snap = data.series?.[k];
         if (snap) this.bots[k].hydrate(snap.trades || [], snap.equityCurve || [], snap.equity || 0, data.counters?.[k]);
@@ -124,6 +129,7 @@ class SeriesCollectorService {
           },
           {} as Record<SeriesKey, PaperCounters>
         ),
+        real: this.hadRealData,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch {
@@ -144,6 +150,23 @@ class SeriesCollectorService {
     this.updatedAt = Date.now();
     this.version++;
     this.listeners.forEach((l) => l());
+  }
+
+  /**
+   * Chamado pelo App em todo tick vindo do MT5: marca que o dia em curso tem dado REAL.
+   * Só grava no localStorage na primeira vez (o boot-replay usa essa marca para não apagar
+   * a coleta verdadeira).
+   */
+  markRealData() {
+    this.ensureLoaded();
+    if (this.hadRealData) return;
+    this.hadRealData = true;
+    this.persist();
+  }
+
+  hasRealData(): boolean {
+    this.ensureLoaded();
+    return this.hadRealData;
   }
 
   /**
@@ -302,6 +325,7 @@ class SeriesCollectorService {
   reset() {
     (Object.keys(this.bots) as SeriesKey[]).forEach((k) => this.bots[k].reset());
     this.sessionStarted = Date.now();
+    this.hadRealData = false; // replay sintético do zero: deixa de ser dado real
     this.updatedAt = Date.now();
     this.version++;
     try {

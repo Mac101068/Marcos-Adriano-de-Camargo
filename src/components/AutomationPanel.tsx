@@ -587,66 +587,303 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           </div>
         </div>
 
-        {/* Parâmetros Específicos da Pirâmide quando ativa */}
-        {config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' && (
-          <div className="p-3 bg-emerald-950/20 rounded-lg border border-emerald-500/30 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-            <div>
-              <label className="block text-slate-400 text-[11px] mb-1 font-semibold">
-                Lote da Entrada Principal (Surfe)
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="50"
-                value={config.contracts}
-                onChange={(e) => handleConfigChange('contracts', Math.max(1, Number(e.target.value)))}
-                className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono text-xs focus:border-emerald-500 focus:outline-hidden"
-              />
-              <span className="text-[10px] text-slate-500 mt-0.5 block">Mantida até o fluxo virar</span>
-            </div>
+        {/* Parâmetros específicos removidos daqui — vivem no bloco dedicado da estratégia ativa abaixo */}
+      </div>
 
-            <div>
-              <label className="block text-slate-400 text-[11px] mb-1 font-semibold">
-                Lote por Bloco Adicional (Pirâmide)
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="20"
-                value={config.pyramidContracts || 1}
-                onChange={(e) =>
-                  handleConfigChange('pyramidContracts', Math.max(1, Number(e.target.value)))
-                }
-                className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono text-xs focus:border-emerald-500 focus:outline-hidden"
-              />
-              <span className="text-[10px] text-slate-500 mt-0.5 block">Disparado em cada novo bloco</span>
-            </div>
+      {/* ========================================================================= */}
+      {/* BLOCO DEDICADO: PARÂMETROS DA ESTRATÉGIA PIRÂMIDE ATIVA (tudo num só lugar) */}
+      {/* ========================================================================= */}
+      {config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' && (
+        <div className="bg-slate-900/90 border border-emerald-500/40 p-4 rounded-xl space-y-3.5 shadow-lg">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+            <h3 className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
+              <Layers className="w-4 h-4" />
+              Parâmetros da Pirâmide Ativa
+            </h3>
+            <span className="text-[10px] font-mono text-slate-400 self-start sm:self-auto">
+              ENTRADA: {config.pyramidEntryType === 'BOX_50_LIMIT'
+                ? 'LIMIT A 50% DO BOX'
+                : config.pyramidEntryType === 'BOX_OPEN_LIMIT'
+                ? 'LIMIT NA ENTRADA DO BOX'
+                : 'MERCADO NO FECHAMENTO DO BLOCO'}{' '}
+              · MÁX 10 NÍVEIS{config.moveMainToBreakevenOnPyramidTp ? ' · MÃE NO BREAKEVEN' : ''}
+              {config.trailingStop ? ' · MÃE NO TRAILING' : ''}
+            </span>
+          </div>
 
-            <div>
-              <label className="block text-slate-400 text-[11px] mb-1 font-semibold">
-                Alvo Take Profit da Pirâmide
-              </label>
-              <div className="flex items-center gap-1.5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            {/* Card 1: ORDEM MÃE (SURFE) */}
+            <div className="bg-slate-950/70 p-3.5 rounded-lg border border-slate-800 space-y-2.5">
+              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">🏄 Ordem Mãe (Surfe)</span>
+              <div>
+                <label className="block text-slate-400 mb-1">Contratos da Ordem Mãe</label>
                 <input
                   type="number"
-                  min="25"
-                  max="150"
-                  step="25"
-                  value={config.pyramidTpPoints || 50}
-                  onChange={(e) =>
-                    handleConfigChange('pyramidTpPoints', Math.max(25, Number(e.target.value)))
-                  }
-                  className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono text-xs focus:border-emerald-500 focus:outline-hidden"
+                  min="1"
+                  max="100"
+                  value={config.contracts}
+                  onChange={(e) => handleConfigChange('contracts', Math.max(1, Number(e.target.value)))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
                 />
-                <span className="text-[11px] font-mono text-emerald-400 font-bold shrink-0">pts</span>
+                <span className="text-[10px] text-slate-500 mt-0.5 block">
+                  Aberta no 1º bloco do sinal e mantida até a virada do fluxo
+                  {config.moveMainToBreakevenOnPyramidTp
+                    ? ` (protegida no breakeven +${config.breakevenOffsetPoints ?? 5} pts quando uma pirâmide bate o TP).`
+                    : config.trailingStop
+                    ? ` (protegida pelo gatilho de +${config.trailingActivationPoints ?? 60} pts).`
+                    : ' (sem TP/SL fixos).'}
+                  {config.trailingStop
+                    ? ` Depois do gatilho, o stop ainda acompanha a perna a ${config.trailingDistancePoints ?? 50} pts.`
+                    : ''}
+                </span>
               </div>
-              <span className="text-[10px] text-emerald-400/80 mt-0.5 block">
-                50 pts = Exatamente 1 box a favor
-              </span>
+              <label className="flex items-start gap-2 text-slate-300 cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  checked={config.holdMainUntilFlip !== false}
+                  onChange={(e) => handleConfigChange('holdMainUntilFlip', e.target.checked)}
+                  className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer mt-0.5"
+                />
+                <span>Surfar até inversão do fluxo</span>
+              </label>
+            </div>
+
+            {/* Card 2: ORDENS DA PIRÂMIDE (contratos + TP obrigatório + stop opcional) */}
+            <div className="bg-slate-950/70 p-3.5 rounded-lg border border-emerald-500/30 space-y-2.5">
+              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">🔺 Ordens da Pirâmide</span>
+              <div>
+                <label className="block text-slate-400 mb-1">Contratos por Pirâmide</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  value={config.pyramidContracts || 1}
+                  onChange={(e) => handleConfigChange('pyramidContracts', Math.max(1, Number(e.target.value)))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Alvo TP da Pirâmide</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min="25"
+                    max="150"
+                    step="25"
+                    value={config.pyramidTpPoints || 50}
+                    onChange={(e) => handleConfigChange('pyramidTpPoints', Math.max(25, Number(e.target.value) || 25))}
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
+                  />
+                  <span className="text-[11px] font-mono text-emerald-400 font-bold shrink-0">pts</span>
+                </div>
+                <span className="text-[10px] text-emerald-400/80 mt-0.5 block">
+                  Obrigatório: zero não é válido — mínimo 25 pts (50 pts = 1 box a favor).
+                </span>
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Stop da Pirâmide (opcional)</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min="0"
+                    max="150"
+                    step="25"
+                    value={config.pyramidSlPoints ?? 0}
+                    onChange={(e) => {
+                      const raw = Number(e.target.value) || 0;
+                      // 0 = sem stop fixo; valores entre 1 e 24 não são válidos → sobem para 25
+                      handleConfigChange('pyramidSlPoints', raw <= 0 ? 0 : Math.max(25, raw));
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-rose-500 focus:outline-hidden"
+                  />
+                  <span className="text-[11px] font-mono text-rose-400 font-bold shrink-0">pts</span>
+                </div>
+                <span className={`text-[10px] mt-0.5 block ${(config.pyramidSlPoints ?? 0) === 0 ? 'text-slate-500' : 'text-rose-300/90'}`}>
+                  {(config.pyramidSlPoints ?? 0) === 0
+                    ? '0 = sem stop fixo: saída só pela inversão do fluxo (regra clássica).'
+                    : `Proteção extra: cada pirâmide será liquidada se perder ${config.pyramidSlPoints} pts.`}
+                </span>
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Tipo de Entrada (Mãe e Pirâmide)</label>
+                <select
+                  value={config.pyramidEntryType || 'MARKET_ON_CLOSE'}
+                  onChange={(e) =>
+                    handleConfigChange(
+                      'pyramidEntryType',
+                      e.target.value as 'MARKET_ON_CLOSE' | 'BOX_50_LIMIT' | 'BOX_OPEN_LIMIT'
+                    )
+                  }
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono text-[11px] focus:border-emerald-500 focus:outline-hidden font-semibold"
+                >
+                  <option value="MARKET_ON_CLOSE">⚡ Fechamento a Mercado</option>
+                  <option value="BOX_50_LIMIT">🎯 50% do Box (Limit)</option>
+                  <option value="BOX_OPEN_LIMIT">🚪 Entrada do Box (Limit)</option>
+                </select>
+                <span className="block text-[10px] text-slate-500 mt-0.5">
+                  {config.pyramidEntryType === 'BOX_50_LIMIT'
+                    ? 'Limit na metade do box que fechou (renko, range ou pontos): só executa se o preço recuar.'
+                    : config.pyramidEntryType === 'BOX_OPEN_LIMIT'
+                    ? 'Limit na abertura do box que fechou (recuo de 100%): entrada mais barata, risco de não ser executada.'
+                    : 'Executa a mercado no preço de fechamento do bloco.'}
+                </span>
+              </div>
+              {config.pyramidEntryType !== 'MARKET_ON_CLOSE' && (
+                <div>
+                  <label className="block text-slate-400 mb-1">Validade da Limit (boxes)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={config.pullbackMaxBoxesWait ?? 2}
+                    onChange={(e) =>
+                      handleConfigChange('pullbackMaxBoxesWait', Math.min(10, Math.max(1, Number(e.target.value) || 1)))
+                    }
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
+                  />
+                  <span className="block text-[10px] text-slate-500 mt-0.5">
+                    Se o preço não recuar até a Limit em {config.pullbackMaxBoxesWait ?? 2} box(es), a ordem é cancelada.
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Card 3: REGRAS DE SAÍDA */}
+            <div className="bg-slate-950/70 p-3.5 rounded-lg border border-slate-800 space-y-2.5">
+              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">🔄 Regras de Saída</span>
+              <label className="flex items-start gap-2 text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={config.closeAllOnFlowFlip !== false}
+                  onChange={(e) => handleConfigChange('closeAllOnFlowFlip', e.target.checked)}
+                  className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer mt-0.5"
+                />
+                <span>Zerar TUDO na inversão do fluxo (mãe + pirâmides)</span>
+              </label>
+
+              {/* Proteção da Ordem Mãe: breakeven no TP da pirâmide + gatilho e acompanhamento */}
+              <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                <span className="text-[10px] font-bold text-emerald-400/90 uppercase tracking-wider block">
+                  🛡️ Proteção da Ordem Mãe
+                </span>
+
+                <label className="flex items-start gap-2 text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.moveMainToBreakevenOnPyramidTp === true}
+                    onChange={(e) => handleConfigChange('moveMainToBreakevenOnPyramidTp', e.target.checked)}
+                    className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer mt-0.5"
+                  />
+                  <span>Breakeven na mãe ao bater TP de pirâmide</span>
+                </label>
+
+                <label className="flex items-start gap-2 text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.trailingStop === true}
+                    onChange={(e) => handleConfigChange('trailingStop', e.target.checked)}
+                    className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer mt-0.5"
+                  />
+                  <span>Proteção móvel da mãe (gatilho + acompanhamento)</span>
+                </label>
+
+                {(config.moveMainToBreakevenOnPyramidTp || config.trailingStop) && (
+                  <div className="ml-5 space-y-2.5">
+                    {config.trailingStop && (
+                      <div>
+                        <label className="block text-slate-400 mb-1">Gatilho de ativação</label>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="25"
+                            max="500"
+                            step="25"
+                            value={config.trailingActivationPoints ?? 60}
+                            onChange={(e) =>
+                              handleConfigChange('trailingActivationPoints', Math.max(25, Number(e.target.value) || 25))
+                            }
+                            className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
+                          />
+                          <span className="text-[11px] font-mono text-emerald-400 font-bold shrink-0">pts a favor</span>
+                        </div>
+                        <span className="block text-[10px] text-slate-500 mt-0.5">
+                          Nada de stop antes disso: a mãe surfa os primeiros {config.trailingActivationPoints ?? 60} pts livre.
+                        </span>
+                      </div>
+                    )}
+
+                    {config.trailingStop && (
+                      <div>
+                        <label className="block text-slate-400 mb-1">Distância do acompanhamento</label>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="25"
+                            max="300"
+                            step="25"
+                            value={config.trailingDistancePoints ?? 50}
+                            onChange={(e) =>
+                              handleConfigChange('trailingDistancePoints', Math.max(25, Number(e.target.value) || 25))
+                            }
+                            className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
+                          />
+                          <span className="text-[11px] font-mono text-emerald-400 font-bold shrink-0">pts</span>
+                        </div>
+                        <span className="block text-[10px] text-slate-500 mt-0.5">
+                          Depois do gatilho o stop segue a máxima (compra) ou a mínima (venda) sempre a{' '}
+                          {config.trailingDistancePoints ?? 50} pts do extremo da perna.
+                        </span>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-slate-400 mb-1">Piso de proteção (taxas B3)</label>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min="0"
+                          max="50"
+                          step="5"
+                          value={config.breakevenOffsetPoints ?? 5}
+                          onChange={(e) =>
+                            handleConfigChange('breakevenOffsetPoints', Math.min(50, Math.max(0, Number(e.target.value) || 0)))
+                          }
+                          className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
+                        />
+                        <span className="text-[11px] font-mono text-emerald-400 font-bold shrink-0">pts</span>
+                      </div>
+                      <span className="block text-[10px] text-slate-500 mt-0.5">
+                        Mínimo que o stop garante: entrada + {config.breakevenOffsetPoints ?? 5} pts. Vale para o breakeven
+                        do TP da pirâmide e como piso do gatilho.
+                      </span>
+                    </div>
+
+                    {config.trailingStop && (
+                      <div className="p-2 rounded bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-300 leading-relaxed">
+                        🛡️ A mãe corre +{config.trailingActivationPoints ?? 60} pts → o stop vai para a entrada
+                        +{config.breakevenOffsetPoints ?? 5} pts → depois acompanha o preço sempre a{' '}
+                        {config.trailingDistancePoints ?? 50} pts do extremo. Só anda a favor e as pirâmides seguem
+                        saindo no próprio TP.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="p-2 rounded bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-300 leading-relaxed">
+                🛡️ Saídas da Pirâmide: TP próprio (+{config.pyramidTpPoints || 50} pts)
+                {(config.pyramidSlPoints ?? 0) > 0 ? ` · Stop opcional (−${config.pyramidSlPoints} pts)` : ' · sem stop fixo'} · inversão zera o resto
+                {config.moveMainToBreakevenOnPyramidTp
+                  ? ` · Mãe protegida no breakeven (+${config.breakevenOffsetPoints ?? 5} pts) a cada TP batido.`
+                  : '.'}
+              </div>
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                Parcial e o bloco de Trailing Stop da estratégia <b>Reteste</b> não participam da Pirâmide. Na Pirâmide a
+                mãe é protegida pelo gatilho + acompanhamento acima, liberados pelo lucro do TP da pirâmide.
+              </p>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* GRADE PRINCIPAL DE CONTROLE DETERMINADA PELO OPERADOR */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -697,31 +934,20 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-slate-400 mb-1">Lote Inicial (Contratos)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={config.contracts}
-                  onChange={(e) => handleConfigChange('contracts', Math.max(1, Number(e.target.value)))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-400 mb-1 flex items-center gap-1">
-                  <Hash className="w-3 h-3 text-emerald-400" />
-                  Magic Number
-                </label>
-                <input
-                  type="number"
-                  value={config.magicNumber || 102030}
-                  onChange={(e) => handleConfigChange('magicNumber', Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
-                />
-              </div>
+            <div>
+              <label className="block text-slate-400 mb-1 flex items-center gap-1">
+                <Hash className="w-3 h-3 text-emerald-400" />
+                Magic Number
+              </label>
+              <input
+                type="number"
+                value={config.magicNumber || 102030}
+                onChange={(e) => handleConfigChange('magicNumber', Number(e.target.value))}
+                className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
+              />
+              <span className="text-[10px] text-slate-500 mt-0.5 block">
+                Os LOTES vivem apenas dentro do bloco da estratégia ativa — nada duplicado aqui.
+              </span>
             </div>
 
             <div>
@@ -748,24 +974,43 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           </div>
 
           <div className="space-y-3 text-xs">
-            <div>
-              <label className="block text-slate-400 mb-1">Tipo de Entrada da Ordem</label>
-              <select
-                value={config.entryTriggerType}
-                onChange={(e) =>
-                  handleConfigChange('entryTriggerType', e.target.value as 'MARKET_ON_CLOSE' | 'PULLBACK_ENTRY')
-                }
-                className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden font-semibold"
-              >
-                <option value="PULLBACK_ENTRY">🎯 No Reteste / Pullback (Ordem Limitada)</option>
-                <option value="MARKET_ON_CLOSE">⚡ A Mercado no Fechamento do Box</option>
-              </select>
-              <span className="block text-[11px] text-slate-500 mt-1">
-                {config.entryTriggerType === 'PULLBACK_ENTRY'
-                  ? 'Posiciona ordem limitada na abertura: só aciona se o preço recuar para testar o nível.'
-                  : 'Executa imediatamente a mercado no preço de fechamento do tijolo.'}
-              </span>
-            </div>
+            {config.strategyMode === 'PULLBACK_RETEST' ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-slate-400 mb-1">Contratos da Entrada (Ordem Mãe)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={config.contracts}
+                    onChange={(e) =>
+                      handleConfigChange('contracts', Math.min(100, Math.max(1, Number(e.target.value) || 1)))
+                    }
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden font-semibold"
+                  />
+                  <span className="block text-[10px] text-slate-500 mt-0.5">
+                    Lote inicial da estratégia Reteste. A Pirâmide tem seus próprios lotes no bloco verde acima.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1">Tipo de Entrada da Ordem</label>
+                  <select
+                    value={config.entryTriggerType}
+                    onChange={(e) =>
+                      handleConfigChange('entryTriggerType', e.target.value as 'MARKET_ON_CLOSE' | 'PULLBACK_ENTRY')
+                    }
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden font-semibold"
+                  >
+                    <option value="PULLBACK_ENTRY">🎯 No Reteste / Pullback (Ordem Limitada)</option>
+                    <option value="MARKET_ON_CLOSE">⚡ A Mercado no Fechamento do Box</option>
+                  </select>
+                  <span className="block text-[11px] text-slate-500 mt-1">
+                    {config.entryTriggerType === 'PULLBACK_ENTRY'
+                      ? 'Posiciona ordem limitada na abertura: só aciona se o preço recuar para testar o nível.'
+                      : 'Executa imediatamente a mercado no preço de fechamento do tijolo.'}
+                  </span>
+                </div>
 
             {config.entryTriggerType === 'PULLBACK_ENTRY' && (
               <div className="p-3 bg-emerald-500/5 rounded-lg border border-emerald-500/20 space-y-2.5">
@@ -813,6 +1058,17 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 </div>
               </div>
             )}
+              </div>
+            ) : (
+              <div className="p-3 bg-emerald-500/5 rounded-lg border border-emerald-500/20 text-[11px] text-slate-300 space-y-1">
+                <p className="font-semibold text-emerald-300">🧱 Pirâmide & Confluência: entrada definida no bloco verde</p>
+                <p className="text-slate-400">
+                  Por padrão entra a mercado no fechamento do bloco, mas o Tipo de Entrada do bloco verde
+                  “Parâmetros da Pirâmide Ativa” também permite Limit a 50% do box ou Limit na entrada do box — vale para
+                  renko, range e pontos.
+                </p>
+              </div>
+            )}
 
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -857,6 +1113,8 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           </div>
 
           <div className="space-y-3 text-xs">
+            {config.strategyMode === 'PULLBACK_RETEST' ? (
+              <div className="space-y-3">
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-slate-400">Stop Loss Base</label>
@@ -892,6 +1150,20 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 className="w-full accent-emerald-500"
               />
             </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-slate-950/70 rounded-lg border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                <p>
+                  🧱 Na <strong className="text-emerald-300">Pirâmide &amp; Confluência</strong> não existem Stop Loss e Take
+                  Profit globais:
+                </p>
+                <p>
+                  · TP de cada pirâmide e stop opcional → bloco verde “Parâmetros da Pirâmide Ativa”.<br />
+                  · Ordem mãe e proteções → inversão do fluxo (zeragem automática) + breakeven opcional da mãe.
+                </p>
+                <p className="text-slate-500">As metas e travas abaixo continuam valendo para as duas estratégias.</p>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-2 pt-1">
               <div>
@@ -939,7 +1211,8 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
         </div>
       </div>
 
-      {/* BLOCO 4: GESTÃO AVANÇADA (REALIZAÇÃO PARCIAL, BREAKEVEN & TRAILING STOP) */}
+      {/* BLOCO 4: GESTÃO AVANÇADA (REALIZAÇÃO PARCIAL, BREAKEVEN & TRAILING STOP) — EXCLUSIVO DA ESTRATÉGIA RETESTE */}
+      {config.strategyMode === 'PULLBACK_RETEST' && (
       <div className="bg-slate-900/70 p-4 sm:p-5 rounded-xl border border-neutral-500/30 space-y-4 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
@@ -1130,6 +1403,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           </div>
         </div>
       </div>
+      )}
 
       {/* BLOCO 5: JANELA DE HORÁRIOS DAY TRADE & CONTA HEDGE MT5 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

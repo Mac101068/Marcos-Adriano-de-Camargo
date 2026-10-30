@@ -21,7 +21,7 @@ interface RenkoBoxCardProps {
   isInspection: boolean;
   /** tamanho da área do canvas, usado para manter o card dentro da área visível */
   bounds: { w: number; h: number };
-  variant?: 'floating' | 'mobile';
+  variant?: 'floating' | 'mobile' | 'window';
   mobileOpen?: boolean;
   onToggleMobile?: (open: boolean) => void;
 }
@@ -220,6 +220,33 @@ export const RenkoBoxCard: React.FC<RenkoBoxCardProps> = ({
         BAIXA -50
       </span>
     );
+
+  if (variant === 'window') {
+    // Variante dentro da janela flutuante "Box Renko": conteúdo estático, a barra de título da janela já arrasta/fecha
+    return (
+      <div className="w-full h-full overflow-y-auto p-2.5 font-sans text-xs">
+        <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+          <span className="font-bold text-slate-100">Box Renko 10R #{box.index}</span>
+          <div className="flex items-center gap-1.5">
+            {directionBadge}
+            <span
+              className={`text-[9px] font-mono px-1 rounded ${
+                isInspection ? 'text-sky-400 bg-sky-500/10' : 'text-emerald-400 bg-emerald-500/10'
+              }`}
+            >
+              {isInspection ? 'INSPEÇÃO' : 'AO VIVO'}
+            </span>
+          </div>
+        </div>
+
+        <BoxRows box={box} haState={haState} />
+
+        <div className="pt-1.5">
+          <ConvergenceTag box={box} />
+        </div>
+      </div>
+    );
+  }
 
   if (variant === 'mobile') {
     if (!mobileOpen) {

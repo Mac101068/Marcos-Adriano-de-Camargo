@@ -162,8 +162,8 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
   const snap = seriesCollectorService.getSnapshot();
 
   const mt5Live = mt5Status === 'CONNECTED';
-  const intervalMs = Math.max(30, Math.floor(450 / simulationSpeed));
-  const ticksPerSec = 1000 / intervalMs;
+  const intervalMs = Math.max(50, Math.floor(2000 / simulationSpeed));
+  const paceLabel = `${(intervalMs / 1000).toFixed(1).replace('.', ',')}s por tick`;
   const renkoR = Math.max(1, Math.round(config.boxPoints / 5));
   const collectorFresh = Date.now() - snap.updatedAt < 6000;
 
@@ -174,7 +174,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
     : 'PAUSADO';
   const feedColor = mt5Live ? 'text-emerald-300' : isSimulating ? 'text-emerald-300' : 'text-rose-300';
 
-  const activeSeriesKey: SeriesKey = chartSeries === 'renko' ? 'renko' : chartSeries === 'range' ? 'range' : 'tempo';
+  const activeSeriesKey: SeriesKey = chartSeries === 'renko' ? 'renko' : 'range';
   const shadowTrades = (Object.keys(snap.series) as SeriesKey[]).reduce((a, k) => a + snap.series[k].stats.trades, 0);
   const shadowOpen = (Object.keys(snap.series) as SeriesKey[]).reduce((a, k) => a + snap.series[k].stats.openCount, 0);
 
@@ -202,7 +202,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
           {feedLabel}
         </div>
         <StatChip label="Preço" value={`${currentPrice.toLocaleString('pt-BR')} pts`} color="text-emerald-300" />
-        <StatChip label="Ritmo" value={mt5Live ? 'tempo real' : `≈ ${ticksPerSec.toFixed(0)} ticks/s`} />
+        <StatChip label="Ritmo" value={mt5Live ? 'tempo real' : `≈ ${paceLabel}`} />
         <StatChip label="Buffer de ticks" value={tickBufferCount.toLocaleString('pt-BR')} />
         <StatChip label="Robô" value={robotActive ? 'LIGADO' : 'PAUSADO'} color={robotActive ? 'text-emerald-300' : 'text-rose-300'} />
       </div>
@@ -261,8 +261,11 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
                 <ArrowDownRight className="w-3.5 h-3.5" /> Agressão venda
               </button>
             </div>
-            {/* Velocidade */}
-            <div className="flex items-center gap-2 ml-auto rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-1.5">
+            {/* Velocidade — comanda o feed ao vivo E a reprodução do replay (mesma da tira de status) */}
+            <div
+              className="flex items-center gap-2 ml-auto rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-1.5"
+              title="Compasso do simulador: vale para o feed ao vivo e para a reprodução do replay. 1x = bem lento (o dia inteiro leva ~1min45 no replay); 2x ~55s, 5x ~15s e 10x = modo apresentação (~5s)."
+            >
               <Activity className="w-3.5 h-3.5 text-slate-400" />
               <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Velocidade</span>
               <input
@@ -317,14 +320,10 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
             <EngineCard
               k="tempo"
               scale={`${timeframeSec < 60 ? `${timeframeSec}s` : `${Math.round(timeframeSec / 60)}min`}`}
-              role={
-                chartSeries === 'tempo'
-                  ? 'SÉRIE ATIVA no gráfico — é esta que o robô usa para as ordens reais'
-                  : 'Candle de relógio desenhado como bloco sólido estilo Renko'
-              }
+              role='Saiu do gráfico (coisa do passado): roda escondido e só mostra o que já foi registrado no Coletor'
               boxes={boxCounts.tempo}
-              activeSeries={chartSeries === 'tempo'}
-              feedsRealOrders={chartSeries === 'tempo'}
+              activeSeries={false}
+              feedsRealOrders={false}
             />
             <EngineCard
               k="renko15r"
@@ -424,7 +423,23 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
               <p className="text-[11px] text-slate-400 leading-snug mb-2">
                 Gera dias úteis falsos (09:05–17:45, com abertura/almoço/fechamento realistas) e reproduz nos
                 6 motores e no coletor. <b className="text-slate-200">Nada aqui envia ordens reais.</b> Atenção: o
-                replay zera a contabilidade atual do coletor.
+                replay zera a contabilidade atual do coletor <b className="text-slate-200">e também as ordens
+                abertas, o livro de auditoria e o PnL da sessão</b> (começa um pregão limpo). Com o MT5
+                conectado nada é apagado.
+                <span className="text-slate-300"> A corrida agora é <b className="text-slate-200">progressiva</b>: começa
+                na primeira barra e desenha o período todo (mínimo 1 dia) no compasso da velocidade acima — 1x leva ~1min45,
+                2x ~55s, 5x ~15s e 10x roda em ~5s. Já dispara sozinha na abertura da plataforma e o mesmo controle vive na tira de status
+                logo abaixo do menu, então não precisa sair desta aba para escolher o dia.</span>
+                <span className="text-slate-300"> No chip <b className="text-slate-200">OPERA</b> da tira de status o
+                replay também <b className="text-slate-200">opera a estratégia de verdade</b>: abre MAE e pirâmides,
+                enche a auditoria e move o PnL enquanto o dia passa (precisa do Robô LIGADO). Desligado, ele fica
+                silencioso e só alimenta o coletor. Nos dois casos nada é enviado à corretora — com o MT5 conectado o
+                modo OPERA é bloqueado por segurança.</span>
+                <span className="text-slate-300"> Trava das <b className="text-slate-200">17:30</b>: ao chegar nesse
+                horário (no replay e no feed ao vivo em simulação) o robô liquida todas as posições a mercado, cancela
+                as limitadas pendentes e para de abrir operações até o próximo pregão — assim nenhum dia termina
+                pendurado com ordem aberta. Com o MT5 conectado a trava não age, para jamais fechar posição real sem
+                você mandar.</span>
               </p>
               <div className="flex items-center gap-2">
                 {[1, 3, 5].map((d) => (
@@ -438,7 +453,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
                         : 'bg-violet-600/60 hover:bg-violet-500 text-white'
                     }`}
                   >
-                    <History className="w-3.5 h-3.5" /> {isReplaying ? 'Gerando...' : `${d} dia${d > 1 ? 's' : ''}`}
+                    <History className="w-3.5 h-3.5" /> {isReplaying ? 'Rodando...' : `${d} dia${d > 1 ? 's' : ''}`}
                   </button>
                 ))}
               </div>

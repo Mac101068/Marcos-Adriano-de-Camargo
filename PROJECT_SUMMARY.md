@@ -1,6 +1,8 @@
 # 📊 Memória & Documentação do Projeto: Fluxo & Renko 10R MT5 Quant Terminal
 
-> **Documento de Continuidade e Memória Operacional**: Este arquivo reúne todo o histórico de desenvolvimento, regras de negócio, lógica quantitativa, arquitetura técnica e avanços recentes para restauração imediata de contexto em novos bate-papos.
+> **Documento de Continuidade e Memória Operacional**: Este arquivo reúne o estado atual consolidado — regras de negócio, lógica quantitativa e arquitetura técnica — para restauração imediata de contexto em novos bate-papos.
+>
+> 🧬 O histórico detalhado de **todas as evoluções**, com causa raiz e verificação de cada ciclo, vive em `EVOLUCOES_DETALHADAS.md`. O prompt de retomar em conversa nova está em `PROJECT_CONSOLIDATION_CHAT_SEED.md`.
 
 ---
 
@@ -11,12 +13,16 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
 ### Pilares Centrais:
 1. **Gráfico Renko 10R (50 pontos)**: Construção atemporal com tijolos finos, corpo 100% preenchido e aproximação temporal progressiva.
 2. **Fluxo & Tape Reading Tick-a-Tick**: Agressão compradora vs. vendedora, saldo Delta e CVD (*Cumulative Volume Delta*).
-3. **Gatilho de Convergência com Entrada no Pullback**: Ordem posicionada na abertura do box (reteste), reduzindo slippage.
-4. **Gerenciamento de Risco Institucional**: Stop Loss, Take Profit, Realização Parcial (com Stop no Breakeven) e Trailing Stop dinâmico.
-5. **Curva de Patrimônio Acumulado (Equity Curve)**: Rastreamento trade-a-trade, High-Water Mark, Underwater Drawdown e métricas de risco.
-6. **Responsividade Mobile Completa**: Gestos touch (Pan e Pinch-to-Zoom), Bottom Navigation Bar e HUD adaptativo.
-7. **Integração MetaTrader 5 (Python Bridge)**: Comunicação bidirecional WebSocket (`ws://localhost:8765`) com suporte a contas Hedge.
-8. **Módulo SaaS & Painel Master do Administrador**: Licenciamento por dias de uso, Paywall com checkout PIX/Cartão e gestão de clientes.
+3. **Duas estratégias selecionáveis**: **Reteste (Pullback)** clássico, com parcial/breakeven/trailing, e **Pirâmide & Confluência de Fluxo**, com mãe de surfe + pirâmides de TP 50 pts.
+4. **Gatilho de Entrada configurável**: a mercado no fechamento do box, Limit a 50% do box ou Limit na abertura (reteste), com validade em boxes.
+5. **Gerenciamento de Risco Institucional**: Stop Loss, Take Profit, Realização Parcial (com Stop no Breakeven), **Proteção da Ordem Mãe em dois estágios (gatilho → piso → acompanhamento)** e trava de fim de pregão às 17:30.
+6. **Curva de Patrimônio Acumulado (Equity Curve)**: Rastreamento trade-a-trade, High-Water Mark, Underwater Drawdown e métricas de risco.
+7. **Coletor Multi-Série & Robôs Sombra**: seis motores (Renko 10R, Renko 15R, Range, Tempo…) rodando a mesma régua de regras em paralelo, com aba **Comparativo** para escolher qual escala merece ordem real.
+8. **Simulador & Replay**: feed autônomo B3, reprodução progressiva de dias úteis e modo **OPERA**, que roda a estratégia de verdade pelo mesmo `handleIncomingTick` do terminal.
+9. **Responsividade Mobile Completa**: gestos touch (Pan, Pinch-to-Zoom, arrasto dos divisores com o dedo), Bottom Navigation com "Mais" e HUD adaptativo.
+10. **Integração MetaTrader 5 (Python Bridge) blindada**: WebSocket com handshake de token, armamento `ARM`/`DISARM` e tetos de risco impostos pela própria ponte.
+11. **Auditoria Intraday & Compliance**: trilha de eventos por ordem, filtros, timeline e exportação CSV padrão brasileiro.
+12. **Módulo SaaS & Painel Master do Administrador**: licenciamento por dias, paywall com checkout PIX/Cartão e gestão de clientes (⚠️ ainda maquete em `localStorage`, sem backend).
 
 ---
 
@@ -49,9 +55,13 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
     - Zoom inteligente pela roda do mouse (Roda sobre o gráfico altera X; Roda sobre o eixo Y altera Y).
     - Gestos de pinça touch (Pinch vertical no celular ajusta escala Y, Pinch horizontal ajusta escala X).
     - Persistência automática das preferências de escala (`scaleX` e `scaleY`) em `localStorage`.
+- **Seletor de Série do Gráfico (Só duas opções visíveis)**:
+  - **`Pontos` (Renko)** e **`Range`** (variação de preço por barra, escala configurável 10–150 pts).
+  - A série de **Tempo saiu do gráfico**: continua existindo nos motores e no Coletor como histórico/comparação, mas não é mais opção de desenho.
 - **Quadro Informativo Box Renko**:
   - Desktop: Fixo permanentemente no canto inferior direito (`bottom-3 right-[88px]`), exibindo OHLC, CVD, Delta e convergência.
   - Mobile: Pílula compacta recolhível (`Detalhes ▾`) no rodapé para não cobrir o gráfico.
+  - **Janela Flutuante “Box Renko”** (variante `window` do `RenkoBoxCard` dentro de `DadosPanelWindow`): arrastável, com selo `AO VIVO` / `INSPEÇÃO` e duplo clique devolvendo ao canto de origem.
 
 ### B. Saldo de Agressão & CVD (Times & Trades)
 - Cada negócio recebido é classificado pelo agressor:
@@ -66,6 +76,18 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
     - Arrastar o divisor redimensiona a altura da janela de fluxo continuamente entre **18% e 55%** da tela.
     - Presets de 1 clique na barra superior: **`Janela: [ 25% | 33% | 46% ]`**.
     - Duplo clique no divisor restaura a proporção equilibrada padrão de 33%.
+    - **Destaque em verde** enquanto o cursor está sobre a linha ou durante o arraste (feedback de que é interativa), com alça de 48 px no desktop e 34 px no mobile.
+  - **Divisor Interno Heikin-Ashi ↔ Histograma (também arrastável)**:
+    - No modo Heikin-Ashi, o painel de fluxo é dividido em duas subfaixas; a linha entre elas usa **exatamente o mesmo acabamento** do divisor de cima (linha + alça + 3 pontos + destaque verde).
+    - `haHistSplit` controla a fatia do fluxo destinada às velas: **30% a 85%**, padrão **66%**; arrastar para baixo aumenta o Heikin-Ashi, para cima aumenta o histograma.
+    - Persistido em `localStorage`, restaurável por duplo clique na linha (volta a 66%) ou pelo reset geral de escalas.
+    - **Arraste com o dedo no celular** para os dois divisores (tolerância de 12 px, para não brigar com a rolagem do gráfico).
+    - O hit-test de desenho, cursor, mouse e toque usa um único helper (`getFlowDividerLayout`), então a área clicável nunca descola da linha visível.
+  - **Etiquetas das Faixas** (somente em desktop, em cinza discreto no canto esquerdo): `PREÇO · RENKO` / `PREÇO · RANGE` / `PREÇO · TEMPO`, `FLUXO · HEIKIN-ASHI` / `FLUXO · DELTA` / `FLUXO · HÍBRIDO` e `HISTOGRAMA · DELTA`.
+  - **Escalas Numéricas Adaptativas nas Duas Subfaixas**:
+    - **Heikin-Ashi**: passo “limpo” adaptativo (1, 2, 2.5, 5, 10 × 10ⁿ) conforme a altura visível — antes travava no mínimo 50 pts e gerava poucas linhas em janelas pequenas.
+    - **Histograma de Delta**: régua própria com rótulos `+50Δ` / `-100Δ` / `1.2kΔ`, linha de zero destacada e guias de limiar em `±minDeltaThreshold`.
+    - Grades e badges de cada subfaixa são **presos ao seu próprio intervalo vertical** (`haBandTop`/`haBandBottom` e `histBandTop`/`histBandBottom`) — nenhuma linha invade a banda vizinha.
   - **Escala Vertical Independente do Fluxo (`scaleFlow` & `flowPanOffset`)**:
     - **Arrasto Interativo no Eixo Lateral do Fluxo**: clicar e arrastar a régua lateral abaixo do divisor estica (`+F`) ou comprime (`-F`) a amplitude das velas/barras de fluxo (cursor `ns-resize`).
     - **Deslocamento Vertical (Pan)**: segurando `Shift` ao arrastar desloca o ponto zero/médio do fluxo.
@@ -90,24 +112,43 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
       - 🔴 **Vermelho (`#ef4444`)**: Descida contínua de fluxo agressor (pressão vendedora acelerando).
       - ⚪ **Cinza (`#94a3b8`)**: Reversão de fluxo / Indecisão / Absorção (quando há inversão de direção em relação à barra anterior ou doji de absorção de agressões).
   - Pavios (Wicks) superior e inferior destacando amplitude do fluxo e presença de rejeição.
-  - Persistência total de todas as escalas (`scaleX`, `scaleY`, `scaleFlow`, `flowPaneRatio`, `flowPanOffset`) no `localStorage`.
+  - Persistência total de todas as escalas (`scaleX`, `scaleY`, `scaleFlow`, `flowPaneRatio`, `haHistSplit`, `flowPanOffset`) no `localStorage` (chave `fluxo_renko_chart_scales_v2`).
 
 
-### C. Gatilho de Entrada: Pullback na Abertura do Box
-- Ao confirmar o fechamento de um box com fluxo convergente:
-  - Em vez de comprar a mercado no topo do box, o terminal emite ordem limite no preço de **abertura do box (reteste de pullback)**.
-  - No MT5: Ordem `BUY_LIMIT` ou `SELL_LIMIT`. Se o preço recuar para testar o nível, a ordem é preenchida no melhor preço.
-  - Gráfico: Linha tracejada âmbar com alvo de pullback e status `AGUARDANDO RETESTE`.
+### C. Gatilho de Entrada (Três Modos, Válidos para a Mãe e para as Pirâmides)
+- **`MARKET_ON_CLOSE`** (padrão): executa a mercado no preço de fechamento do bloco que confirmou o sinal.
+- **`BOX_50_LIMIT`**: ordem **limitada a 50% do box** que fechou — só executa se o preço recuar metade do caminho (renko, range ou pontos).
+- **`BOX_OPEN_LIMIT`**: ordem limitada na **abertura do box** (recuo de 100%) — entrada mais barata, com risco real de não ser executada.
+- **Validade da limitada** (`pullbackMaxBoxesWait`, 1 a 10 boxes): se o preço não recuar até o nível dentro da validade, a ordem é **cancelada** (motivo `EXPIRED_PULLBACK`).
+- No MT5: ordem `BUY_LIMIT` / `SELL_LIMIT`; no terminal a ordem nasce com `status: 'PENDING_LIMIT'`, `limitPrice` e `pendingBoxIndex`, e o monitor de ticks executa ao tocar o nível (compra: recuou até ele; venda: subiu até ele).
+- **TP/SL das pirâmides são ancorados no preço real de entrada** (o nível do Limit), não no fechamento do box.
+- Gráfico: Linha tracejada âmbar com alvo de reteste e status `AGUARDANDO RETESTE`.
 
-### D. Gestão de Risco: Ordem Parcial & Trailing Stop
-- **Stop Loss Base**: 100 pontos (2 boxes 10R).
-- **Take Profit Base**: 150 pontos (3 boxes 10R).
-- **Realização Parcial & Breakeven Automático**:
-  - Ao atingir `partialPoints` (ex: +50 pts = 1 box a favor), realiza `partialContracts` (ex: 1 contrato).
-  - O Stop Loss do saldo remanescente é instantaneamente movido para o **Breakeven (Entrada + 5 pts de offset)**, cobrindo emolumentos e taxas.
-- **Trailing Stop Dinâmico (Stop Móvel)**:
-  - Ativado a partir de `trailingActivationPoints` (ex: +60 pts a favor).
-  - Mantém o Stop Loss a `trailingDistancePoints` (ex: 50 pts) atrás da máxima/mínima alcançada pelo preço, travando lucros crescentes.
+### D. Gestão de Risco
+#### D.1 Estratégia Reteste (Parcial + Breakeven + Trailing)
+- **Stop Loss Base**: 100 pontos (2 boxes 10R) · **Take Profit Base**: 150 pontos (3 boxes 10R).
+- **Realização Parcial & Breakeven Automático**: ao atingir `partialPoints` (+50 pts = 1 box a favor), realiza `partialContracts` (1 contrato) e move o stop do saldo para **Entrada + `breakevenOffsetPoints`** (5 pts de offset de taxas).
+- **Trailing Stop Dinâmico**: ativa a partir de `trailingActivationPoints` (+60 pts) e mantém o stop a `trailingDistancePoints` (50 pts) atrás do extremo alcançado.
+
+#### D.2 Proteção da Ordem Mãe na Pirâmide (Gatilho → Piso → Acompanhamento)
+A mãe nasce **sem TP e sem SL fixos** (`stopLoss: 0`, `takeProfit: 0`). Quando a proteção é ligada, ela passa por **três estágios**, na semântica exata de “100 de gatilho → vai para 30 pontos → depois segue o preço a 50”:
+1. **Gatilho** (`trailingActivationPoints`): enquanto a mãe não corre X pontos a favor, **não existe stop** — ela surfa livre.
+2. **Piso** (`breakevenOffsetPoints`): no gatilho, o stop nasce na `entrada + piso` (compra) / `entrada − piso` (venda), cobrindo emolumentos da B3.
+3. **Acompanhamento** (`trailingDistancePoints`): daí em diante o stop segue a máxima (compra) ou a mínima (venda) da perna sempre a essa distância, escolhendo a posição que **mais protege** (`Math.max` na compra / `Math.min` na venda). **O stop só anda a favor.**
+- O cálculo aceita `stopAtual <= 0` como “ainda sem stop”, então o trailing consegue **criar o primeiro stop nos dois lados** (era exatamente o defeito que impedia o acompanhamento de funcionar na venda).
+- Na Pirâmide o acompanhamento se aplica **somente à ordem mãe** (`role === 'MAIN'`) — as pirâmides morrem no próprio TP.
+- Estágio separado e opcional, `moveMainToBreakevenOnPyramidTp`: a cada **TP de pirâmide batido**, a mãe vai ao breakeven usando o mesmo piso de taxas.
+- Os dois caminhos (`App.tsx` no pregão ao vivo e `paperStrategyBot.ts` nos robôs sombra) usam a **mesma regra**, para o coletor não medir uma estratégia diferente da que aparece na tela.
+- Interface: grupo **“🛡️ Proteção da Ordem Mãe”** em Ajustes → Pirâmide → Regras de Saída, com os três campos (Gatilho 25–500 passo 25 · Distância 25–300 passo 25 · Piso 0–50 passo 5) e um **resumo dinâmico em texto**: “A mãe corre +N pts → o stop vai para a entrada +Y pts → depois acompanha o preço sempre a Z pts do extremo.”
+
+#### D.3 Trava de Fim de Pregão (17:30)
+- `src/utils/sessionRules.ts` define a janela **17:30 → 18:05** (o WIN$ encerra às 17:45; a janela maior só cobre a liquidação).
+- Dentro da janela: tudo o que estiver aberto é **liquidado a mercado** (`DAY_CLOSE` / `DAY_CLOSE_FORCED`) e nenhuma operação nova é aberta até o pregão seguinte.
+- Fora da janela (madrugada/noite, quando o simulador continua gerando ticks) o robô opera normalmente — senão ficaria parado o dia inteiro.
+- Compartilhado entre terminal e robôs sombra; o aviso do terminal é **um só por tick**, não um por ordem liquidada.
+
+#### D.4 Filtros de Horário e Limites
+- Janela day trade configurável (`tradingStartTime`, `tradingStopEntriesTime`, `tradingCloseAllTime`) e travas financeiras (`maxDailyLoss`, `maxDailyProfit`, `maxDailyTrades` — 0 = sem limite, para permitir piramidação contínua).
 
 ### E. Suporte a Contas Hedge
 - Permite manter posições compradas e vendidas simultaneamente.
@@ -165,6 +206,22 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 ---
 
+## 🧪 3B. Coletor Multi-Série, Robôs Sombra & Simulador/Replay
+
+- **Coletor (`src/services/seriesCollectorService.ts`)**: alimenta **seis motores em paralelo** (Renko 10R, Renko 15R, Range, Tempo e variações) com os **mesmos ticks** que abastecem o gráfico, para comparar escalas na mesma janela de mercado.
+- **Robôs sombra (`src/utils/paperStrategyBot.ts`)**: contabilidade independente por série com marcação a mercado das posições abertas, curva de patrimônio, expectativa, fator de lucro, maior ganho/perda e drawdown em R$.
+- **Continuidade contábil**: os **acumulados contínuos** (`PaperCounters`) são persistidos separadamente da lista de trades (limitada a 1200 por série), para que um F5 nunca encolha win rate, fator de lucro ou expectativa.
+- **Dado real × replay sintético**: o coletor marca o dia com `real` no primeiro tick vindo do MT5 (`markRealData()` / `hasRealData()`). Essa marca é o **portão** que impede o replay automático de abertura de apagar um pregão verdadeiro já coletado.
+- **Aba Comparativo**: mesmas métricas lado a lado por série, para decidir qual escala merece ordem real.
+- **Aba Simulador**: visão do feed (preço, ritmo, buffer, robô), cartões dos motores e replay.
+  - **Ritmo**: o 1x foi desacelerado para ficar assistível — agora é **compasso por tick** (1x ≈ 2,0 s/tick; um dia leva ~1min45 no replay; 10x ≈ 5 s), e o mesmo controle vive na tira de status abaixo do menu.
+  - **Replay progressivo**: começa na primeira barra e desenha o período todo (mínimo 1 dia), dispara sozinho na abertura da plataforma.
+  - **Modo OPERA**: o replay roda a estratégia **de verdade** pelo mesmo `handleIncomingTick` do terminal — abre mãe e pirâmides, enche a auditoria e move o PnL (precisa do Robô LIGADO).
+  - **Zera a sessão**: o replay limpa ordens abertas, livro de auditoria e PnL (pregão limpo), mas **não apaga** coleta marcada como real.
+- ⚠️ **Nenhum caminho de simulação, coleta ou replay envia ordens reais** — a ponte só é tocada quando há conexão MT5 estabelecida.
+
+---
+
 ## 📱 4. Responsividade & Otimizações Mobile
 
 - **Altura Dinâmica (`100dvh`)**: Elimina cortes e saltos causados pelas barras dos navegadores mobile (iOS Safari e Android Chrome).
@@ -186,13 +243,32 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 ---
 
-## 🐍 5. Arquitetura de Integração MT5 (Python Bridge)
+## 🐍 5. Arquitetura de Integração MT5 (Python Bridge) — Blindada
 
-- **Script Local**: `bot_mt5_convergencia_10r.py` (código gerado e exportável pelo próprio terminal).
-- **Servidor WebSocket Local**: `ws://localhost:8765`.
-- **Bibliotecas**: `MetaTrader5` e `websockets`.
-- **Preenchimento Automático**: Detecção automática de `ORDER_FILLING_RETURN`, `ORDER_FILLING_IOC` ou `ORDER_FILLING_FOK`.
-- **Diagnóstico**: Teste de ping e status de conexão integrados na aba "Guia MT5".
+### 5.1 Topologia real (por que não é `localhost`)
+- O **script Python roda no Windows**, onde estão o MT5 e a conta demo da XP — a biblioteca `MetaTrader5` **não existe para Mac/Linux** (e no Mac o MT5 só rodaria via Wine, sem servir para a ponte).
+- O servidor escuta em **`0.0.0.0:8765`** (toda a rede local), e o navegador — em qualquer máquina da mesma rede Wi‑Fi — aponta **Ajustes → MT5 Host** para o IP do Windows.
+- Bibliotecas do script: `MetaTrader5` e `websockets`. Preenchimento automático de `ORDER_FILLING_RETURN` / `IOC` / `FOK`.
+
+### 5.2 Protocolo de segurança (token + armamento + tetos)
+> Motivação: `mt5.initialize()` entra no terminal que já está logado, e **WebSocket não é protegido por CORS** — sem autenticação, qualquer aparelho da rede **ou qualquer site aberto no navegador** poderia enviar `ORDER_SEND` e operar a conta.
+
+- **Handshake obrigatório**: o primeiro quadro precisa ser `{action:'AUTH', token, armed}`; a ponte responde `AUTH_RESULT{ok, requireToken, armed, maxContractsPerOrder, maxOrdersPerMinute}`. Token errado encerra com `close(code=4001, reason="token invalido")`. A conferência usa `secrets.compare_digest`.
+- **Armamento**: `ARM` / `DISARM` → `ARM_RESULT`. O navegador envia automaticamente conforme o liga/desliga do robô (`config.active`). Sem armado, **entrada nova é recusada**; **saídas seguem liberadas** (`ORDER_MODIFY_SL`, `CLOSE_POSITIONS`, `ORDER_PARTIAL_CLOSE`) para você sempre conseguir se proteger.
+- **Tetos impostos pela própria ponte** (`check_trade_allowed`), nesta ordem: autenticado → armado → `mt5MaxContractsPerOrder` (padrão **2**) → `mt5MaxOrdersPerMinute` em janela deslizante de 60 s (padrão **12**). Recusa volta como `RISK_REJECT{action, reason, comment}`.
+- **Estado por conexão** (`CLIENT_STATES`) e log no console do Windows com o **IP de origem** (`get_peer_ip`) de cada recusa.
+- **Vazamento de ticks fechado**: `broadcast_to_web` ignora clientes não autenticados.
+- **Compatibilidade legado**: `AUTH_TOKEN = ""` mantém o script antigo funcionando (auto-autenticado e armado). O app detecta ponte antiga quando `ACCOUNT_INFO` chega **antes** de `AUTH_RESULT` e avisa “⚠️ PONTE SEM AUTENTICAÇÃO (SCRIPT ANTIGO)”.
+
+### 5.3 Onde vive o segredo
+- `src/utils/bridgeSecurity.ts`: `generateBridgeToken()` (28 caracteres via `crypto.getRandomValues`, alfabeto sem `0/O/1/l/I`), `getBridgeToken()` (gera e persiste se não existir), `setBridgeToken()`, `rotateBridgeToken()`, `maskBridgeToken()`.
+- Chave **`fluxo_bridge_token_v1`**, **deliberadamente fora do `AutomationConfig`**: trocar de preset ou importar JSON nunca sobrescreve (nem exporta junto) o token da ponte.
+
+### 5.4 Interface de operação
+- **Aba Guia → card “Segurança da Ponte (token + travas de risco)”**: estado atual em chips, campo do token editável, mostrar/esconder, copiar, “Gerar token novo”, os dois tetos numéricos, o trecho pronto de `New-NetFirewallRule` restringindo a 8765 e os avisos “nunca exponha a porta na internet” / “não compartilhe o `.py`”.
+- **Header**: o selo de conexão mostra `· ARMADO` ou `· SEGURO` com descrição contextual.
+- **Toasts** de `AUTH_RESULT`, `ARM_RESULT` e `RISK_REJECT` (“🔒 PONTE RECUSOU O TOKEN”, “🔓 PONTE AUTENTICADA E ARMADA”, “⛔ ORDEM RECUSADA PELA PONTE” + motivo).
+- **Diagnóstico**: teste de ping e status de conexão na própria aba Guia.
 
 ---
 
@@ -240,47 +316,59 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 ## 📁 8. Estrutura de Arquivos do Projeto
 
-```
+```text
 /
-├── index.html                               # Entry point com meta tags mobile (100dvh e anti-zoom)
-├── metadata.json                            # Metadados e permissões do applet
-├── package.json                             # React 19, Recharts 3.x, Tailwind CSS v4, Lucide Icons
-├── PROJECT_SUMMARY.md                       # Memória central do projeto (este arquivo)
-├── src/
-│   ├── main.tsx                             # Bootstrap da aplicação
-│   ├── index.css                            # Estilização global com Tailwind CSS v4
-│   ├── App.tsx                              # Componente principal, abas, bottom nav mobile, ticks e estado
-│   ├── types/
-│   │   ├── trading.ts                       # Tipos quantitativos (RenkoBox, Tick, TradeOrder, AutomationConfig, ConfigPreset)
-│   │   └── auth.ts                          # Tipos de usuários, SaaS e pagamentos
-│   ├── services/
-│   │   ├── authService.ts                   # Persistência localStorage, validação de dias e personas
-│   │   └── eaConfigService.ts               # Persistência da última configuração do EA, presets e perfis customizados
-│   ├── utils/
-│   │   ├── renkoCalculator.ts               # Motor de cálculo de boxes Renko 10R e saldo CVD
-│   │   ├── marketSimulator.ts               # Gerador de ticks em tempo real simulando a B3
-│   │   └── pythonScriptGenerator.ts         # Gerador do código Python do robô MT5 com horários e Magic Number
-│   ├── services/
-│   │   ├── authService.ts                   # Gestão de usuários, perfis e assinaturas
-│   │   ├── eaConfigService.ts               # Persistência e gerenciamento de perfis de EA
-│   │   └── orderAuditService.ts             # Motor de auditoria intraday, cálculo de métricas e exportação CSV
-│   └── components/
-│       ├── Header.tsx                       # Header com 3 zonas, abas desktop, badge de EA registrado e status MT5
-│       ├── RenkoFlowChart.tsx               # Gráfico Canvas Renko 10R, gestos touch e card flutuante fixo
-│       ├── TimesAndTrades.tsx               # Fita de agressão tick-a-tick com responsividade mobile
-│       ├── EquityCurveView.tsx              # Curva de Patrimônio Acumulado, High-Water Mark e Underwater Drawdown
-│       ├── OrdersAndStats.tsx               # Histórico e tabela detalhada de ordens do robô
-│       ├── IntradayOrderAudit.tsx           # Livro completo de auditoria intraday, busca, timeline e exportação CSV
-│       ├── PythonScriptView.tsx             # Visualizador e exportador do script Python MT5
-│       ├── DocumentationView.tsx            # Manual de instalação MT5 e teste de ping WebSocket
-│       ├── AutomationPanel.tsx              # Painel mestre do operador com persistência, presets, lixeira in-app e risco
-│       ├── ProjectDossierPdfModal.tsx       # Resumo executivo do projeto formatado para impressão em PDF (@media print)
-│       ├── SubscriptionStatusBadge.tsx      # Seletor de usuário e status de licença no topo
-│       ├── SubscriptionPaywall.tsx          # Tela de bloqueio por expiração com checkout simulado
-│       └── AdminPanel.tsx                   # Painel Master para gestão de clientes e receita recorrente
-├── PROJECT_SUMMARY.md                       # Documentação viva de continuidade técnica
-└── PROJECT_CONSOLIDATION_CHAT_SEED.md       # Prompt mestre para restauração imediata em novos bate-papos
+├── index.html                        # Entry point com meta tags mobile (100dvh e anti-zoom)
+├── metadata.json                     # Metadados e permissões do applet
+├── package.json / bun.lock           # React 19, Recharts 3.x, Tailwind CSS v4, Lucide Icons, jspdf/html2canvas
+├── vite.config.ts                    # Porta 3002 e --host=0.0.0.0 (para abrir do celular e de outra máquina)
+├── .env.example                      # GCP_USER_METADATA_URI (apenas do AI Studio; nada de segredo real aqui)
+├── EVOLUCOES_DETALHADAS.md           # Diário de obra: causa raiz, implementação e verificação de cada ciclo
+├── PROJECT_SUMMARY.md                # Estado atual consolidado (este arquivo)
+├── PROJECT_CONSOLIDATION_CHAT_SEED.md# Prompt mestre para retomar em bate-papo novo
+└── src/
+    ├── main.tsx                      # Bootstrap (sem StrictMode, para não duplicar loops de tick)
+    ├── index.css                     # Tailwind v4 + @media print do dossiê
+    ├── App.tsx                       # ≈3.0k linhas: ticks, estado das ordens, WebSocket MT5, abas, bottom nav, toast
+    ├── types/
+    │   ├── trading.ts                # RenkoBox, Tick, TradeOrder (role MAIN/PYRAMID, PENDING_LIMIT), AuditEvent, AutomationConfig
+    │   ├── auth.ts                   # Usuários, licenças e transações SaaS
+    │   └── drawing.ts                # Formas desenhadas no canvas (linha, retângulo, fibra, zona)
+    ├── services/
+    │   ├── eaConfigService.ts        # Persistência do config, presets, perfis customizados e merge defensivo de defaults
+    │   ├── authService.ts            # Licenças, contagem de dias e personas (⚠️ maquete em localStorage)
+    │   ├── orderAuditService.ts      # Livro de auditoria intraday, métricas e CSV padrão BR (UTF-8 BOM, `;`)
+    │   └── seriesCollectorService.ts # Coletor multi-série: seis motores, marcas real/replay e snapshot persistido
+    ├── utils/
+    │   ├── renkoCalculator.ts        # Construção dos boxes Renko + CVD/delta por box e Heikin-Ashi de fluxo
+    │   ├── barEngines.ts             # Motores de barra das séries (Renko 10R, Renko 15R, Range, Tempo…)
+    │   ├── convergenceEvaluator.ts   # Regra de confluência preço × fluxo que qualifica o sinal
+    │   ├── marketSimulator.ts        # Feed autônomo de ticks simulando o WIN$
+    │   ├── paperStrategyBot.ts       # Robô sombra: espelho fiel das regras do terminal (mesma proteção da mãe)
+    │   ├── sessionRules.ts           # Trava de fim de pregão 17:30 → 18:05 (DAY_CLOSE / DAY_CLOSE_FORCED)
+    │   ├── bridgeSecurity.ts         # Token da ponte (gerar, ler, rotacionar, mascarar) em fluxo_bridge_token_v1
+    │   └── pythonScriptGenerator.ts  # Gera o .py da ponte MT5 já com AUTH/ARM/tetos — o script não vive no repo
+    └── components/
+        ├── Header.tsx                # 3 zonas, selo de conexão MT5 (· ARMADO / · SEGURO), badge do EA, PDF
+        ├── RenkoFlowChart.tsx        # ≈2.4k linhas de canvas: séries, 2 divisores arrastáveis, escalas adaptativas, linhas de ordens, desenho
+        ├── ChartControlSidebar.tsx   # Controles de série, escala, preset de janela e reset
+        ├── DadosPanelWindow.tsx      # Janela flutuante arrastável que hospeda o painel de dados
+        ├── RenkoBoxCard.tsx          # Quadro do box (fixo no canto, HUD mobile e variante `window`)
+        ├── DrawingOverlay.tsx / DrawingToolbar.tsx # Camada e barra de rabiscos técnicos sobre o gráfico
+        ├── TimesAndTrades.tsx        # Fita de negócios ao vivo
+        ├── AutomationPanel.tsx       # Ajustes: blocos por estratégia, proteção da mãe, limites da ponte, perfis
+        ├── SimulatorView.tsx         # Aba Simulador: feed, cartões dos motores, replay e modo OPERA
+        ├── SeriesComparisonView.tsx  # Aba Comparativo: métricas lado a lado por série
+        ├── EquityCurveView.tsx       # Curva de patrimônio, High-Water Mark e underwater drawdown
+        ├── OrdersAndStats.tsx        # Posições fechadas e cartões de métricas
+        ├── IntradayOrderAudit.tsx    # Auditoria, filtros, timeline e exportação CSV
+        ├── PythonScriptView.tsx      # Visualiza/baixa o .py gerado e mostra o token da ponte
+        ├── DocumentationView.tsx     # Manual de instalação + card “Segurança da Ponte”
+        ├── ProjectDossierPdfModal.tsx# Dossiê executivo em A4 (@media print)
+        ├── AdminPanel.tsx / SubscriptionPaywall.tsx / SubscriptionStatusBadge.tsx # SaaS (maquete)
 ```
+
+> ⚠️ Não existe `bot_mt5_convergencia_10r.py` no repositório: o script da ponte é **gerado em runtime** pelo `pythonScriptGenerator.ts` e baixado pelo navegador para dentro do Windows. Ele carrega o token do seu navegador — por isso não deve ser commitado nem compartilhado.
 
 ---
 
@@ -327,17 +415,60 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     - Tag verde/vermelha proeminente para a ordem mãe: `🟢 COMPRA MÃE (SURFE)` / `🔴 VENDA MÃE (SURFE)`.
     - Tags numeradas para cada sub-entrada: `🔺 PIRÂMIDE #N (+50p TP)` com sua respectiva linha de Take Profit pontilhada a 50 pontos.
     - Floating banner no topo informando o estado: `📈 TENDÊNCIA DE ALTA: Surfe Mãe ativo + N Pirâmides (+50p TP)` e botão de zeragem de emergência.
-  - **Ponte MT5**: Script Python atualizado (`bot_mt5_convergencia_10r.py`) com gerenciamento nativo de ordens `MAIN` e `PYRAMID` via tags de comentários e encerramento em massa na inversão (`execute_pyramid_confluence`).
+  - **Ponte MT5**: o script gerado reconhece as tags de comentário `MAIN` / `PYRAMID` e executa encerramento em massa na inversão (`execute_pyramid_confluence`), mantendo o controle por ticket em hedge/ netting.
+
+### F. Chaves de `localStorage` (mapa completo da persistência)
+
+| Chave | Conteúdo |
+| --- | --- |
+| `fluxo_renko_ea_config_v3` | Configuração ativa do robô (`AutomationConfig`) |
+| `fluxo_renko_ea_profiles_v3` | Perfis customizados salvos pelo operador |
+| `fluxo_renko_chart_scales_v2` | `scaleX`, `scaleY`, `scaleFlow`, `flowPaneRatio`, `flowPanOffset`, `haHistSplit` |
+| `fluxo_renko_flow_mode_v1` | Modo do painel de fluxo (Heikin-Ashi / Delta / Híbrido) |
+| `fluxo_bridge_token_v1` | **Token da ponte** — fora do config de propósito, para nunca ser exportado em JSON |
+| `fluxo_renko_intraday_audit_v3` | Livro de auditoria intraday |
+| `fluxo_series_collector_v1` | Snapshot do coletor multi-série (com marca `real` por dia) |
+| `fluxo_renko_spacing_mode_v1` | Modo de espaçamento progressivo dos boxes |
+| `fluxo_renko_hud_pos_v1` | Posição do quadro HUD/Box Renko |
+| `fluxo_chart_series_v1` / `fluxo_chart_range_pts_v1` / `fluxo_chart_time_sec_v1` | Série ativa do gráfico e escalas de Range/Tempo |
+| `fluxo_dados_window_v1` / `fluxo_renko_box_window_v1` | Posição das janelas flutuantes (Dados e Box Renko) |
+| `fluxo_replay_days_v1` / `fluxo_replay_operate_v1` / `fluxo_sim_speed_v1` | Replay: dias, modo OPERA e velocidade |
+| `quant_terminal_current_user_v2` / `quant_terminal_users_v2` / `quant_terminal_transactions_v2` | SaaS (administrador, clientes e transações) |
+
+---
+
+## 🆕 9. Ciclo 6 (29–30/10/2026) — resumo do que mudou
+
+> Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+- ✅ **Ponte WebSocket blindada**: handshake `AUTH` com token, `ARM`/`DISARM`, tetos de contratos e de ordens/min impostos pelo próprio Python, `RISK_REJECT` com motivo, log por IP e fim do vazamento de ticks. Token editável/rotacionável na aba Guia.
+- ✅ **Proteção da Ordem Mãe em dois estágios** (gatilho → piso → acompanhamento), corrigindo o trailing que estava morto na Pirâmide e o stop que nunca era criado em venda (`currentSL = 0`).
+- ✅ **Tipo de entrada na Pirâmide**: `MARKET_ON_CLOSE`, `BOX_50_LIMIT` e `BOX_OPEN_LIMIT`, com validade em boxes e TP/SL ancorados no preço real de execução.
+- ✅ **Coletor honesto**: marca `real` por dia impede o replay de apagar pregão verdadeiro; replay progressivo; modo **OPERA** roda a estratégia pelo mesmo caminho do terminal.
+- ✅ **Trava de 17:30** compartilhada (`sessionRules.ts`) entre terminal e robôs sombra.
+- ✅ **Gráfico**: dois divisores arrastáveis idênticos (preço↔fluxo e Heikin-Ashi↔histograma), ambos com arraste no dedo, escalas adaptativas com passo “limpo”, régua `Δ` no histograma e etiquetas de faixa.
+- ✅ **Ajustes por estratégia** (Pirâmide com bloco dedicado) e **pop-up de execução discretizado** (linha fina, sem perder o preço de entrada).
+- ✅ **Série TEMPO fora do gráfico** (só Pontos e Range), continuando no coletor como histórico.
 
 ---
 
 ## 🚀 11. Instruções para Retomada em Novo Bate-Papo
 
-Ao iniciar um novo bate-papo, utilize o conteúdo de `PROJECT_CONSOLIDATION_CHAT_SEED.md` ou a seguinte mensagem de abertura:
+Ordem de leitura da documentação: **`PROJECT_SUMMARY.md`** (estado atual) → **`EVOLUCOES_DETALHADAS.md`** (por que cada coisa é como é) → **`PROJECT_CONSOLIDATION_CHAT_SEED.md`** (prompt para colar na conversa nova).
 
 ```text
-Olá! Estou continuando o desenvolvimento do projeto "Fluxo & Renko 10R - MT5 Quant Terminal".
-O projeto está 100% documentado nos arquivos PROJECT_SUMMARY.md e PROJECT_CONSOLIDATION_CHAT_SEED.md na raiz.
-Todos os componentes estão funcionais: Renko 10R com Heikin-Ashi tricolor, linhas de ordens com SL/TP/Parcial visíveis, lixeira in-app para perfis salvos, livro de auditoria intraday com CSV, curva de patrimônio, ponte MT5 Python e exportador PDF.
-Favor consultar a documentação para alinhar o contexto e me avisar quando estiver pronto.
+Olá! Estou continuando o projeto "Fluxo & Renko 10R - MT5 Quant Terminal" (B3 WIN$, Vite + React 19 + TS,
+porta 3002 com --host=0.0.0.0; a ponte MT5 Python roda no Windows e é GERADA em runtime, não existe no repo).
+A documentação está consolidada em três arquivos na raiz: PROJECT_SUMMARY.md (estado atual),
+EVOLUCOES_DETALHADAS.md (histórico com causa raiz) e PROJECT_CONSOLIDATION_CHAT_SEED.md (prompt de retomada).
+Regras do projeto: toda a UI e os comentários em português; rodar `npx tsc --noEmit` a cada entrega;
+simulação, coletor e replay jamais podem tocar a corretora real; a ponte WebSocket exige token + ARM e só
+receita ordens quando o robô está armado; commits e pushes só quando eu pedir explicitamente.
+Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto.
 ```
+
+### Pendências conhecidas (para não redescobrir)
+- Módulo SaaS/paywall continua **maquete em `localStorage`**, sem backend nem gateway de pagamento real.
+- A pergunta de infraestrutura “até 100 clientes pagantes” segue em aberto (hoje cada cliente precisa do próprio Windows com MT5 logado).
+- Recomenda-se **rotacionar o token** da ponte antes de operar em conta real e aplicar a regra de firewall `New-NetFirewallRule` na porta 8765.
+- Reconferência visual do card “Segurança da Ponte” depois de um F5 (a verificação via MCP de navegador caiu no reload).

@@ -1,4 +1,5 @@
 import { RenkoBox, AutomationConfig } from '../types/trading';
+import { isSessionCloseLock } from './sessionRules';
 
 /**
  * Robô Sombra (Paper Strategy Bot)
@@ -39,7 +40,7 @@ export interface PaperTrade {
   entryTime: number;
   exitPrice?: number;
   exitTime?: number;
-  exitReason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'BREAKEVEN' | 'FLIP_REVERSAL' | 'PYRAMID_TP' | 'PARTIAL';
+  exitReason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'BREAKEVEN' | 'FLIP_REVERSAL' | 'PYRAMID_TP' | 'PYRAMID_SL' | 'PARTIAL' | 'DAY_CLOSE';
   points?: number;
   financial?: number;
   triggerReason: string;
@@ -93,6 +94,18 @@ interface OpenPosition {
   partialExecuted: boolean;
   slIsBreakeven: boolean;
   remainingContracts: number; // qtde ainda aberta após saída parcial (fonte da verdade contábil)
+  extremeHigh?: number; // máxima da perna (alimenta o acompanhamento da ordem mãe)
+  extremeLow?: number; // mínima da perna
+}
+
+/** Ordem LIMITADA de entrada da Pirâmide aguardando o preço recuar até o nível do box. */
+interface PendingEntry {
+  direction: 'BUY' | 'SELL';
+  role: 'MAIN' | 'PYRAMID';
+  level: number; // preço de execução da limitada (abertura ou 50% do box)
+  contracts: number;
+  placedIndex: number; // box.index em que a ordem foi posicionada (para expiração)
+  triggerReason: string;
 }
 
 let uid = 0;
@@ -104,6 +117,7 @@ export class PaperStrategyBot {
   private equity = 0;
   private equityCurve: EquityPoint[] = [];
   private openPositions: OpenPosition[] = [];
+  private pendingEntries: PendingEntry[] = []; // apenas na Pirâmide com entrada Limit
   private livePrice = 0; // último preço visto (para marcação a mercado das posições abertas)
   // Acumulados contínuos: sobrevivem ao truncamento da lista de trades (replay de dias)
   private bookedCount = 0;
@@ -273,6 +287,17 @@ export class PaperStrategyBot {
    */
   onClosedBox(box: RenkoBox, signal: 'BUY' | 'SELL' | undefined, config: AutomationConfig) {
     if (box.close > 0) this.livePrice = box.close;
+    // TRAVA DE FIM DE PREGÃO (17:30): quita as posições sombra a mercado, derruba as limitadas
+    // pendentes e para de abrir operações. Sem isso a posição "surfada" da Pirâmide atravessaria
+    // a noite e viraria uma trade do dia seguinte, contaminando a estatística por dia.
+    if (isSessionCloseLock(box.timeEnd)) {
+      for (const pos of this.openPositions) {
+        this.book(pos.trade, box.close, box.timeEnd, 'DAY_CLOSE');
+      }
+      this.openPositions = [];
+      this.pendingEntries = [];
+      return;
+    }
     if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
       this.stepPyramid(box, signal, config);
     } else {
@@ -284,7 +309,10 @@ export class PaperStrategyBot {
   // PIRÂMIDE DE CONFLUÊNCIA (espelho da regra viva do App)
   // =========================================================================
   private stepPyramid(box: RenkoBox, signal: 'BUY' | 'SELL' | undefined, config: AutomationConfig) {
-    // 1) Zera o lado contrário na virada de fluxo
+    const entryType = config.pyramidEntryType || 'MARKET_ON_CLOSE';
+    const useLimitEntry = entryType !== 'MARKET_ON_CLOSE';
+
+    // 1) Zera o lado contrário na virada de fluxo (posições abertas e limitadas pendentes)
     if (signal && config.closeAllOnFlowFlip) {
       const opposite = this.openPositions.filter((p) => p.trade.direction !== signal);
       for (const pos of opposite) {
@@ -293,52 +321,178 @@ export class PaperStrategyBot {
       if (opposite.length > 0) {
         this.openPositions = this.openPositions.filter((p) => p.trade.direction === signal);
       }
+      this.pendingEntries = this.pendingEntries.filter((p) => p.direction === signal);
     }
 
-    // 2) TP das pirâmides abertas (+pyramidTpPoints)
+    // 2) Execução das ordens LIMITADAS de entrada: só entram se o preço recuar até o nível
+    for (const pend of [...this.pendingEntries]) {
+      const waitBoxes = Math.max(1, config.pullbackMaxBoxesWait ?? 2);
+      if (box.index - pend.placedIndex >= waitBoxes) {
+        this.pendingEntries = this.pendingEntries.filter((p) => p !== pend);
+        continue;
+      }
+      const filled = pend.direction === 'BUY' ? box.low <= pend.level : box.high >= pend.level;
+      if (!filled) continue;
+      this.pendingEntries = this.pendingEntries.filter((p) => p !== pend);
+      this.openPyramidPosition(pend.direction, pend.role, pend.contracts, pend.level, box.timeEnd, config, pend.triggerReason);
+    }
+
+    // 3) Saídas: TP das pirâmides (+pyramidTpPoints), stop opcional e breakeven liberado na ordem mãe
     const tpPts = Math.max(1, config.pyramidTpPoints);
+    const pyrSlPts = (config.pyramidSlPoints ?? 0) > 0 ? config.pyramidSlPoints : 0;
     for (const pos of [...this.openPositions]) {
-      if (pos.trade.role !== 'PYRAMID') continue;
-      const target =
-        pos.trade.direction === 'BUY'
-          ? pos.trade.entryPrice + tpPts
-          : pos.trade.entryPrice - tpPts;
-      const hit =
-        pos.trade.direction === 'BUY' ? box.high >= target : box.low <= target;
-      if (hit) {
-        this.book(pos.trade, target, box.timeEnd, 'PYRAMID_TP');
-        this.openPositions = this.openPositions.filter((p) => p !== pos);
+      const isBuy = pos.trade.direction === 'BUY';
+      if (pos.trade.role === 'PYRAMID') {
+        const target = isBuy ? pos.trade.entryPrice + tpPts : pos.trade.entryPrice - tpPts;
+        const hit = isBuy ? box.high >= target : box.low <= target;
+        if (hit) {
+          this.book(pos.trade, target, box.timeEnd, 'PYRAMID_TP');
+          this.openPositions = this.openPositions.filter((p) => p !== pos);
+          if (config.moveMainToBreakevenOnPyramidTp) {
+            this.protectMainAtBreakeven(pos.trade.direction, config);
+          }
+          continue;
+        }
+        if (pyrSlPts > 0 && pos.sl > 0) {
+          const hitSl = isBuy ? box.low <= pos.sl : box.high >= pos.sl;
+          if (hitSl) {
+            this.book(pos.trade, pos.sl, box.timeEnd, 'PYRAMID_SL');
+            this.openPositions = this.openPositions.filter((p) => p !== pos);
+          }
+        }
+      } else {
+        // Ordem mãe: gatilho + acompanhamento do preço (mesma regra do terminal) e só depois a checagem
+        this.trailMainStop(pos, box, config);
+        if (pos.sl > 0) {
+          // Protegida no breakeven/trailing (ou com stop) — sai se o preço voltar até ele
+          const hitSl = isBuy ? box.low <= pos.sl : box.high >= pos.sl;
+          if (hitSl) {
+            this.book(pos.trade, pos.sl, box.timeEnd, pos.slIsBreakeven ? 'BREAKEVEN' : 'STOP_LOSS');
+            this.openPositions = this.openPositions.filter((p) => p !== pos);
+          }
+        }
       }
     }
 
-    // 3) Nova entrada/piramidação no sinal
+    // 4) Nova entrada/piramidação no sinal
     if (!signal) return;
     const sameSide = this.openPositions.filter((p) => p.trade.direction === signal);
-    const hasMain = sameSide.some((p) => p.trade.role === 'MAIN');
+    const pendingSameSide = this.pendingEntries.filter((p) => p.direction === signal);
+    const hasMain =
+      sameSide.some((p) => p.trade.role === 'MAIN') || pendingSameSide.some((p) => p.role === 'MAIN');
     const role: 'MAIN' | 'PYRAMID' = hasMain ? 'PYRAMID' : 'MAIN';
-    // Limite de pirâmides simultâneas para não explodir a memória: 10 níveis
+    // Uma limitada por vez por lado + limite de 10 pirâmides simultâneas
+    if (pendingSameSide.length > 0) return;
     if (role === 'PYRAMID' && sameSide.filter((p) => p.trade.role === 'PYRAMID').length >= 10) return;
 
     const contracts = role === 'MAIN' ? config.contracts : Math.max(1, config.pyramidContracts);
+    const level =
+      entryType === 'BOX_50_LIMIT'
+        ? (box.open + box.close) / 2
+        : entryType === 'BOX_OPEN_LIMIT'
+        ? box.open
+        : box.close;
+    const reason = `Bloco #${box.index} @ ${level.toFixed?.(0) ?? level}`;
+
+    if (useLimitEntry) {
+      this.pendingEntries.push({
+        direction: signal,
+        role,
+        level,
+        contracts,
+        placedIndex: box.index,
+        triggerReason: `${reason} [LIMIT ${entryType === 'BOX_OPEN_LIMIT' ? 'entrada do box' : '50% do box'}]`,
+      });
+      return;
+    }
+
+    this.openPyramidPosition(signal, role, contracts, box.close, box.timeEnd, config, reason);
+  }
+
+  /** Registra a posição aberta da Pirâmide no preço de entrada (fechamento do box ou nível do Limit). */
+  private openPyramidPosition(
+    direction: 'BUY' | 'SELL',
+    role: 'MAIN' | 'PYRAMID',
+    contracts: number,
+    entryPrice: number,
+    entryTime: number,
+    config: AutomationConfig,
+    triggerReason: string
+  ) {
+    // Stop opcional apenas das ordens da pirâmide (ordem mãe continua sem SL fixo)
+    const entrySl =
+      role === 'PYRAMID' && (config.pyramidSlPoints ?? 0) > 0
+        ? direction === 'BUY'
+          ? entryPrice - config.pyramidSlPoints
+          : entryPrice + config.pyramidSlPoints
+        : 0;
     const trade: PaperTrade = {
       id: nextId(),
       series: this.series,
       mode: 'PYRAMID_FLOW_CONFLUENCE',
-      direction: signal,
+      direction,
       role,
       contracts,
-      entryPrice: box.close,
-      entryTime: box.timeEnd,
-      triggerReason: `Bloco #${box.index} @ ${box.close.toFixed?.(0) ?? box.close}`,
+      entryPrice,
+      entryTime,
+      triggerReason,
     };
     this.openPositions.push({
       trade,
-      sl: 0,
+      sl: entrySl,
       tp: 0,
       partialExecuted: false,
       slIsBreakeven: false,
       remainingContracts: contracts,
     });
+  }
+
+  /**
+   * Proteção móvel da ordem mãe, espelhando o terminal: o GATILHO (trailingActivationPoints pts a
+   * favor) coloca o primeiro stop no piso entrada + offset das taxas e, a partir daí, o stop
+   * acompanha a máxima/mínima da perna sempre a trailingDistancePoints de distância.
+   */
+  private trailMainStop(pos: OpenPosition, box: RenkoBox, config: AutomationConfig) {
+    if (!config.trailingStop || pos.trade.role !== 'MAIN') return;
+    const entry = pos.trade.entryPrice;
+    const isBuy = pos.trade.direction === 'BUY';
+    const actPts = config.trailingActivationPoints ?? 60;
+    const distPts = config.trailingDistancePoints ?? 50;
+    const offsetPts = config.breakevenOffsetPoints ?? 0;
+
+    const hi = Math.max(pos.extremeHigh ?? entry, box.high);
+    const lo = Math.min(pos.extremeLow ?? entry, box.low);
+    pos.extremeHigh = hi;
+    pos.extremeLow = lo;
+
+    // vale o que proteger mais: o piso do gatilho ou o rastro do extremo
+    const target = isBuy
+      ? hi - entry >= actPts
+        ? Math.max(entry + offsetPts, hi - distPts)
+        : 0
+      : entry - lo >= actPts
+      ? Math.min(entry - offsetPts, lo + distPts)
+      : 0;
+    if (target <= 0) return;
+
+    const improves = pos.sl <= 0 || (isBuy ? target > pos.sl : target < pos.sl);
+    if (!improves) return;
+    pos.sl = target;
+    pos.slIsBreakeven = true;
+  }
+
+  /** Move o stop da ordem mãe para o breakeven (entrada + offset de taxas) após um TP de pirâmide. */
+  private protectMainAtBreakeven(direction: 'BUY' | 'SELL', config: AutomationConfig) {
+    const offset = config.breakevenOffsetPoints ?? 0;
+    for (const pos of this.openPositions) {
+      if (pos.trade.role !== 'MAIN' || pos.trade.direction !== direction) continue;
+      const isBuy = direction === 'BUY';
+      const beSL = isBuy ? pos.trade.entryPrice + offset : pos.trade.entryPrice - offset;
+      const improves = pos.sl <= 0 || (isBuy ? beSL > pos.sl : beSL < pos.sl);
+      if (!improves || beSL <= 0) continue;
+      pos.sl = beSL;
+      pos.slIsBreakeven = true;
+    }
   }
 
   // =========================================================================
@@ -481,6 +635,7 @@ export class PaperStrategyBot {
     this.equityCurve = [];
     this.equity = 0;
     this.openPositions = [];
+    this.pendingEntries = [];
     this.bookedCount = 0;
     this.winsCount = 0;
     this.lossesCount = 0;

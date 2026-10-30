@@ -3,6 +3,8 @@ import { Tick, RenkoBox, TradeOrder, AutomationConfig, TerminalStats, MT5Connect
 import { RenkoFlowEngine } from './utils/renkoCalculator';
 import { RangeBarEngine, TimeBarEngine, ChartSeries } from './utils/barEngines';
 import { evaluateBoxConvergence, ConvergenceResult } from './utils/convergenceEvaluator';
+import { isSessionCloseLock, SESSION_CLOSE_LOCK_LABEL } from './utils/sessionRules';
+import { getBridgeToken } from './utils/bridgeSecurity';
 import { seriesCollectorService } from './services/seriesCollectorService';
 import { SimulatorView } from './components/SimulatorView';
 import { B3MarketSimulator, generateHistoricalTicks } from './utils/marketSimulator';
@@ -23,7 +25,7 @@ import { OrderAuditService } from './services/orderAuditService';
 import { IntradayOrderAudit } from './components/IntradayOrderAudit';
 import { ProjectDossierPdfModal } from './components/ProjectDossierPdfModal';
 import { SeriesComparisonView } from './components/SeriesComparisonView';
-import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Square, Clock } from 'lucide-react';
 
 type ActiveTickResult = {
   newBoxClosed: boolean;
@@ -65,7 +67,50 @@ export default function App() {
   const [showPdfModal, setShowPdfModal] = useState<boolean>(false);
   const [config, setConfig] = useState<AutomationConfig>(() => EaConfigService.loadSavedConfig());
   const [isSimulating, setIsSimulating] = useState<boolean>(true);
-  const [simulationSpeed, setSimulationSpeed] = useState<number>(5);
+  const [simulationSpeed, setSimulationSpeed] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('fluxo_sim_speed_v1'));
+    return saved >= 1 ? Math.min(10, Math.round(saved)) : 1;
+  });
+  // Replay de histórico: quantos dias a setinha amarela da tira de status vai rodar.
+  // MÍNIMO ABSOLUTO DE 1 DIA — abrir a plataforma já dispara isso sozinho (ver efeito
+  // do bootReplay), então o gráfico nasce com uma sessão inteira em vez de minuto a minuto.
+  const [replayDays, setReplayDays] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('fluxo_replay_days_v1'));
+    return saved >= 1 ? Math.min(10, Math.round(saved)) : 1;
+  });
+  const [isReplaying, setIsReplaying] = useState<boolean>(false);
+  // "Replay opera": durante a reprodução cada tick passa pelo MESMO caminho do feed ao vivo
+  // (estratégia → MAE/pirâmides → auditoria → PnL na tela). Ligado por padrão; nunca é usado
+  // com o MT5 conectado, porque aí as ordens seriam reais.
+  const [replayOperates, setReplayOperates] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('fluxo_replay_operate_v1') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('fluxo_replay_operate_v1', replayOperates ? '1' : '0');
+    } catch {
+      // Ignora erro de storage
+    }
+  }, [replayOperates]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('fluxo_replay_days_v1', String(replayDays));
+    } catch {
+      // Ignora erro de storage
+    }
+  }, [replayDays]);
+  // A mesma velocidade vale para o replay E para o feed ao vivo — e sobrevive ao F5
+  useEffect(() => {
+    try {
+      localStorage.setItem('fluxo_sim_speed_v1', String(simulationSpeed));
+    } catch {
+      // Ignora erro de storage
+    }
+  }, [simulationSpeed]);
 
   const [ticks, setTicks] = useState<Tick[]>([]);
   const [boxes, setBoxes] = useState<RenkoBox[]>([]);
@@ -74,12 +119,14 @@ export default function App() {
   const [cvd, setCvd] = useState<number>(0);
 
   // =========================================================================
-  // SÉRIES EXPERIMENTAIS: Pontos (Renko) x Range x Tempo — escolha na barra do gráfico
+  // SÉRIES: Pontos (Renko) x Range — escolha na barra do gráfico. Tempo saiu do
+  // gráfico (coisa do passado); o motor de tempo continua rodando escondido só
+  // para alimentar o Coletor de Eficiência com o que já foi registrado.
   // =========================================================================
   const [chartSeries, setChartSeries] = useState<ChartSeries>(() => {
     try {
       const saved = localStorage.getItem('fluxo_chart_series_v1');
-      if (saved === 'renko' || saved === 'range' || saved === 'tempo') return saved;
+      if (saved === 'renko' || saved === 'range') return saved;
     } catch (e) {
       // Ignora
     }
@@ -112,6 +159,28 @@ export default function App() {
   }, [dadosPanelOpen]);
   const handleToggleDadosPanel = () => {
     setDadosPanelOpen((v) => {
+      // Ao reabrir pelo menu, leva o operador para a aba do gráfico onde a janela vive
+      if (!v) setActiveTab('chart');
+      return !v;
+    });
+  };
+  // Janela flutuante "Box Renko" (card do box ativo) — visível por padrão, persistida
+  const [boxWindowOpen, setBoxWindowOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('fluxo_renko_box_window_v1') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('fluxo_renko_box_window_v1', boxWindowOpen ? '1' : '0');
+    } catch {
+      // Ignora erro de storage
+    }
+  }, [boxWindowOpen]);
+  const handleToggleBoxWindow = () => {
+    setBoxWindowOpen((v) => {
       // Ao reabrir pelo menu, leva o operador para a aba do gráfico onde a janela vive
       if (!v) setActiveTab('chart');
       return !v;
@@ -485,6 +554,12 @@ export default function App() {
   // Função para processar a execução de um tick
   const handleIncomingTick = useCallback(
     (tick: Tick) => {
+      // Tick vindo do MT5 (corretora): marca o coletor como "dia real." Assim o replay
+      // automático de abertura nunca apaga uma coleta verdadeira já registrada hoje
+      if (mt5State.status === 'CONNECTED') seriesCollectorService.markRealData();
+      // Trava de fim de pregão (17:30): no simulador o robô quita tudo e para de abrir operações.
+      // Com o MT5 conectado a trava é ignorada — liquidar posição real exigiria ordem na corretora
+      const sessionLock = mt5State.status !== 'CONNECTED' && isSessionCloseLock(tick.timestamp);
       const engine = engineRef.current;
       setCurrentPrice(tick.price);
 
@@ -552,28 +627,20 @@ export default function App() {
       // ROBÔ NA SÉRIE ATIVA (Opção A): as ordens são disparadas pela série
       // escolhida na barra do gráfico. Séries inativas só alimentam o coletor.
       // =========================================================================
-      const mt5TagShort =
-        chartSeries === 'renko' ? '10R' : chartSeries === 'range' ? `RNG${rangePoints}` : `TF${timeframeSec}s`;
-      const robotTag =
-        chartSeries === 'renko'
-          ? 'Renko 10R'
-          : chartSeries === 'range'
-          ? `Range ${rangePoints}pts`
-          : `Tempo ${tfShortLabel}`;
+      const mt5TagShort = chartSeries === 'renko' ? '10R' : `RNG${rangePoints}`;
+      const robotTag = chartSeries === 'renko' ? 'Renko 10R' : `Range ${rangePoints}pts`;
       let result: ActiveTickResult = { newBoxClosed: false };
       if (chartSeries === 'renko') {
         result = renkoRes;
       } else if (chartSeries === 'range' && rangeRes.newBarClosed && rangeRes.closedBox && rangeConv) {
         result = { newBoxClosed: true, closedBox: rangeRes.closedBox, signal: rangeConv.signal, signalReason: rangeConv.reason };
-      } else if (chartSeries === 'tempo' && timeRes.newBarClosed && timeRes.closedBox && timeConv) {
-        result = { newBoxClosed: true, closedBox: timeRes.closedBox, signal: timeConv.signal, signalReason: timeConv.reason };
       }
 
       // Se uma barra da série ativa fechou
       if (result.newBoxClosed && result.closedBox) {
 
-        // Se gerou sinal de fechamento de box
-        if (result.signal && result.closedBox) {
+        // Se gerou sinal de fechamento de box (na trava das 17:30 nenhum sinal novo é operado)
+        if (result.signal && result.closedBox && !sessionLock) {
           const signalType = result.signal; // 'BUY' (bloco verde) ou 'SELL' (bloco vermelho)
           const oppositeType = signalType === 'BUY' ? 'SELL' : 'BUY';
 
@@ -657,9 +724,19 @@ export default function App() {
               // Se não há ordem MAIN aberta nesta direção: cria a Entrada Principal (Surfe sem TP/SL fixo)
               // Se já há ordem MAIN aberta nesta direção: cria uma nova Ordem da Pirâmide com TP de 50 pts!
               const openSameSide = updatedPrev.filter(
-                (o) => o.status === 'OPEN' && o.type === signalType
+                (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === signalType
               );
               const hasMainOrder = openSameSide.some((o) => o.role === 'MAIN');
+
+              // TIPO DE ENTRADA DA PIRÂMIDE (vale para mãe e pirâmides): a mercado no fechamento,
+              // Limit a 50% do box ou Limit na entrada (abertura) do box — renko, range ou pontos.
+              const pyrEntryType = config.pyramidEntryType || 'MARKET_ON_CLOSE';
+              const useLimitEntry = pyrEntryType !== 'MARKET_ON_CLOSE';
+              const pyrLimitPrice = useLimitEntry
+                ? pyrEntryType === 'BOX_50_LIMIT'
+                  ? (result.closedBox!.open + result.closedBox!.close) / 2
+                  : result.closedBox!.open
+                : 0;
 
                 let newOrder: TradeOrder;
 
@@ -667,7 +744,8 @@ export default function App() {
                   const mainEvt = OrderAuditService.createEvent(
                     'ORDER_DISPATCHED',
                     `Ordem Principal ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} (Surfe de Tendência) [Robô ${robotTag}]`,
-                    `Entrada Matriz no fechamento do 1º bloco ${signalType === 'BUY' ? 'verde' : 'vermelho'} a ${tick.price} pts (${config.contracts} ctro(s)). Mantida aberta até a virada do fluxo!`,
+                    `Entrada Matriz no fechamento do 1º bloco ${signalType === 'BUY' ? 'verde' : 'vermelho'} a ${tick.price} pts (${config.contracts} ctro(s)). Mantida aberta até a virada do fluxo!` +
+                      (useLimitEntry ? ` Ordem LIMITADA posicionada em ${pyrLimitPrice} pts (${pyrEntryType === 'BOX_OPEN_LIMIT' ? 'entrada do box' : '50% do box'}).` : ''),
                     tick.price,
                     config.contracts,
                     result.closedBox!.delta
@@ -680,11 +758,13 @@ export default function App() {
                     timeStr: new Date().toTimeString().split(' ')[0],
                     type: signalType,
                     role: 'MAIN',
-                    entryPrice: tick.price,
+                    entryPrice: useLimitEntry ? pyrLimitPrice : tick.price,
+                    limitPrice: useLimitEntry ? pyrLimitPrice : undefined,
+                    pendingBoxIndex: useLimitEntry ? result.closedBox!.index : undefined,
                     contracts: config.contracts,
                     stopLoss: 0,
                     takeProfit: 0,
-                    status: 'OPEN',
+                    status: useLimitEntry ? 'PENDING_LIMIT' : 'OPEN',
                     source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA',
                     magicNumber: config.magicNumber,
                     triggerReason: `Entrada Principal ${signalType === 'BUY' ? 'Compra' : 'Venda'} (${robotTag} — Surfe até Virada do Fluxo)`,
@@ -695,8 +775,12 @@ export default function App() {
                   setLatestToast({
                     id: `main-toast-${Date.now()}`,
                     type: signalType,
-                    title: `🚀 ENTRADA PRINCIPAL ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} EXECUTADA!`,
-                    description: `Surfe iniciado a ${tick.price.toLocaleString('pt-BR')} pts (${config.contracts} ct). Aberta até a virada do fluxo.`,
+                    title: useLimitEntry
+                      ? `🎯 ORDEM LIMITADA DA MÃE POSICIONADA! [${robotTag}]`
+                      : `🚀 ENTRADA PRINCIPAL ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} EXECUTADA!`,
+                    description: useLimitEntry
+                      ? `Limit em ${pyrLimitPrice.toLocaleString('pt-BR')} pts (${pyrEntryType === 'BOX_OPEN_LIMIT' ? 'entrada do box' : '50% do box'}). Só executa se o preço recuar.`
+                      : `Surfe iniciado a ${tick.price.toLocaleString('pt-BR')} pts (${config.contracts} ct). Aberta até a virada do fluxo.`,
                     timestamp: Date.now(),
                   });
 
@@ -705,6 +789,8 @@ export default function App() {
                       JSON.stringify({
                         action: 'ORDER_SEND',
                         type: signalType,
+                        isLimit: useLimitEntry,
+                        limitPrice: useLimitEntry ? pyrLimitPrice : undefined,
                         contracts: config.contracts,
                         comment: `PIRAMIDE_MAIN_${signalType}_${mt5TagShort}`,
                       })
@@ -715,13 +801,21 @@ export default function App() {
                   const pyramidOrders = openSameSide.filter((o) => o.role === 'PYRAMID');
                   const pyramidLevel = pyramidOrders.length + 1;
                   const tpPoints = config.pyramidTpPoints || 50;
-                  const targetTp = signalType === 'BUY' ? tick.price + tpPoints : tick.price - tpPoints;
+                  // TP/SL são ancorados no preço real de entrada (fechamento ou nível do Limit)
+                  const entryAnchor = useLimitEntry ? pyrLimitPrice : tick.price;
+                  const targetTp =
+                    signalType === 'BUY' ? entryAnchor + tpPoints : entryAnchor - tpPoints;
                   const pyrContracts = config.pyramidContracts || 1;
+                  // Stop OPCIONAL da pirâmide: 0 = sem stop fixo (saída só pela inversão do fluxo)
+                  const pyrSlPoints = (config.pyramidSlPoints ?? 0) > 0 ? config.pyramidSlPoints : 0;
+                  const targetSl = pyrSlPoints > 0
+                    ? (signalType === 'BUY' ? entryAnchor - pyrSlPoints : entryAnchor + pyrSlPoints)
+                    : 0;
 
                   const pyrEvt = OrderAuditService.createEvent(
                     'ORDER_DISPATCHED',
                     `Ordem da Pirâmide #${pyramidLevel} (${signalType === 'BUY' ? 'COMPRA' : 'VENDA'}) [Robô ${robotTag}]`,
-                    `Nova compra/venda no fechamento do bloco ${signalType === 'BUY' ? 'verde' : 'vermelho'} a ${tick.price} pts (${pyrContracts} ctro). Alvo TP fixo em +${tpPoints} pts (${targetTp} pts).`,
+                    `Nova compra/venda no fechamento do bloco ${signalType === 'BUY' ? 'verde' : 'vermelho'} (${pyrContracts} ctro). ${useLimitEntry ? `Ordem LIMITADA em ${pyrLimitPrice} pts (${pyrEntryType === 'BOX_OPEN_LIMIT' ? 'entrada do box' : '50% do box'}).` : `Entrada a mercado a ${tick.price} pts.`} Alvo TP fixo em +${tpPoints} pts (${targetTp} pts).${pyrSlPoints > 0 ? ` Stop de proteção em ${targetSl} pts (-${pyrSlPoints} pts).` : ' Sem stop fixo (saída por inversão).'}`,
                     tick.price,
                     pyrContracts,
                     result.closedBox!.delta
@@ -735,11 +829,13 @@ export default function App() {
                     type: signalType,
                     role: 'PYRAMID',
                     pyramidLevel,
-                    entryPrice: tick.price,
+                    entryPrice: entryAnchor,
+                    limitPrice: useLimitEntry ? pyrLimitPrice : undefined,
+                    pendingBoxIndex: useLimitEntry ? result.closedBox!.index : undefined,
                     contracts: pyrContracts,
-                    stopLoss: 0,
+                    stopLoss: targetSl,
                     takeProfit: targetTp,
-                    status: 'OPEN',
+                    status: useLimitEntry ? 'PENDING_LIMIT' : 'OPEN',
                     source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA',
                     magicNumber: config.magicNumber,
                     triggerReason: `Pirâmide #${pyramidLevel} ${signalType === 'BUY' ? 'Compra' : 'Venda'} ${robotTag} (+${tpPoints}p TP)`,
@@ -750,8 +846,12 @@ export default function App() {
                   setLatestToast({
                     id: `pyr-toast-${Date.now()}`,
                     type: signalType,
-                    title: `🔺 PIRÂMIDE #${pyramidLevel} ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} [${mt5TagShort}] (+${tpPoints}p TP)!`,
-                    description: `Entrada a ${tick.price.toLocaleString('pt-BR')} pts. Alvo TP em ${targetTp.toLocaleString('pt-BR')} pts (+1 box).`,
+                    title: useLimitEntry
+                      ? `🎯 PIRÂMIDE #${pyramidLevel} LIMIT POSICIONADA [${mt5TagShort}] (+${tpPoints}p TP)`
+                      : `🔺 PIRÂMIDE #${pyramidLevel} ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} [${mt5TagShort}] (+${tpPoints}p TP)!`,
+                    description: useLimitEntry
+                      ? `Aguardando recuo até ${pyrLimitPrice.toLocaleString('pt-BR')} pts (${pyrEntryType === 'BOX_OPEN_LIMIT' ? 'entrada do box' : '50% do box'}). TP em ${targetTp.toLocaleString('pt-BR')} pts.`
+                      : `Entrada a ${tick.price.toLocaleString('pt-BR')} pts. Alvo TP em ${targetTp.toLocaleString('pt-BR')} pts (+1 box).`,
                     timestamp: Date.now(),
                   });
 
@@ -760,8 +860,11 @@ export default function App() {
                       JSON.stringify({
                         action: 'ORDER_SEND',
                         type: signalType,
+                        isLimit: useLimitEntry,
+                        limitPrice: useLimitEntry ? pyrLimitPrice : undefined,
                         contracts: pyrContracts,
                         tp: tpPoints,
+                        sl: pyrSlPoints,
                         comment: `PIRAMIDE_SUB_${pyramidLevel}_${mt5TagShort}`,
                       })
                     );
@@ -949,11 +1052,35 @@ export default function App() {
       // 2. Checagem de ordens abertas para Stop Loss ou Take Profit
       setOrders((prevOrders) => {
         let changed = false;
+        let dayClosedCount = 0;
         const currentBoxIdx = boxes.length > 0 ? boxes[boxes.length - 1].index : 0;
+        // Direções das ordens mãe que devem ser protegidas no breakeven (TP de pirâmide batido neste tick)
+        const breakevenMainDirs: ('BUY' | 'SELL')[] = [];
 
-        const updated = prevOrders.map((ord) => {
+        let updated = prevOrders.map((ord) => {
           // SE FOR ORDEM LIMITADA PENDENTE DE PULLBACK
           if (ord.status === 'PENDING_LIMIT' && ord.limitPrice !== undefined) {
+            // TRAVA DE FIM DE PREGÃO (17:30): limitada que não virou posição é cancelada
+            if (sessionLock) {
+              changed = true;
+              dayClosedCount += 1;
+              const lockEvt = OrderAuditService.createEvent(
+                'DAY_CLOSE_FORCED',
+                'Cancelada na trava de fim de pregão (17:30)',
+                `Entrada limitada em ${ord.limitPrice} pts não foi executada antes do encerramento do pregão e foi cancelada.`,
+                tick.price,
+                ord.contracts
+              );
+              return {
+                ...ord,
+                status: 'EXPIRED_PULLBACK' as const,
+                exitTimestamp: Date.now(),
+                exitTimeStr: new Date().toTimeString().split(' ')[0],
+                exitReason: 'DAY_CLOSE' as const,
+                triggerReason: 'Cancelada: trava de fim de pregão (17:30).',
+                auditTrail: ord.auditTrail ? [...ord.auditTrail, lockEvt] : [lockEvt],
+              };
+            }
             // Se for COMPRA pendente e o preço recuou até o preço limite da entrada (ou abaixo)
             if (ord.type === 'BUY' && tick.price <= ord.limitPrice) {
               changed = true;
@@ -1038,9 +1165,41 @@ export default function App() {
           if (ord.status === 'OPEN') {
             const isBuy = ord.type === 'BUY';
             const curPrice = tick.price;
+            // Parcial e Trailing são exclusivos da estratégia Reteste; na Pirâmide só valem TP/stop próprios
+            const isPyramidMode = config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE';
+
+            // 0. TRAVA DE FIM DE PREGÃO (17:30): liquida a posição a mercado — nenhuma ordem do
+            // simulador atravessa o fechamento do WIN$N (17:45), senão ela fica pendurada para sempre
+            if (sessionLock) {
+              changed = true;
+              dayClosedCount += 1;
+              const points = isBuy ? curPrice - ord.entryPrice : ord.entryPrice - curPrice;
+              const activeCtros = ord.remainingContracts || ord.contracts;
+              const fin = points * 0.2 * activeCtros + (ord.partialFinancial || 0);
+
+              const lockEvt = OrderAuditService.createEvent(
+                'DAY_CLOSE_FORCED',
+                `Fechamento obrigatório do pregão (${points >= 0 ? '+' : ''}${points} pts)`,
+                `Trava das ${SESSION_CLOSE_LOCK_LABEL}: posição ${ord.role === 'MAIN' ? 'principal (surfe)' : `pirâmide #${ord.pyramidLevel || 1}`} liquidada a mercado a ${curPrice} pts antes do encerramento do WIN$N. Resultado: R$ ${fin.toFixed(2)}.`,
+                curPrice,
+                activeCtros
+              );
+
+              return {
+                ...ord,
+                status: fin >= 0 ? ('CLOSED_PROFIT' as const) : ('CLOSED_LOSS' as const),
+                exitPrice: curPrice,
+                exitTimestamp: Date.now(),
+                exitTimeStr: new Date().toTimeString().split(' ')[0],
+                exitReason: 'DAY_CLOSE' as const,
+                pointsResult: points,
+                financialResult: fin,
+                auditTrail: ord.auditTrail ? [...ord.auditTrail, lockEvt] : [lockEvt],
+              };
+            }
 
             // 1. CHECAGEM DE REALIZAÇÃO PARCIAL
-            if (config.enablePartialExit && !ord.partialExecuted && ord.contracts > 1) {
+            if (!isPyramidMode && config.enablePartialExit && !ord.partialExecuted && ord.contracts > 1) {
               const reachedPartial = isBuy
                 ? curPrice >= ord.entryPrice + config.partialPoints
                 : curPrice <= ord.entryPrice - config.partialPoints;
@@ -1116,17 +1275,26 @@ export default function App() {
             }
 
             // 2. CHECAGEM DE TRAILING STOP DINÂMICO
+            // Duas etapas: o GATILHO dispara a proteção (piso na entrada + offset das taxas) e
+            // depois o ACCOMPANHAMENTO arrasta o stop sempre a N pts da máxima/mínima da perna.
+            // Na Pirâmide vale só para a ORDEM MÃE (as pirâmides morrem no próprio TP).
             let currentSL = ord.stopLoss;
             let beActive = ord.isBreakevenActive;
             let curHigh = ord.highestPriceSinceEntry || ord.entryPrice;
             let curLow = ord.lowestPriceSinceEntry || ord.entryPrice;
 
-            if (config.trailingStop) {
+            const trailApplies = config.trailingStop && (!isPyramidMode || ord.role === 'MAIN');
+            if (trailApplies) {
+              const actPts = config.trailingActivationPoints ?? 60;
+              const distPts = config.trailingDistancePoints ?? 50;
+              const offsetPts = config.breakevenOffsetPoints ?? 0;
               if (isBuy) {
                 curHigh = Math.max(curHigh, curPrice);
-                if (curHigh - ord.entryPrice >= config.trailingActivationPoints) {
-                  const trailTarget = curHigh - config.trailingDistancePoints;
-                  if (trailTarget > currentSL) {
+                if (curHigh - ord.entryPrice >= actPts) {
+                  // piso do gatilho (entrada + offset) ou o rastro da máxima — vale o que proteger mais
+                  const trailTarget = Math.max(ord.entryPrice + offsetPts, curHigh - distPts);
+                  // sem stop fixo (0) é o próprio trailing que coloca o primeiro stop da operação
+                  if (trailTarget > 0 && (currentSL <= 0 || trailTarget > currentSL)) {
                     currentSL = trailTarget;
                     beActive = true;
                     changed = true;
@@ -1134,9 +1302,9 @@ export default function App() {
                 }
               } else {
                 curLow = Math.min(curLow, curPrice);
-                if (ord.entryPrice - curLow >= config.trailingActivationPoints) {
-                  const trailTarget = curLow + config.trailingDistancePoints;
-                  if (trailTarget < currentSL) {
+                if (ord.entryPrice - curLow >= actPts) {
+                  const trailTarget = Math.min(ord.entryPrice - offsetPts, curLow + distPts);
+                  if (trailTarget > 0 && (currentSL <= 0 || trailTarget < currentSL)) {
                     currentSL = trailTarget;
                     beActive = true;
                     changed = true;
@@ -1153,6 +1321,12 @@ export default function App() {
               const activeCtros = ord.remainingContracts || ord.contracts;
               const fin = points * 0.2 * activeCtros + (ord.partialFinancial || 0);
               const isPyr = ord.role === 'PYRAMID';
+              // TP da pirâmide batido → liberar a proteção da ordem mãe no breakeven
+              const protectMainOnBE =
+                isPyr && isPyramidMode && config.moveMainToBreakevenOnPyramidTp === true;
+              if (protectMainOnBE && ord.type) {
+                breakevenMainDirs.push(ord.type);
+              }
 
               const tpEvt = OrderAuditService.createEvent(
                 'TAKE_PROFIT_HIT',
@@ -1160,7 +1334,11 @@ export default function App() {
                   ? `TP da Pirâmide #${ord.pyramidLevel || 1} Atingido (+${points} pts)`
                   : `Take Profit Atingido (+${points} pts)`,
                 `Alvo alcançado e liquidado a ${ord.takeProfit} pts. Lucro: R$ ${fin.toFixed(2)}. ${
-                  isPyr ? 'A entrada principal continua aberta surfando a perna!' : ''
+                  isPyr
+                    ? protectMainOnBE
+                      ? 'Entrada principal segue surfando com o stop protegido no breakeven.'
+                      : 'A entrada principal continua aberta surfando a perna!'
+                    : ''
                 }`,
                 ord.takeProfit,
                 activeCtros
@@ -1171,7 +1349,11 @@ export default function App() {
                 type: ord.type,
                 title: isPyr ? `🎯 TP PIRÂMIDE (+${points} pts)!` : `🎯 TAKE PROFIT BATIDO (+${points} pts)!`,
                 description: `${isPyr ? `Ordem da pirâmide #${ord.pyramidLevel || 1}` : 'Operação'} liquidada com lucro de R$ ${fin.toFixed(2)}. ${
-                  isPyr ? 'Ordem mãe segue aberta surfando!' : ''
+                  isPyr
+                    ? config.moveMainToBreakevenOnPyramidTp
+                      ? 'Ordem mãe segue surfando com o stop protegido no breakeven!'
+                      : 'Ordem mãe segue aberta surfando!'
+                    : ''
                 }`,
                 timestamp: Date.now(),
               });
@@ -1249,6 +1431,53 @@ export default function App() {
           return ord;
         });
 
+        // 5. BREAKEVEN DA ORDEM MÃE (Pirâmide): a cada TP de pirâmide batido, o stop da mãe
+        // sobe/desce para a entrada + offset de taxas, travando o resultado da perna.
+        if (breakevenMainDirs.length > 0) {
+          const offset = config.breakevenOffsetPoints ?? 0;
+          const dirs = new Set(breakevenMainDirs);
+          updated = updated.map((ord) => {
+            if (ord.status !== 'OPEN' || ord.role !== 'MAIN' || !dirs.has(ord.type)) return ord;
+            const isBuy = ord.type === 'BUY';
+            const beSL = isBuy ? ord.entryPrice + offset : ord.entryPrice - offset;
+            const improves =
+              ord.stopLoss <= 0 || (isBuy ? beSL > ord.stopLoss : beSL < ord.stopLoss);
+            if (!improves || beSL <= 0) return ord;
+            changed = true;
+            const beEvt = OrderAuditService.createEvent(
+              'BREAKEVEN_MOVED',
+              `Ordem Mãe protegida no Breakeven (+${offset} pts)`,
+              `TP de uma pirâmide da direção ${isBuy ? 'COMPRA' : 'VENDA'} foi batido. Stop da entrada mãe movido para ${beSL} pts (entrada +${offset} pts de offset para taxas B3).`,
+              beSL,
+              ord.remainingContracts || ord.contracts
+            );
+
+            if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(
+                JSON.stringify({ action: 'ORDER_MODIFY_SL', ticket: ord.ticket, newSL: beSL })
+              );
+            }
+
+            return {
+              ...ord,
+              stopLoss: beSL,
+              isBreakevenActive: true,
+              auditTrail: ord.auditTrail ? [...ord.auditTrail, beEvt] : [beEvt],
+            };
+          });
+        }
+
+        // Aviso único da trava no tick (não repete para cada ordem liquidada na mesma vez)
+        if (dayClosedCount > 0) {
+          setLatestToast({
+            id: `dayclose-toast-${Date.now()}`,
+            type: 'INFO',
+            title: `🔒 TRAVA DE FIM DE PREGÃO (${SESSION_CLOSE_LOCK_LABEL})`,
+            description: `${dayClosedCount} ordem(ns) zerada(s) a mercado a ${tick.price.toLocaleString('pt-BR')} pts. O robô não abre operação nova até o próximo pregão.`,
+            timestamp: Date.now(),
+          });
+        }
+
         return changed ? updated : prevOrders;
       });
     },
@@ -1276,6 +1505,14 @@ export default function App() {
       wsRef.current = socket;
 
       socket.onopen = () => {
+        // Handshake de segurança: a ponte não entrega tick, nem saldo, nem aceita ordem de
+        // quem não provar o token no primeiro frame. Sem isso, QUALQUER dispositivo da rede
+        // (ou site aberto no navegador) operaria a conta logada no terminal.
+        try {
+          socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
+        } catch {
+          // socket fechado no interim: o onclose/onerror cuida do estado
+        }
         setMt5State({
           status: 'CONNECTED',
           brokerCompany: 'MetaTrader 5 Live Bridge',
@@ -1285,21 +1522,86 @@ export default function App() {
           id: `mt5-conn-${Date.now()}`,
           type: 'BUY',
           title: 'METATRADER 5 CONECTADO COM SUCESSO',
-          description: `Ponte ativa em ${wsUrl}. Recebendo ticks reais e pronto para enviar ordens.`,
+          description: `Ponte ativa em ${wsUrl}. Apresentando o token da ponte...`,
           timestamp: Date.now(),
         });
       };
 
+      // esta conexão respondeu ao handshake AUTH? se não, é script antigo (modo legado)
+      let authResultSeen = false;
+
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          if (payload.type === 'ACCOUNT_INFO') {
+          if (payload.type === 'AUTH_RESULT') {
+            authResultSeen = true;
+            const ok = Boolean(payload.data?.ok);
+            const armed = Boolean(payload.data?.armed);
+            const requireToken = Boolean(payload.data?.requireToken);
+            setMt5State((prev) => ({ ...prev, bridgeAuthOk: ok, bridgeArmed: armed, bridgeLegacy: !requireToken }));
+            if (!ok) {
+              setLatestToast({
+                id: `mt5-auth-${Date.now()}`,
+                type: 'SELL',
+                title: '🔒 PONTE RECUSOU O TOKEN',
+                description: 'O script .py do PC do MT5 tem um token diferente deste navegador. Gere um token novo em Ajustes > Segurança da Ponte e baixe o script de novo.',
+                timestamp: Date.now(),
+              });
+              if (wsRef.current) wsRef.current.close();
+              setMt5State({ status: 'DISCONNECTED' });
+              setIsSimulating(true);
+              return;
+            }
+            setLatestToast({
+              id: `mt5-auth-${Date.now()}`,
+              type: armed ? 'BUY' : 'INFO',
+              title: armed ? '🔓 PONTE AUTENTICADA E ARMADA' : '🔒 PONTE AUTENTICADA (EM SEGURO)',
+              description: requireToken
+                ? armed
+                  ? `Token aceito. Tetos da ponte: ${payload.data?.maxContractsPerOrder ?? '?'} ctros por ordem e ${payload.data?.maxOrdersPerMinute ?? '?'} entradas por minuto.`
+                  : 'Token aceito, mas o Robô está desligado: a ponte recusa qualquer ordem de ENTRADA até você ligar o robô.'
+                : 'O script atual não exige token: ele aceita ordem de qualquer dispositivo da rede. Baixe o script novo em Ajustes > Segurança da Ponte.',
+              timestamp: Date.now(),
+            });
+          } else if (payload.type === 'ACCOUNT_INFO') {
+            // script antigo nunca manda AUTH_RESULT: o ACCOUNT_INFO antes denuncia a ponte legado
+            if (!authResultSeen) {
+              setLatestToast({
+                id: `mt5-legacy-${Date.now()}`,
+                type: 'INFO',
+                title: '⚠️ PONTE SEM AUTENTICAÇÃO (SCRIPT ANTIGO)',
+                description: 'Este script .py não exige token: qualquer aparelho da rede pode operar sua conta. Baixe o script novo (Ajustes > Segurança da Ponte) e rode no lugar do antigo.',
+                timestamp: Date.now(),
+              });
+            }
             setMt5State((prev) => ({
               ...prev,
               accountLogin: payload.data.login,
               brokerCompany: payload.data.broker,
               balance: payload.data.balance,
+              bridgeArmed: payload.data.armed ?? prev.bridgeArmed,
+              ...(!authResultSeen ? { bridgeAuthOk: true, bridgeLegacy: true } : {}),
             }));
+          } else if (payload.type === 'ARM_RESULT') {
+            const armed = Boolean(payload.data?.armed);
+            setMt5State((prev) => ({ ...prev, bridgeArmed: armed }));
+            setLatestToast({
+              id: `mt5-arm-${Date.now()}`,
+              type: armed ? 'BUY' : 'INFO',
+              title: armed ? '🟢 PONTE ARMADA' : '🔒 PONTE EM SEGURO',
+              description: armed
+                ? 'A ponte do MT5 liberou as ordens de entrada.'
+                : 'A ponte do MT5 vai recusar ordens de entrada. Saídas e "zerar terminal" seguem liberados.',
+              timestamp: Date.now(),
+            });
+          } else if (payload.type === 'RISK_REJECT') {
+            setLatestToast({
+              id: `mt5-reject-${Date.now()}`,
+              type: 'SELL',
+              title: '⛔ ORDEM RECUSADA PELA PONTE',
+              description: `${payload.data?.reason || 'motivo não informado'} — as travas de risco do script .py bloquearam esta ordem.`,
+              timestamp: Date.now(),
+            });
           } else if (payload.type === 'TICK') {
             handleIncomingTick(payload.data);
           } else if (payload.type === 'ORDER_RESULT') {
@@ -1335,13 +1637,24 @@ export default function App() {
       };
 
       socket.onclose = () => {
-        setMt5State({ status: 'DISCONNECTED' });
+        setMt5State((prev) => ({ ...prev, status: 'DISCONNECTED', bridgeAuthOk: undefined, bridgeArmed: undefined, bridgeLegacy: undefined }));
       };
     } catch {
       setMt5State({ status: 'ERROR', lastError: 'Falha ao instanciar WebSocket.' });
       setIsSimulating(true);
     }
-  }, [config.mt5Host, config.mt5Port, mt5State.status, handleIncomingTick]);
+  }, [config.mt5Host, config.mt5Port, config.active, mt5State.status, handleIncomingTick]);
+
+  // Robô ligado/desligado no app decide se a ponte pode ABRIR posição (arm/disarm).
+  // Saídas nunca dependem disso: você sempre pode zerar a conta pelo terminal.
+  useEffect(() => {
+    if (mt5State.status !== 'CONNECTED' || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    try {
+      wsRef.current.send(JSON.stringify({ action: config.active ? 'ARM' : 'DISARM' }));
+    } catch {
+      // conexão caindo: o onclose limpa o estado
+    }
+  }, [config.active, mt5State.status]);
 
   // Envio manual de ordem (boleta rápida da tela) com suporte à Pirâmide & Confluência
   const handleManualOrder = (type: 'BUY' | 'SELL') => {
@@ -1622,8 +1935,12 @@ export default function App() {
 
   // Persistência contínua do livro de auditoria intraday
   useEffect(() => {
+    // No replay que "opera" o livro muda a cada bloco: serializar centenas de ordens 25x por
+    // segundo travaria a tela — o fim da corrida grava tudo de uma vez (efeito re-executa ao
+    // virar isReplaying para false na mesma renderização)
+    if (isReplaying) return;
     OrderAuditService.saveIntradayOrders(orders);
-  }, [orders]);
+  }, [orders, isReplaying]);
 
   // Zerar e reiniciar auditoria para novo pregão
   const handleResetAudit = () => {
@@ -1640,16 +1957,18 @@ export default function App() {
 
   // Loop de simulação em tempo real (quando não conectado ao MT5)
   useEffect(() => {
-    if (!isSimulating || mt5State.status === 'CONNECTED') return;
+    if (!isSimulating || isReplaying || mt5State.status === 'CONNECTED') return;
 
-    const intervalMs = Math.max(30, Math.floor(450 / simulationSpeed));
+    // Ritmo alinhado ao gerador histórico do replay (2000ms por tick em 1x), para a tela
+    // principal obedecer o mesmo compasso dos testes de 1/3/5 dias
+    const intervalMs = Math.max(50, Math.floor(2000 / simulationSpeed));
     const timer = setInterval(() => {
       const nextTick = simulatorRef.current.generateNextTick();
       handleIncomingTick(nextTick);
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [isSimulating, simulationSpeed, mt5State.status, handleIncomingTick]);
+  }, [isSimulating, isReplaying, simulationSpeed, mt5State.status, handleIncomingTick]);
 
   // Troca manual da série do gráfico: o robô passa a operar nela (Opção A).
   // Posições abertas NÃO são liquidadas automaticamente — apenas avisamos o operador.
@@ -1674,68 +1993,117 @@ export default function App() {
     });
   };
 
-  // Replay de histórico sintético (1 a 5 dias úteis, 09:05–17:45) nos gráficos e
-  // no coletor de eficiência. NÃO toca ordens reais, auditoria nem MT5 — é um
-  // backtest 100% em memória com os mesmos motores de barra do terminal.
-  const [isReplaying, setIsReplaying] = useState<boolean>(false);
+  // Replay de histórico sintético (mínimo 1 dia útil, 09:05–17:45) nos gráficos e no
+  // coletor de eficiência. NÃO toca ordens reais, auditoria nem MT5 — é um backtest 100%
+  // em memória com os mesmos motores de barra do terminal.
+  // A corrida é PROGRESSIVA: começa na PRIMEIRA barra e desenha o período inteiro aos
+  // poucos, em vez de despejar tudo de uma vez. A velocidade (1x–10x) controla o compasso:
+  // 1x ≈ 1min45 para rodar o período (bem lento, dá para acompanhar cada bloco nascendo),
+  // 2x ≈ 55s, 5x ≈ 15s e 10x ≈ 5s (modo apresentação). O feed ao vivo em 1x continua no
+  // ritmo real de 1 tick a cada 2s (mesmo passo do histórico).
+  const [replayProgress, setReplayProgress] = useState<number>(0);
+  const replayAbortRef = useRef<(() => void) | null>(null);
+
+  // Chips de velocidade da tira de status: 1x → 2x → 5x → 10x → 1x
+  const SPEED_STEPS = [1, 2, 5, 10];
+  const handleCycleSpeed = () => {
+    setSimulationSpeed(SPEED_STEPS.find((s) => s > simulationSpeed) ?? SPEED_STEPS[0]);
+  };
+
   const handleReplayHistory = (days: number) => {
     if (isReplaying) return;
+    // Tempo mínimo de uma corrida: 1 dia inteiro (nunca "só alguns minutos")
+    const replayTargetDays = Math.max(1, Math.min(10, Math.round(days)));
+    setReplayDays(replayTargetDays);
+    // O replay derruba os gráficos e o coletor e começa um pregão DO ZERO: as ordens antigas
+    // ficariam flutuando sobre barras que não existem mais, então zeramos tudo junto (livro de
+    // auditoria + posições + PnL da sessão). Com o MT5 conectado NADA é apagado — lá a posição é
+    // real na corretora e o replay sintético não tem autoridade sobre ela.
+    const zeroedOrders = mt5State.status !== 'CONNECTED';
+    if (zeroedOrders) {
+      OrderAuditService.clearIntradayAudit();
+      setOrders([]);
+    }
+    // Modo "opera": o replay dispara estratégia/ordens/PnL na tela. Só vale em simulação —
+    // com a ponte do MT5 ativa o replay alimenta apenas o coletor, para jamais enviar ordem real
+    const operate = replayOperates && zeroedOrders;
+    if (replayOperates && !zeroedOrders) {
+      setLatestToast({
+        id: `replay-nooperate-${Date.now()}`,
+        type: 'INFO',
+        title: 'REPLAY NÃO VAI OPERAR: MT5 CONECTADO',
+        description: 'Com a ponte da corretora ativa o replay só alimenta o coletor de eficiência, para jamais disparar ordens reais. Desconecte o MT5 para usar o modo OPERA.',
+        timestamp: Date.now(),
+      });
+    }
     setIsReplaying(true);
-    // Cede um frame para a UI desenhar o estado "gerando..." antes de bloquear com o cálculo
-    setTimeout(() => {
-      try {
-        const engine = engineRef.current;
-        const rangeEng = rangeEngineRef.current;
-        const timeEng = timeEngineRef.current;
-        const ticks = generateHistoricalTicks(days, 128500);
-        if (ticks.length === 0) return;
+    setReplayProgress(0);
 
-        const tfShortLabel =
-          timeframeSec < 60
-            ? `${timeframeSec}s`
-            : timeframeSec < 3600
-            ? `${Math.round(timeframeSec / 60)}min`
-            : `${Math.round(timeframeSec / 3600)}h`;
-        const renkoScale = `${Math.max(1, Math.round(config.boxPoints / 5))}R`;
+    // Cede um frame para a UI mostrar "rodando 0%" antes de gerar os ticks (isso bloqueia um instante)
+    window.setTimeout(() => {
+      const engine = engineRef.current;
+      const rangeEng = rangeEngineRef.current;
+      const timeEng = timeEngineRef.current;
+      const ticks = generateHistoricalTicks(replayTargetDays, 128500);
+      if (ticks.length === 0) {
+        setIsReplaying(false);
+        return;
+      }
 
-        // Zera os motores e o coletor para o replay limpo (ordens reais preservadas)
-        engine.setBoxPoints(config.boxPoints);
-        engine.initialize(ticks[0].price, ticks[0].timestamp);
-        rangeEng.setRangePoints(rangePoints);
-        rangeEng.initialize(ticks[0].price, ticks[0].timestamp);
-        timeEng.setIntervalMs(timeframeSec * 1000);
-        timeEng.initialize(ticks[0].price, ticks[0].timestamp);
-        ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(ticks[0].price, ticks[0].timestamp));
-        seriesCollectorService.reset();
-        seriesCollectorService.beginBatch();
+      const tfShortLabel =
+        timeframeSec < 60
+          ? `${timeframeSec}s`
+          : timeframeSec < 3600
+          ? `${Math.round(timeframeSec / 60)}min`
+          : `${Math.round(timeframeSec / 3600)}h`;
+      const renkoScale = `${Math.max(1, Math.round(config.boxPoints / 5))}R`;
 
-        for (const t of ticks) {
-          const r = engine.processTick(t, config);
-          if (r.newBoxClosed && r.closedBox) {
-            seriesCollectorService.ingest('renko', r.closedBox, engine.getBoxes().slice(0, -1), config, renkoScale);
-          }
-          const rr = rangeEng.processTick(t);
-          if (rr.newBarClosed && rr.closedBox) {
-            annotateActiveBar(rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`);
-            seriesCollectorService.ingest('range', rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`);
-          }
-          const tr = timeEng.processTick(t);
-          if (tr.newBarClosed && tr.closedBox) {
-            annotateActiveBar(tr.closedBox, timeEng.getBoxes().slice(0, -1), config, `Tempo ${tfShortLabel}`);
-            seriesCollectorService.ingest('tempo', tr.closedBox, timeEng.getBoxes().slice(0, -1), config, tfShortLabel);
-          }
-          for (const alt of ALT_RENKO_SCALES) {
-            const altEng = altEnginesRef.current[alt.key];
-            const ar = altEng.processTick(t, config);
-            if (ar.newBoxClosed && ar.closedBox) {
-              seriesCollectorService.ingest(alt.key, ar.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`);
-            }
+      // Zera os motores e o coletor para o replay limpo (ordens reais preservadas)
+      engine.setBoxPoints(config.boxPoints);
+      engine.initialize(ticks[0].price, ticks[0].timestamp);
+      rangeEng.setRangePoints(rangePoints);
+      rangeEng.initialize(ticks[0].price, ticks[0].timestamp);
+      timeEng.setIntervalMs(timeframeSec * 1000);
+      timeEng.initialize(ticks[0].price, ticks[0].timestamp);
+      ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(ticks[0].price, ticks[0].timestamp));
+      seriesCollectorService.reset();
+      seriesCollectorService.beginBatch();
+      allTicksRef.current = [];
+
+      // Um tick atravessa os 6 contadores. No modo "OPERA" ele passa pelo MESMO caminho do
+      // feed ao vivo (estratégia, ordens, auditoria, PnL e coletor); no modo silencioso só
+      // alimenta os contadores do coletor.
+      const stepFor = (t: Tick) => {
+        if (operate) {
+          handleIncomingTick(t);
+          return;
+        }
+        const r = engine.processTick(t, config);
+        if (r.newBoxClosed && r.closedBox) {
+          seriesCollectorService.ingest('renko', r.closedBox, engine.getBoxes().slice(0, -1), config, renkoScale);
+        }
+        const rr = rangeEng.processTick(t);
+        if (rr.newBarClosed && rr.closedBox) {
+          annotateActiveBar(rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`);
+          seriesCollectorService.ingest('range', rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`);
+        }
+        const tr = timeEng.processTick(t);
+        if (tr.newBarClosed && tr.closedBox) {
+          annotateActiveBar(tr.closedBox, timeEng.getBoxes().slice(0, -1), config, `Tempo ${tfShortLabel}`);
+          seriesCollectorService.ingest('tempo', tr.closedBox, timeEng.getBoxes().slice(0, -1), config, tfShortLabel);
+        }
+        for (const alt of ALT_RENKO_SCALES) {
+          const altEng = altEnginesRef.current[alt.key];
+          const ar = altEng.processTick(t, config);
+          if (ar.newBoxClosed && ar.closedBox) {
+            seriesCollectorService.ingest(alt.key, ar.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`);
           }
         }
-        seriesCollectorService.endBatch();
+      };
 
-        // Atualiza o React de uma só vez (evita dezenas de milhares de renders)
-        const last = ticks[ticks.length - 1];
+      // Publica o estado até o cursor atual (o React pinta a tela a cada passo, ~25fps)
+      const publish = (upto: number) => {
+        const last = ticks[Math.max(0, upto - 1)];
         simulatorRef.current.setPrice(last.price);
         setCurrentPrice(last.price);
         setCvd(engine.getCvd());
@@ -1745,20 +2113,102 @@ export default function App() {
         setRangeCurrentBox(rangeEng.getCurrentBox());
         setTimeBoxes([...timeEng.getBoxes()]);
         setTimeCurrentBox(timeEng.getCurrentBox());
-        allTicksRef.current = ticks.slice(-50000);
+      };
 
+      const STEP_MS = 40; // ~25 atualizações por segundo em 1x
+      // 3000 passos de 40ms ≈ 1min45 de reprodução em 1x (seja 1 dia ou 5). Subir esse número
+      // deixa o 1x mais lento; o 10x continua rápido porque queima mais ticks por passo
+      const BASE_STEPS = 3000;
+      // Velocidade escolhida (vale também para o feed ao vivo): mais rápido = mais ticks por passo
+      const speed = Math.max(1, Math.min(10, Math.round(simulationSpeed)));
+      const stepMs = speed >= 8 ? 16 : speed >= 4 ? 25 : STEP_MS;
+      const chunk = Math.max(2, Math.ceil((ticks.length * speed) / BASE_STEPS));
+      let cursor = 0;
+      let iters = 0;
+      let timerId: number | null = null;
+      let done = false;
+
+      const finish = (aborted: boolean) => {
+        if (done) return;
+        done = true;
+        if (timerId !== null) clearTimeout(timerId);
+        replayAbortRef.current = null;
+        seriesCollectorService.endBatch();
+        if (!operate) allTicksRef.current = ticks.slice(-50000); // no modo opera o próprio feed monta o buffer
+        publish(cursor);
+        setReplayProgress(0);
+        setIsReplaying(false);
         setLatestToast({
           id: `replay-${Date.now()}`,
           type: 'INFO',
-          title: `REPLAY CONCLUÍDO: ${days} DIA(S) DE HISTÓRICO GERADO`,
-          description: `${ticks.length.toLocaleString('pt-BR')} ticks sintéticos (sessões 09:05–17:45) reproduzidos nos 6 contadores do coletor. Ordens reais não foram tocadas — abra a aba Comparativo para analisar os horários.`,
+          title: aborted
+            ? `REPLAY INTERROMPIDO: ${cursor.toLocaleString('pt-BR')} DE ${ticks.length.toLocaleString('pt-BR')} TICKS`
+            : `REPLAY CONCLUÍDO: ${replayTargetDays} DIA(S) DE HISTÓRICO`,
+          description: `${
+            aborted
+              ? `${cursor.toLocaleString('pt-BR')} ticks já reproduzidos ficaram no gráfico e no coletor; o feed ao vivo retoma do último preço.`
+              : `${ticks.length.toLocaleString('pt-BR')} ticks sintéticos (sessões 09:05–17:45) rodaram da primeira barra até o fim do período nos 6 contadores do coletor.`
+          } ${
+            zeroedOrders
+              ? ' Ordens abertas, auditoria e PnL da sessão foram zerados antes de começar (nada de real é enviado à corretora).'
+              : ' MT5 conectado: suas posições reais foram preservadas.'
+          }`,
           timestamp: Date.now(),
         });
-      } finally {
-        setIsReplaying(false);
-      }
+      };
+
+      const step = () => {
+        const upto = Math.min(ticks.length, cursor + chunk);
+        for (; cursor < upto; cursor += 1) stepFor(ticks[cursor]);
+        publish(upto);
+        // O buffer de ticks (contador da tela Simulador e repick das séries) sincroniza a cada
+        // ~10 passos — copiar dezenas de milhares de ticks 25x por segundo sairia caro.
+        // No modo OPERA quem preenche o buffer é o próprio handleIncomingTick.
+        if (!operate && (iters % 10 === 0 || upto >= ticks.length)) allTicksRef.current = ticks.slice(0, upto);
+        iters += 1;
+        setReplayProgress(Math.round((upto / ticks.length) * 100));
+        if (upto >= ticks.length) {
+          finish(false);
+          return;
+        }
+        timerId = window.setTimeout(step, stepMs);
+      };
+
+      replayAbortRef.current = () => finish(true);
+      step();
     }, 60);
   };
+
+  // Parar a reprodução no meio do caminho (o período já desenhado fica na tela e no coletor)
+  const handleStopReplay = () => {
+    replayAbortRef.current?.();
+  };
+
+  // Se a página fechar/HMR desmontar o App no meio do replay, encerra o timer restante
+  useEffect(() => () => { replayAbortRef.current?.(); }, []);
+
+  // ABRIU A PLATAFORMA → dispara o simulador sozinho com o replay (mínimo 1 dia), desenhando
+  // o período desde a primeira barra e zerando as ordens do pregão anterior. A única coisa que
+  // pula a corrida automática é o coletor já ter DADO REAL do MT5 neste dia — aí ninguém apaga
+  // uma coleta verdadeira; o ▶ da tira de status continua disponível para rodar manualmente.
+  const bootReplayDoneRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (bootReplayDoneRef.current) return;
+    bootReplayDoneRef.current = true;
+    if (seriesCollectorService.hasRealData()) {
+      setLatestToast({
+        id: `boot-replay-skipped-${Date.now()}`,
+        type: 'INFO',
+        title: 'REPLAY AUTOMÁTICO PULADO: DADO REAL DE HOJE',
+        description: 'O coletor já registrou ticks do MT5 neste dia, então a plataforma não zerou nada. Para rodar um dia sintético mesmo assim, use a setinha da tira de status (isso zera ordens e coletor).',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    const timer = setTimeout(() => handleReplayHistory(replayDays), 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Avançar 1 tick manual
   const handleStepTick = () => {
@@ -1883,28 +2333,92 @@ export default function App() {
         currentUser={currentUser}
         onUserChanged={(u) => setCurrentUser(u)}
         onOpenRenewModal={() => setShowRenewModal(true)}
-        eaProfileName={config.profileName}
         onOpenPdfModal={() => setShowPdfModal(true)}
         dadosPanelOpen={dadosPanelOpen}
         onToggleDadosPanel={handleToggleDadosPanel}
+        boxWindowOpen={boxWindowOpen}
+        onToggleBoxWindow={handleToggleBoxWindow}
       />
 
-      {/* Tira de Métricas e Status Rápido (scroll horizontal suave no celular sem quebrar) */}
-      <div className="flex items-center justify-between px-3 sm:px-6 py-1.5 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono overflow-x-auto no-scrollbar gap-3">
-        <div className="flex items-center gap-3 sm:gap-6 shrink-0">
-          <div className="flex items-center gap-1.5 sm:gap-2">
+      {/* Tira de Métricas e Status Rápido — a esquerda rola sozinha e o PnL fica SEMPRE à vista
+          (antes, com o replay na linha, o conteúdo estourava a largura e o PnL sumia da tela) */}
+      <div className="flex items-center gap-3 px-3 sm:px-6 py-1.5 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono">
+        <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1 overflow-x-auto no-scrollbar">
+          {/* ── REPLAY DO SIMULADOR (discreto, na cor apenas a setinha) ──
+              Roda o histórico desde a PRIMEIRA barra (mínimo 1 dia) desenhando o período
+              aos poucos; na abertura da plataforma já se dispara sozinho. Clicar de novo para
+              parar. O chip "Nx" é a velocidade do replay e do feed ao vivo. */}
+          <div
+            className="flex items-center gap-1 shrink-0 rounded-md border border-slate-800 bg-slate-900/70 px-1 py-0.5"
+            title="Simulador: reproduz o histórico desde a primeira barra (mínimo 1 dia cheio). Ao abrir a plataforma isso já dispara sozinho, sem precisar da aba Simulador."
+          >
+            <button
+              onClick={() => (isReplaying ? handleStopReplay() : handleReplayHistory(replayDays))}
+              className="flex items-center gap-1 rounded border border-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors whitespace-nowrap cursor-pointer hover:text-slate-100 hover:border-slate-600"
+              title={isReplaying ? `Parar a reprodução (${replayProgress}% rodado)` : `Rodar ${replayDays} dia(s) de simulador agora — zera as ordens e começa na primeira barra`}
+            >
+              {isReplaying ? (
+                <Square className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
+              ) : (
+                <Play className="w-3 h-3 text-amber-400 fill-amber-400" />
+              )}
+              <span className="tabular-nums">{isReplaying ? `${replayProgress}%` : ''}</span>
+            </button>
+            <button
+              onClick={handleCycleSpeed}
+              className="px-1.5 py-0.5 rounded text-[10px] font-semibold border border-slate-800 text-slate-400 transition-colors whitespace-nowrap cursor-pointer hover:text-slate-100 hover:border-slate-600 font-mono"
+              title="Velocidade do simulador (replay e feed ao vivo). Clique para alternar 1x → 2x → 5x → 10x"
+            >
+              {simulationSpeed}x
+            </button>
+            {/* Replay OPERA a estratégia (ordens/PnL na tela) x replay silencioso (só coletor) */}
+            <button
+              onClick={() => setReplayOperates((v) => !v)}
+              disabled={isReplaying}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
+                replayOperates
+                  ? 'border-slate-600 bg-slate-800 text-slate-100'
+                  : 'border-slate-800 text-slate-600 hover:text-slate-400'
+              } ${isReplaying ? 'opacity-40 cursor-wait' : ''}`}
+              title={
+                replayOperates
+                  ? 'Replay OPERA a estratégia: ao reproduzir o dia ele abre MAE/pirâmides, preenche a auditoria e move o PnL na tela (só em simulação — com o MT5 conectado jamais dispara ordem real). Clique para voltar ao modo silencioso, que alimenta só o coletor. Requer o Robô LIGADO.'
+                  : 'Replay silencioso: alimenta apenas o coletor de eficiência. Clique para o replay também operar a estratégia na tela (ordens, auditoria e PnL).'
+              }
+            >
+              OPERA
+            </button>
+            <div className="flex items-center gap-0.5">
+              {[1, 3, 5].map((d) => (
+                <button
+                  key={d}
+                  onClick={() => handleReplayHistory(d)}
+                  disabled={isReplaying}
+                  className={`px-1 py-0.5 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
+                    replayDays === d
+                      ? 'border-slate-700 bg-slate-800 text-slate-100'
+                      : 'border-transparent text-slate-500 hover:text-slate-300'
+                  } ${isReplaying ? 'opacity-40 cursor-wait' : ''}`}
+                  title={`Rodar ${d} dia(s) e lembrar essa escolha para a próxima abertura`}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <span className="text-slate-400">Ativo:</span>
             <span className="text-slate-100 font-bold">{config.symbol}</span>
             <span className="text-emerald-400 font-semibold">{currentPrice.toLocaleString('pt-BR')} pts</span>
           </div>
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <span className="text-slate-400">CVD:</span>
             <span className={`font-semibold ${cvd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
               {cvd > 0 ? '+' : ''}
               {cvd.toLocaleString('pt-BR')}
             </span>
           </div>
-          <div className="hidden md:flex items-center gap-2">
+          <div className="hidden md:flex items-center gap-2 shrink-0">
             <span className="text-slate-400">Origem:</span>
             <span className={mt5State.status === 'CONNECTED' ? 'text-emerald-400 font-bold' : 'text-neutral-400'}>
               {mt5State.status === 'CONNECTED'
@@ -1912,10 +2426,22 @@ export default function App() {
                 : 'Simulação B3'}
             </span>
           </div>
-          <div className="hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px]">
+          <div className="hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] shrink-0">
             <span className="text-slate-400">Modo:</span>
             <span className="text-emerald-400 font-bold">{config.accountMode}</span>
           </div>
+          {/* Estratégia do EA — saiu do menu de cima e agora vive aqui, clicável para abrir os ajustes */}
+          <button
+            onClick={() => setActiveTab('settings')}
+            className="hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 hover:border-slate-600 hover:bg-slate-800 text-[11px] text-slate-300 transition-colors cursor-pointer shrink-0"
+            title="Clique para abrir e personalizar a configuração do EA / estratégia"
+          >
+            <span className="text-slate-400">Estratégia:</span>
+            <span className="font-mono text-slate-200 font-medium truncate max-w-[180px]">
+              {config.profileName || (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' ? 'Pirâmide & Confluência' : 'Reteste (Pullback)')}
+            </span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          </button>
         </div>
 
         <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
@@ -1930,8 +2456,8 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex items-center gap-1.5 sm:gap-2" title="Resultado financeiro apenas das ordens fechadas NESTA abertura da página — zera a cada reinício (F5). O histórico completo continua no livro de Auditoria.">
-            <span className="text-slate-400 text-[10px] sm:text-xs">PnL Sessão:</span>
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0" title="PnL apenas das ordens fechadas NESTA abertura da página — o replay zera isso de propósito, pois começa um pregão limpo. O histórico completo fica no livro de Auditoria.">
+            <span className="text-slate-400 text-[10px] sm:text-xs">PnL:</span>
             <span
               className={`font-bold ${
                 stats.netFinancial >= 0 ? 'text-emerald-400' : 'text-rose-400'
@@ -1997,6 +2523,8 @@ export default function App() {
                   onTimeframeChange={setTimeframeSec}
                   dadosWindowOpen={dadosPanelOpen}
                   onDadosWindowClose={() => setDadosPanelOpen(false)}
+                  boxWindowOpen={boxWindowOpen}
+                  onBoxWindowClose={() => setBoxWindowOpen(false)}
                 />
               </div>
             )}
@@ -2099,6 +2627,13 @@ export default function App() {
                   mt5State={mt5State}
                   onToggleMT5Connect={toggleMT5Connect}
                   onOpenPdfModal={() => setShowPdfModal(true)}
+                  onConfigChange={(partial) => {
+                    setConfig((prev) => {
+                      const updated = { ...prev, ...partial, lastSavedTimestamp: Date.now() };
+                      EaConfigService.saveConfig(updated);
+                      return updated;
+                    });
+                  }}
                 />
               </div>
             )}
@@ -2262,6 +2797,15 @@ export default function App() {
                 <span>Dados</span>
               </button>
               <button
+                onClick={() => { handleToggleBoxWindow(); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  boxWindowOpen && activeTab === 'chart' ? 'border-emerald-600 bg-emerald-950/40 text-emerald-200 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+              >
+                <Box className="w-5 h-5 mb-1" />
+                <span>Box Renko</span>
+              </button>
+              <button
                 onClick={() => { setActiveTab('docs'); setMoreNavOpen(false); }}
                 className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
                   activeTab === 'docs' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
@@ -2343,36 +2887,41 @@ export default function App() {
         config={config}
       />
 
-      {/* Toast Flutuante de Disparo de Ordem / Conexão */}
+      {/* Toast Flutuante de Disparo de Ordem / Conexão — etiqueta discreta, uma linha fina */}
       {latestToast && (
-        <div className="fixed bottom-16 sm:bottom-6 right-3 sm:right-6 left-3 sm:left-auto z-50 max-w-sm sm:w-full bg-slate-900 border border-slate-700 rounded-lg p-3.5 shadow-2xl animate-in slide-in-from-bottom duration-300">
-          <div className="flex items-start gap-3">
-            <div
-              className={`p-2 rounded-lg shrink-0 ${
+        <div className="fixed bottom-14 sm:bottom-4 right-2 sm:right-4 left-2 sm:left-auto z-50 sm:max-w-[19rem] bg-slate-900/90 border border-slate-800 rounded-md px-2 py-1.5 shadow-lg backdrop-blur-sm animate-in slide-in-from-bottom-2 duration-200">
+          <div className="flex items-start gap-1.5">
+            <span
+              className={`shrink-0 mt-[1px] ${
                 latestToast.type === 'BUY'
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                  ? 'text-emerald-400/80'
                   : latestToast.type === 'INFO'
-                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                  : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                  ? 'text-amber-400/80'
+                  : 'text-rose-400/80'
               }`}
             >
               {latestToast.type === 'BUY' ? (
-                <ArrowUpRight className="w-5 h-5" />
+                <ArrowUpRight className="w-3 h-3" />
               ) : latestToast.type === 'INFO' ? (
-                <Activity className="w-5 h-5" />
+                <Activity className="w-3 h-3" />
               ) : (
-                <ArrowDownRight className="w-5 h-5" />
+                <ArrowDownRight className="w-3 h-3" />
+              )}
+            </span>
+            <div className="flex-1 min-w-0">
+              <span className="block text-[10px] font-semibold text-slate-300 leading-snug font-mono">
+                {latestToast.title}
+              </span>
+              {latestToast.description && (
+                <span className="block text-[10px] text-slate-500 leading-snug mt-0.5">
+                  {latestToast.description}
+                </span>
               )}
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-100">{latestToast.title}</span>
-                <span className="text-[10px] text-slate-500 font-mono">
-                  {mt5State.status === 'CONNECTED' ? 'MT5 Real' : 'Simulador'}
-                </span>
-              </div>
-              <p className="text-xs text-slate-300 mt-0.5 leading-snug">{latestToast.description}</p>
-            </div>
+            <span className="shrink-0 flex items-center gap-0.5 text-[9px] text-slate-600 font-mono">
+              <Clock className="w-2.5 h-2.5" />
+              {mt5State.status === 'CONNECTED' ? 'MT5' : 'SIM'}
+            </span>
           </div>
         </div>
       )}

@@ -289,7 +289,7 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
               <div>Servidor WebSocket Local: <strong>ws://{config.mt5Host || 'localhost'}:{config.mt5Port || 8765}</strong></div>
               <div>Biblioteca Nativa: <strong>MetaTrader5 (Python 3.10+) + websockets</strong></div>
               <div>Comando de Inicialização: <span className="text-emerald-400 print:text-emerald-800">python bot_mt5_convergencia_10r.py</span></div>
-              <div>Protocolo: Mensagens JSON bidirecionais com envio de ticks reais e despacho de ordens com SL/TP nativos.</div>
+              <div>Protocolo: JSON bidirecional com handshake AUTH (token compartilhado) antes de qualquer dado ou ordem, comando ARM/DISARM acompanhando o ligamento do robô e tetos de contratos por ordem e ordens por minuto impostos pela própria ponte.</div>
             </div>
           </div>
 

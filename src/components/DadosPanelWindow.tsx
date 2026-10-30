@@ -9,13 +9,16 @@ import { AppWindow, X } from 'lucide-react';
 interface DadosPanelWindowProps {
   title: string;
   onClose: () => void;
+  /** Posição inicial da janela (padrão: canto superior esquerdo 10,10) */
+  initialPos?: { x: number; y: number };
   children: React.ReactNode;
 }
 
-export const DadosPanelWindow: React.FC<DadosPanelWindowProps> = ({ title, onClose, children }) => {
+export const DadosPanelWindow: React.FC<DadosPanelWindowProps> = ({ title, onClose, initialPos, children }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ offX: number; offY: number } | null>(null);
-  const [pos, setPos] = useState({ x: 10, y: 10 });
+  const origin = initialPos ?? { x: 10, y: 10 };
+  const [pos, setPos] = useState(origin);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const frame = frameRef.current;
@@ -59,7 +62,7 @@ export const DadosPanelWindow: React.FC<DadosPanelWindowProps> = ({ title, onClo
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onDoubleClick={() => setPos({ x: 10, y: 10 })}
+        onDoubleClick={() => setPos(origin)}
         title="Arraste para mover a janela — duplo clique devolve ao canto"
       >
         <AppWindow className="w-3.5 h-3.5 text-emerald-400 shrink-0" />

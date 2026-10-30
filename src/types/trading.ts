@@ -44,7 +44,8 @@ export interface OrderAuditEvent {
     | 'STOP_LOSS_HIT'
     | 'MANUAL_CLOSED'
     | 'ORDER_EXPIRED'
-    | 'FLIP_REVERSAL_CLOSED';
+    | 'FLIP_REVERSAL_CLOSED'
+    | 'DAY_CLOSE_FORCED';
   title: string;
   details: string;
   price?: number;
@@ -66,7 +67,7 @@ export interface TradeOrder {
   exitPrice?: number;
   exitTimestamp?: number;
   exitTimeStr?: string;
-  exitReason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'BREAKEVEN' | 'TRAILING_STOP' | 'MANUAL' | 'EXPIRED_PULLBACK' | 'FLIP_REVERSAL';
+  exitReason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'BREAKEVEN' | 'TRAILING_STOP' | 'MANUAL' | 'EXPIRED_PULLBACK' | 'FLIP_REVERSAL' | 'DAY_CLOSE';
   source?: 'ROBOT_EA' | 'MANUAL' | 'MT5_LIVE';
   magicNumber?: number;
   contracts: number;
@@ -139,6 +140,13 @@ export interface AutomationConfig {
   maxDailyTrades: number; // Trava máxima de trades por dia
   mt5Host: string; // Ex: "localhost" ou "127.0.0.1"
   mt5Port: number; // Porta do WebSocket bridge Python (default 8765)
+
+  // Segurança da Ponte WebSocket (o script .py gerado exige os mesmos valores)
+  // Obs.: o token NÃO fica aqui — vive sozinho em localStorage (fluxo_bridge_token_v1),
+  // para você trocar de preset / importar JSON sem perder (nem vazar) o segredo da ponte.
+  mt5MaxContractsPerOrder: number; // teto de contratos por ordem que a ponte aceita
+  mt5MaxOrdersPerMinute: number; // teto de ordens de entrada por minuto que a ponte aceita
+
   dataSourceMode: 'SIMULATION' | 'MT5_LIVE';
   
   // Configurações de Conta Hedge e Identificação MT5
@@ -164,7 +172,10 @@ export interface AutomationConfig {
   // Modalidade de Estratégia Quantitativa
   strategyMode: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE'; // Reteste clássico ou Pirâmide com Confluência de Fluxo
   pyramidTpPoints: number; // Saída de TP para as ordens adicionais da pirâmide (padrão 50 pts)
+  pyramidSlPoints: number; // Stop fixo OPCIONAL das ordens da pirâmide (0 = sem stop, saída só por inversão; se > 0, mínimo válido 25 pts)
   pyramidContracts: number; // Contratos para cada nova ordem da pirâmide (padrão 1 ctro)
+  pyramidEntryType: 'MARKET_ON_CLOSE' | 'BOX_50_LIMIT' | 'BOX_OPEN_LIMIT'; // Entrada da Pirâmide: a mercado no fechamento, Limit a 50% do box ou Limit na entrada (abertura) do box (renko, range ou pontos)
+  moveMainToBreakevenOnPyramidTp: boolean; // Ao bater o TP de uma pirâmide, mover o SL da ordem mãe para o breakeven (+offset de taxas)
   holdMainUntilFlip: boolean; // Manter a entrada principal aberta surfando até a virada de fluxo
   closeAllOnFlowFlip: boolean; // Zerar a entrada principal e qualquer ordem da pirâmide aberta na virada do fluxo
   noFixedStopLoss: boolean; // Elimina stops fixos: saídas 100% governadas por inversão do mercado
@@ -191,6 +202,12 @@ export interface MT5ConnectionState {
   balance?: number;
   isHedgeAccount?: boolean;
   lastError?: string;
+  /** A ponte aceitou o token no handshake AUTH? undefined = ainda sem resposta */
+  bridgeAuthOk?: boolean;
+  /** Ponte liberada para ordens de ENTRADA (robô ligado no app). Saídas continuam livres. */
+  bridgeArmed?: boolean;
+  /** Ponte antiga, sem suporte a token (AUTH_TOKEN vazio no script baixado) */
+  bridgeLegacy?: boolean;
 }
 
 export interface TerminalStats {

@@ -1,7 +1,10 @@
 import { AutomationConfig } from '../types/trading';
+import { getBridgeToken } from './bridgeSecurity';
 
 export function generatePythonMT5Script(config: AutomationConfig): string {
   const isPyramidMode = config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE';
+  // O mesmo segredo que o app vai enviar no frame AUTH (criado e guardado no navegador)
+  const bridgeToken = getBridgeToken();
 
   return `"""
 ========================================================================================
@@ -12,20 +15,43 @@ Estratégia: ${isPyramidMode ? 'PIRÂMIDE EM CADA BOX VERDE/VERMELHO (TP 50p) + 
 Modo de Conta: ${config.accountMode}
 
 Regras da Estratégia de Pirâmide & Confluência:
-  1. Box Verde Fecha -> COMPRA. Se for o primeiro box, abre ORDEM MÃE (sem TP/SL fixos, surfa a tendência).
-  2. Próximos Boxes Verdes -> abre ordens de PIRÂMIDE com TP de +50 pontos cada.
-  3. Box Vermelho Fecha -> INVERSÃO TOTAL: encerra imediatamente a ordem mãe e todas as ordens de pirâmide abertas.
-     Em seguida, abre a ORDEM MÃE DE VENDA e empilha vendas nos próximos boxes vermelhos.
-  4. Nenhuma ordem tem Stop Loss em pontos fixo: o stop é 100% dinâmico pela INVERSÃO DO FLUXO/MERCADO!
+  1. Box fecha -> COMPRA/SELL. Se for o primeiro box da perna, abre ORDEM MÃE (sem TP fixo, surfa a tendência).
+  2. Próximos boxes da mesma cor -> abre ordens de PIRÂMIDE com TP de +${config.pyramidTpPoints || 50} pontos cada.
+  3. Entrada configurável (PYRAMID_ENTRY_TYPE): "MARKET_ON_CLOSE" (a mercado no fechamento),
+     "BOX_50_LIMIT" (limitada a 50% do box que fechou) ou "BOX_OPEN_LIMIT" (limitada na entrada/abertura do box).
+  4. Stop da pirâmide é OPCIONAL (PYRAMID_SL_POINTS): em 0, a saída é só pela inversão do fluxo.
+  5. MAIN_BREAKEVEN_ON_PYR_TP: a cada TP de pirâmide batido, o stop da ordem mãe sobe para a
+     entrada + ${config.breakevenOffsetPoints || 5} pontos (offset das taxas da B3), travando o resultado da perna.
+  6. Box na direção contrária -> INVERSÃO TOTAL: encerra a ordem mãe e todas as pirâmides abertas e
+     já inicia a nova perna na direção contrária.
 
 Instalação:
   pip install MetaTrader5 websockets
+
+ARQUITETURA (2 máquinas na mesma rede Wi-Fi):
+  1. Este script roda na máquina WINDOWS onde o terminal MT5 (XP B3) está instalado/logado.
+  2. A ponte escuta em TODA a rede local (porta 8765), então o navegador de qualquer
+     computador da rede pode conectar: no app, em Ajustes, use "MT5 Host" = IP do Windows
+     (descubra com: ipconfig no cmd) e clique em "Conectar MT5".
+  3. Na primeira execução, permita o acesso do Python no Firewall do Windows.
+  4. SEGURANÇA DA PONTE (porta ${config.mt5Port || 8765}): esta ponte mexe na conta que já
+     está logada no terminal, então ela NÃO entrega nada e NÃO aceita comando de ninguém
+     até chegar o primeiro frame {"action": "AUTH", "token": ...} com o token abaixo.
+     - Sem token correto: conexão fechada, nenhum tick e nenhum dado de conta vazado.
+     - Robô DESLIGADO no app = ponte "EM SEGURO": recusa ordem de ENTRADA (saídas,
+       parcial, stop e "zerar terminal" continuam liberados para você se proteger).
+     - Tetos de risco: ${config.mt5MaxContractsPerOrder || 2} contrato(s) por ordem e
+       ${config.mt5MaxOrdersPerMinute || 12} ordem(s) de entrada por minuto.
+     - Toda tentativa recusada aparece no console com o IP de origem.
+     Para trocar o token: app > Ajustes > Segurança da Ponte > gerar novo, e baixe o
+     script outra vez (app e este arquivo precisam estar com o MESMO token).
 ========================================================================================
 """
 
 import sys
 import time
 import json
+import secrets
 import asyncio
 from datetime import datetime, timezone
 import MetaTrader5 as mt5
@@ -41,10 +67,16 @@ MAX_POSITIONS = ${config.maxSimultaneousPositions || 10}
 
 # CONFIGURAÇÕES DA PIRÂMIDE & CONFLUÊNCIA
 PYRAMID_TP_POINTS = ${config.pyramidTpPoints || 50}          # TP de cada ordem da pirâmide (+50 pts)
+PYRAMID_SL_POINTS = ${config.pyramidSlPoints || 0}        # Stop opcional da pirâmide (0 = sem stop fixo, saída só por inversão)
 PYRAMID_CONTRACTS = ${config.pyramidContracts || 1}          # Lote das ordens de pirâmide
 MAIN_CONTRACTS = ${config.contracts || 1}                    # Lote da ordem mãe de surfe
 HOLD_MAIN_UNTIL_FLIP = ${config.holdMainUntilFlip !== false ? 'True' : 'False'}
 CLOSE_ALL_ON_FLIP = ${config.closeAllOnFlowFlip !== false ? 'True' : 'False'}
+
+# ENTRADA DA PIRÂMIDE (vale para mãe e pirâmides): "MARKET_ON_CLOSE", "BOX_50_LIMIT" ou "BOX_OPEN_LIMIT"
+PYRAMID_ENTRY_TYPE = "${config.pyramidEntryType || 'MARKET_ON_CLOSE'}"
+# Ao bater o TP de uma pirâmide, o stop da ordem mãe sobe para o breakeven (entrada + offset de taxas)
+MAIN_BREAKEVEN_ON_PYR_TP = ${config.moveMainToBreakevenOnPyramidTp ? 'True' : 'False'}
 
 # TIPO DE ENTRADA: "PULLBACK_ENTRY" ou "MARKET_ON_CLOSE"
 ENTRY_TRIGGER_TYPE = "${config.entryTriggerType || 'MARKET_ON_CLOSE'}"
@@ -85,8 +117,77 @@ START_TIME = "${config.tradingStartTime || '09:05'}"
 STOP_ENTRIES_TIME = "${config.tradingStopEntriesTime || '17:00'}"
 CLOSE_ALL_TIME = "${config.tradingCloseAllTime || '17:45'}"
 
-WS_HOST = "${config.mt5Host || 'localhost'}"
+# ==============================================================================
+# SEGURANÇA DA PONTE (LEIA ANTES DE LIGAR EM CONTA REAL)
+# ==============================================================================
+# Token compartilhado com o app. Ele nasce do localStorage do navegador que gerou este
+# arquivo (Ajustes > Segurança da Ponte). VAZIO = modo legado: qualquer dispositivo da
+# rede operaria esta conta, então o app avisa no login e no console abaixo.
+AUTH_TOKEN = "${bridgeToken}"
+REQUIRE_AUTH = len(AUTH_TOKEN) > 0
+
+# Tetos aceitos pela ponte (defesa contra ordem perdida, loop de bug ou app clonado)
+MAX_CONTRACTS_PER_ORDER = ${config.mt5MaxContractsPerOrder || 2}
+MAX_ORDERS_PER_MINUTE = ${config.mt5MaxOrdersPerMinute || 12}
+
+# Ações que ABREM posição exigem ponte armada (robô LIGADO no app). As de saída pedem
+# só autenticação, porque encerrar posição reduz risco e você precisa poder zerar.
+ENTRY_ACTIONS = {"ORDER_SEND"}
+TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_POSITIONS"}
+
+# A ponte escuta em 0.0.0.0 = todas as interfaces da rede local,
+# assim o app em OUTRO computador (ex: Mac) consegue conectar via Wi-Fi.
+# O que protege não é o endereço (é o token acima), mas vale restringir no
+# Firewall do Windows para aceitar a porta ${config.mt5Port || 8765} só do IP do computador do app.
+WS_HOST = "0.0.0.0"
 WS_PORT = ${config.mt5Port || 8765}
+
+# Estado por conexão: quem provou o token, se pode abrir posição e histórico de ordens
+CLIENT_STATES = {}
+
+
+def get_peer_ip(websocket):
+    try:
+        return websocket.remote_address[0]
+    except Exception:
+        return "origem desconhecida"
+
+
+def client_state(websocket):
+    state = CLIENT_STATES.get(websocket)
+    if state is None:
+        state = {
+            "authenticated": not REQUIRE_AUTH,
+            "armed": not REQUIRE_AUTH,
+            "order_times": [],
+        }
+        CLIENT_STATES[websocket] = state
+    return state
+
+
+async def send_json(websocket, payload):
+    await websocket.send(json.dumps(payload))
+
+
+def check_trade_allowed(state, data, action):
+    """Concentra as três travas (token, armado, tetos). Retorna (liberado, motivo)."""
+    if REQUIRE_AUTH and not state["authenticated"]:
+        return False, "conexão não autenticada (token ausente ou errado)"
+    if action in ENTRY_ACTIONS and not state["armed"]:
+        return False, "ponte EM SEGURO: ligue o Robô no app para liberar entradas"
+    if action == "ORDER_SEND":
+        try:
+            volume = float(data.get("contracts", 1) or 1)
+        except (TypeError, ValueError):
+            volume = 1.0
+        if volume > MAX_CONTRACTS_PER_ORDER:
+            return False, f"volume {volume:.0f} ctros acima do teto de {MAX_CONTRACTS_PER_ORDER}"
+        now_ts = time.time()
+        state["order_times"] = [t for t in state["order_times"] if now_ts - t < 60.0]
+        if len(state["order_times"]) >= MAX_ORDERS_PER_MINUTE:
+            return False, f"teto de {MAX_ORDERS_PER_MINUTE} ordens por minuto atingido"
+        state["order_times"].append(now_ts)
+    return True, ""
 
 
 # ==============================================================================
@@ -223,6 +324,8 @@ class MT5OrderManager:
         self.magic_number = magic_number
         self.daily_pnl = 0.0
         self.pending_orders = [] # Armazena ordens de pullback pendentes
+        self.main_tickets = {}   # ticket da ordem mãe -> direção ("BUY"/"SELL")
+        self.pyramid_tickets = {} # ticket da pirâmide -> direção (para detectar o TP batido)
 
     def get_filling_mode(self):
         sym_info = mt5.symbol_info(self.symbol)
@@ -320,6 +423,147 @@ class MT5OrderManager:
             "box_index": box["index"]
         })
         return True, ticket, limit_price
+
+    def calculate_pyramid_entry_level(self, signal, box):
+        """Nível da entrada da Pirâmide: fechamento a mercado, 50% do box ou abertura (entrada) do box"""
+        if PYRAMID_ENTRY_TYPE == "BOX_50_LIMIT":
+            return (box["open"] + box["close"]) / 2.0
+        if PYRAMID_ENTRY_TYPE == "BOX_OPEN_LIMIT":
+            return box["open"]
+        return box["close"]
+
+    def place_pyramid_limit_order(self, signal, box, comment="", volume=None, sl_points=0, tp_points=0):
+        """Posiciona a LIMITADA de entrada da Pirâmide (mãe ou sub) no nível do box"""
+        can_trade, _ = self.check_schedule()
+        if not can_trade:
+            return False, 0, 0.0
+
+        sym_info = mt5.symbol_info(self.symbol)
+        tick = mt5.symbol_info_tick(self.symbol)
+        if not sym_info or not tick:
+            return False, 0, 0.0
+
+        point = sym_info.point
+        use_volume = float(volume) if volume is not None else self.contracts
+        limit_price = self.calculate_pyramid_entry_level(signal, box)
+        market_price = tick.ask if signal == "BUY" else tick.bid
+
+        # BUY Limit precisa estar ABAIXO do mercado e SELL Limit ACIMA
+        if (signal == "BUY" and limit_price >= market_price) or (signal == "SELL" and limit_price <= market_price):
+            print(f"[LIMIT PIRÂMIDE] Nível {limit_price:.1f} já foi alcançado por {signal}, então a limitada não foi enviada.")
+            return False, 0, limit_price
+
+        order_type = mt5.ORDER_TYPE_BUY_LIMIT if signal == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
+        sl_price = 0.0
+        tp_price = 0.0
+        if sl_points > 0:
+            sl_price = limit_price - (sl_points * point) if signal == "BUY" else limit_price + (sl_points * point)
+        if tp_points > 0:
+            tp_price = limit_price + (tp_points * point) if signal == "BUY" else limit_price - (tp_points * point)
+
+        order_tag = f"{ORDER_COMMENT} {comment}"[:31]
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": self.symbol,
+            "volume": use_volume,
+            "type": order_type,
+            "price": limit_price,
+            "sl": sl_price,
+            "tp": tp_price,
+            "deviation": 20,
+            "magic": self.magic_number,
+            "comment": order_tag,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": self.get_filling_mode(),
+        }
+
+        nivel = "entrada do box" if PYRAMID_ENTRY_TYPE == "BOX_OPEN_LIMIT" else "50% do box"
+        print(f"⏳ [LIMIT PIRÂMIDE] {signal} {use_volume} ctro(s) em {limit_price:.1f} ({nivel}) | TP: {tp_price:.1f} | SL: {sl_price:.1f}")
+        res = mt5.order_send(request)
+        if res.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"[ERRO MT5 LIMIT PIRÂMIDE] RetCode={res.retcode}, Desc={res.comment}")
+            return False, 0, limit_price
+
+        self.pending_orders.append({
+            "ticket": res.order,
+            "signal": signal,
+            "limit_price": limit_price,
+            "box_index": box["index"]
+        })
+        return True, res.order, limit_price
+
+    def place_websocket_limit_order(self, signal, limit_price, comment="", volume=None, sl_points=0, tp_points=0):
+        """Posiciona uma LIMITADA solicitada pelo Terminal Web no preço informado"""
+        can_trade, _ = self.check_schedule()
+        if not can_trade or limit_price <= 0:
+            return False, 0
+
+        sym_info = mt5.symbol_info(self.symbol)
+        if not sym_info:
+            return False, 0
+        point = sym_info.point
+        use_volume = float(volume) if volume is not None else self.contracts
+        order_type = mt5.ORDER_TYPE_BUY_LIMIT if signal == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
+        sl_price = 0.0
+        tp_price = 0.0
+        if sl_points > 0:
+            sl_price = limit_price - (sl_points * point) if signal == "BUY" else limit_price + (sl_points * point)
+        if tp_points > 0:
+            tp_price = limit_price + (tp_points * point) if signal == "BUY" else limit_price - (tp_points * point)
+
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": self.symbol,
+            "volume": use_volume,
+            "type": order_type,
+            "price": float(limit_price),
+            "sl": sl_price,
+            "tp": tp_price,
+            "deviation": 20,
+            "magic": self.magic_number,
+            "comment": f"{ORDER_COMMENT} {comment}"[:31],
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": self.get_filling_mode(),
+        }
+        res = mt5.order_send(request)
+        if res.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"⏳ [WEB LIMIT] {signal} {use_volume} ctro(s) posicionada em {limit_price:.1f} | TP: {tp_price:.1f} | SL: {sl_price:.1f} | Ticket #{res.order}")
+            return True, res.order
+        print(f"[ERRO MT5 WEB LIMIT] RetCode={res.retcode}, Desc={res.comment}")
+        return False, 0
+
+    def move_main_to_breakeven(self, direction):
+        """Move o SL da ordem mãe para a entrada + offset de taxas da B3"""
+        sym_info = mt5.symbol_info(self.symbol)
+        point = sym_info.point if sym_info else 1.0
+        offset = BREAKEVEN_OFFSET_POINTS * point
+        for ticket in list(self.main_tickets.keys()):
+            if self.main_tickets[ticket] != direction:
+                continue
+            positions = mt5.positions_get(ticket=ticket)
+            if not positions:
+                self.main_tickets.pop(ticket, None)
+                continue
+            pos = positions[0]
+            be_sl = pos.price_open + offset if direction == "BUY" else pos.price_open - offset
+            current_sl = pos.sl if pos.sl else 0.0
+            improves = current_sl <= 0 or (be_sl > current_sl if direction == "BUY" else be_sl < current_sl)
+            if not improves:
+                continue
+            self.modify_stop_loss(ticket, be_sl)
+
+    def watch_closed_pyramids(self):
+        """Detecta pirâmides que fecharam (TP batido) e protege a ordem mãe no breakeven"""
+        if not MAIN_BREAKEVEN_ON_PYR_TP or not self.pyramid_tickets:
+            return
+        positions = mt5.positions_get(symbol=self.symbol)
+        open_tickets = set(p.ticket for p in positions) if positions else set()
+        for ticket in list(self.pyramid_tickets.keys()):
+            if ticket in open_tickets:
+                continue
+            direction = self.pyramid_tickets.pop(ticket)
+            print(f"🎯 [TP DA PIRÂMIDE #{ticket} {direction}] Movendo ordem mãe para o breakeven...")
+            self.move_main_to_breakeven(direction)
 
     def check_and_clean_expired_pending(self, current_box_index):
         """Cancela ordens pendentes se o preço continuou andando sem voltar"""
@@ -426,7 +670,20 @@ class MT5OrderManager:
                 pyramid_count += 1
 
         if not has_main_order:
-            # Abre a ORDEM MÃE (SURFE)
+            # Abre a ORDEM MÃE (SURFE) — a mercado ou Limit no nível do box, conforme PYRAMID_ENTRY_TYPE
+            if PYRAMID_ENTRY_TYPE != "MARKET_ON_CLOSE":
+                success, ticket, placed = self.place_pyramid_limit_order(
+                    current_dir,
+                    box,
+                    comment=f"MAE_{box['index']}",
+                    volume=MAIN_CONTRACTS,
+                    sl_points=0,
+                    tp_points=0
+                )
+                if success:
+                    self.main_tickets[ticket] = current_dir
+                return success, ticket, "MAIN"
+
             print(f"🟢 [ABRINDO ORDEM MÃE] {current_dir} {MAIN_CONTRACTS} ctro(s) no Box #{box['index']} | Sem TP fixo | Stop por inversão")
             success, ticket = self.execute_market_order(
                 order_type=current_dir,
@@ -435,18 +692,37 @@ class MT5OrderManager:
                 sl_points=0,
                 tp_points=0
             )
+            if success:
+                self.main_tickets[ticket] = current_dir
             return success, ticket, "MAIN"
         else:
-            # Já temos ordem mãe: abre ordem de PIRÂMIDE com TP de +50 pontos
+            # Já temos ordem mãe: abre ordem de PIRÂMIDE com TP configurado (e stop opcional se PYRAMID_SL_POINTS > 0)
             pyramid_num = pyramid_count + 1
-            print(f"🔺 [ABRINDO PIRÂMIDE #{pyramid_num}] {current_dir} {PYRAMID_CONTRACTS} ctro(s) no Box #{box['index']} | TP: +{PYRAMID_TP_POINTS} pts")
+            sl_info = f" | SL: -{PYRAMID_SL_POINTS} pts" if PYRAMID_SL_POINTS > 0 else " | sem stop fixo (saída por inversão)"
+            entry_info = "a mercado no fechamento" if PYRAMID_ENTRY_TYPE == "MARKET_ON_CLOSE" else ("Limit na entrada do box" if PYRAMID_ENTRY_TYPE == "BOX_OPEN_LIMIT" else "Limit a 50% do box")
+            print(f"🔺 [ABRINDO PIRÂMIDE #{pyramid_num}] {current_dir} {PYRAMID_CONTRACTS} ctro(s) no Box #{box['index']} | {entry_info} | TP: +{PYRAMID_TP_POINTS} pts{sl_info}")
+            if PYRAMID_ENTRY_TYPE != "MARKET_ON_CLOSE":
+                success, ticket, placed = self.place_pyramid_limit_order(
+                    current_dir,
+                    box,
+                    comment=f"PIR_{pyramid_num}_{box['index']}",
+                    volume=PYRAMID_CONTRACTS,
+                    sl_points=PYRAMID_SL_POINTS,
+                    tp_points=PYRAMID_TP_POINTS
+                )
+                if success:
+                    self.pyramid_tickets[ticket] = current_dir
+                return success, ticket, "PYRAMID"
+
             success, ticket = self.execute_market_order(
                 order_type=current_dir,
                 comment=f"PIR_{pyramid_num}_{box['index']}",
                 volume=PYRAMID_CONTRACTS,
-                sl_points=0,
+                sl_points=PYRAMID_SL_POINTS,
                 tp_points=PYRAMID_TP_POINTS
             )
+            if success:
+                self.pyramid_tickets[ticket] = current_dir
             return success, ticket, "PYRAMID"
 
     def close_partial_position(self, ticket, partial_volume, new_sl=None):
@@ -545,10 +821,11 @@ CONNECTED_CLIENTS = set()
 ORDER_MANAGER = None
 RENKO_ENGINE = None
 
-async def ws_handler(websocket):
-    CONNECTED_CLIENTS.add(websocket)
+async def send_account_info(websocket):
+    """Só é chamada depois de a conexão provar o token (ou no modo legado)."""
     acc = mt5.account_info()
-    init_msg = {
+    state = client_state(websocket)
+    await send_json(websocket, {
         "type": "ACCOUNT_INFO",
         "data": {
             "login": acc.login if acc else 0,
@@ -557,27 +834,113 @@ async def ws_handler(websocket):
             "entryTriggerType": ENTRY_TRIGGER_TYPE,
             "pullbackTarget": PULLBACK_TARGET,
             "partialExit": ENABLE_PARTIAL_EXIT,
-            "trailingStop": TRAILING_STOP
+            "trailingStop": TRAILING_STOP,
+            "requireAuth": REQUIRE_AUTH,
+            "armed": state["armed"],
+            "maxContractsPerOrder": MAX_CONTRACTS_PER_ORDER,
+            "maxOrdersPerMinute": MAX_ORDERS_PER_MINUTE
         }
-    }
-    await websocket.send(json.dumps(init_msg))
+    })
+
+async def ws_handler(websocket):
+    peer = get_peer_ip(websocket)
+    CONNECTED_CLIENTS.add(websocket)
+    state = client_state(websocket)
+
+    if REQUIRE_AUTH:
+        print(f" 🔌 {peer} conectou — aguardando AUTH com o token antes de entregar qualquer dado")
+    else:
+        print(" ⚠️  AUTH_TOKEN está VAZIO: modo legado, qualquer dispositivo da rede opera esta conta.")
+        print("     Abra o app em Ajustes > Segurança da Ponte, gere um token e baixe o script de novo.")
+        await send_account_info(websocket)
 
     try:
         async for message in websocket:
-            data = json.loads(message)
+            try:
+                data = json.loads(message)
+            except json.JSONDecodeError:
+                continue
             action = data.get("action")
-            if action == "ORDER_SEND":
-                ORDER_MANAGER.execute_market_order(data.get("type", "BUY"))
-            elif action == "ORDER_PARTIAL_CLOSE":
-                ORDER_MANAGER.close_partial_position(data.get("ticket"), data.get("partialVolume"), data.get("newSL"))
-            elif action == "ORDER_MODIFY_SL":
-                ORDER_MANAGER.modify_stop_loss(data.get("ticket"), data.get("newSL"))
-            elif action == "CLOSE_POSITIONS":
-                ORDER_MANAGER.close_all_positions()
+
+            if action == "AUTH":
+                provided = str(data.get("token") or "")
+                matches = bool(AUTH_TOKEN) and secrets.compare_digest(provided, AUTH_TOKEN)
+                wants_armed = bool(data.get("armed", False))
+                if REQUIRE_AUTH:
+                    state["authenticated"] = matches
+                    state["armed"] = matches and wants_armed
+                else:
+                    state["authenticated"] = True
+                    state["armed"] = wants_armed
+                await send_json(websocket, {
+                    "type": "AUTH_RESULT",
+                    "data": {
+                        "ok": state["authenticated"],
+                        "requireToken": REQUIRE_AUTH,
+                        "armed": state["armed"],
+                        "maxContractsPerOrder": MAX_CONTRACTS_PER_ORDER,
+                        "maxOrdersPerMinute": MAX_ORDERS_PER_MINUTE
+                    }
+                })
+                if state["authenticated"]:
+                    await send_account_info(websocket)
+                    print(f" 🔑 AUTH OK de {peer} — ponte {'ARMADA (entradas liberadas)' if state['armed'] else 'EM SEGURO (sem entradas)'}")
+                else:
+                    print(f" ⛔ AUTH RECUSADO de {peer} — token errado. Nenhum dado entregue.")
+                    await websocket.close(code=4001, reason="token invalido")
+                continue
+
+            if action in ("ARM", "DISARM"):
+                if REQUIRE_AUTH and not state["authenticated"]:
+                    print(f" ⛔ {action} de {peer} sem autenticação — ignorado")
+                    continue
+                state["armed"] = action == "ARM"
+                await send_json(websocket, {"type": "ARM_RESULT", "data": {"armed": state["armed"]}})
+                print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if state['armed'] else '🔒 PONTE EM SEGURO: nenhuma entrada nova'} — {peer}")
+                continue
+
+            if action in TRADE_ACTIONS:
+                allowed, reason = check_trade_allowed(state, data, action)
+                if not allowed:
+                    print(f" ⛔ ORDEM REJEITADA de {peer} ({action}): {reason}")
+                    await send_json(websocket, {
+                        "type": "RISK_REJECT",
+                        "data": {
+                            "action": action,
+                            "reason": reason,
+                            "comment": data.get("comment", "")
+                        }
+                    })
+                    continue
+                if action == "ORDER_SEND":
+                    if data.get("isLimit"):
+                        ORDER_MANAGER.place_websocket_limit_order(
+                            data.get("type", "BUY"),
+                            float(data.get("limitPrice") or 0),
+                            data.get("comment", "WEB_LIMIT"),
+                            data.get("contracts", 1),
+                            data.get("sl", 0) or 0,
+                            data.get("tp", 0) or 0
+                        )
+                    else:
+                        ORDER_MANAGER.execute_market_order(
+                            data.get("type", "BUY"),
+                            comment=data.get("comment", "WEB_ORDER"),
+                            volume=data.get("contracts", 1),
+                            sl_points=data.get("sl", 0) or 0,
+                            tp_points=data.get("tp", 0) or 0
+                        )
+                elif action == "ORDER_PARTIAL_CLOSE":
+                    ORDER_MANAGER.close_partial_position(data.get("ticket"), data.get("partialVolume"), data.get("newSL"))
+                elif action == "ORDER_MODIFY_SL":
+                    ORDER_MANAGER.modify_stop_loss(data.get("ticket"), data.get("newSL"))
+                elif action == "CLOSE_POSITIONS":
+                    ORDER_MANAGER.close_all_positions()
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
-        CONNECTED_CLIENTS.remove(websocket)
+        CONNECTED_CLIENTS.discard(websocket)
+        CLIENT_STATES.pop(websocket, None)
 
 async def broadcast_to_web(msg_dict):
     if not CONNECTED_CLIENTS:
@@ -585,12 +948,17 @@ async def broadcast_to_web(msg_dict):
     msg_str = json.dumps(msg_dict)
     disconnected = set()
     for client in CONNECTED_CLIENTS:
+        state = CLIENT_STATES.get(client)
+        # conexão sem token não recebe tick, nem book, nada
+        if REQUIRE_AUTH and (state is None or not state["authenticated"]):
+            continue
         try:
             await client.send(msg_str)
         except Exception:
             disconnected.add(client)
     for d in disconnected:
         CONNECTED_CLIENTS.discard(d)
+        CLIENT_STATES.pop(d, None)
 
 async def mt5_stream_loop():
     last_tick_time_msc = 0
@@ -632,8 +1000,10 @@ async def mt5_stream_loop():
                     print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box 10R #{new_box['index']}: {new_box['direction']} | Abertura: {new_box['open']} -> Fech: {new_box['close']}")
                     await broadcast_to_web({"type": "BOX_CLOSED", "data": new_box})
 
-                    # Limpa ordens de pullback antigas que expiraram
+                    # Limpa ordens de pullback/limit antigas que expiraram
                     ORDER_MANAGER.check_and_clean_expired_pending(new_box["index"])
+                    # Se alguma pirâmide fechou no TP, protege a ordem mãe no breakeven
+                    ORDER_MANAGER.watch_closed_pyramids()
 
                     # GATILHO DE CONVERGÊNCIA:
                     if signal:
@@ -681,7 +1051,7 @@ async def main():
     ORDER_MANAGER = MT5OrderManager(symbol=SYMBOL, contracts=CONTRACTS, magic_number=MAGIC_NUMBER)
 
     server = await websockets.serve(ws_handler, WS_HOST, WS_PORT)
-    print(f" Servidor WebSocket ativo em ws://{WS_HOST}:{WS_PORT}")
+    print(f" Servidor WebSocket ativo em toda a rede local na porta {WS_PORT} — no app (outro PC da rede) use MT5 Host = IP desta maquina (veja ipconfig)")
     try:
         await asyncio.gather(server.wait_closed(), mt5_stream_loop())
     except KeyboardInterrupt:

@@ -19,6 +19,7 @@ import {
   BarChart2,
   Cpu,
   AppWindow,
+  Box,
   Settings,
 } from 'lucide-react';
 import { MT5ConnectionState } from '../types/trading';
@@ -41,7 +42,8 @@ interface HeaderProps {
   currentUser: UserProfile;
   onUserChanged: (user: UserProfile) => void;
   onOpenRenewModal: () => void;
-  eaProfileName?: string;
+  boxWindowOpen: boolean;
+  onToggleBoxWindow: () => void;
   onOpenPdfModal?: () => void;
   // Janela flutuante de controles do painel Renko (atalho "Dados")
   dadosPanelOpen: boolean;
@@ -92,7 +94,7 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
       <button
         onClick={() => setOpen((v) => !v)}
         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-          groupActive ? 'bg-slate-800 text-slate-50 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+          groupActive ? 'bg-slate-800/70 text-slate-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
         }`}
       >
         {GroupIcon && <GroupIcon className={`w-3.5 h-3.5 ${groupActive ? 'text-emerald-400' : 'text-slate-500'}`} />}
@@ -153,10 +155,11 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   onUserChanged,
   onOpenRenewModal,
-  eaProfileName,
   onOpenPdfModal,
   dadosPanelOpen,
   onToggleDadosPanel,
+  boxWindowOpen,
+  onToggleBoxWindow,
 }) => {
   const chartItems: MenuItem[] = [
     { tab: 'chart', label: 'Terminal & Gráficos', icon: Activity },
@@ -187,20 +190,6 @@ export const Header: React.FC<HeaderProps> = ({
         <span className="text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
           Flow Quant MT5
         </span>
-
-        {/* Badge do Setup do EA Registrado */}
-        <button
-          onClick={() => setActiveTab('settings')}
-          className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/90 border border-slate-800 hover:border-slate-600 hover:bg-slate-800 text-[11px] text-slate-300 transition-colors cursor-pointer"
-          title="Clique para abrir e personalizar a configuração do EA"
-        >
-          <Sliders className="w-3 h-3 text-emerald-400" />
-          <span className="text-slate-400">EA:</span>
-          <span className="font-mono text-slate-200 font-medium truncate max-w-[130px]">
-            {eaProfileName || '10R Institucional'}
-          </span>
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-        </button>
       </div>
 
       {/* Zone 2: Menu superior agrupado — encostado no título, ocupando a linha livre */}
@@ -223,6 +212,21 @@ export const Header: React.FC<HeaderProps> = ({
           Dados
           <span className={`w-1.5 h-1.5 rounded-full ${dadosPanelOpen ? 'bg-emerald-400' : 'bg-slate-600'}`} />
         </button>
+
+        {/* Atalho da janela "Box" — card do Box Renko em janela flutuante mostrável/ocultável */}
+        <button
+          onClick={onToggleBoxWindow}
+          title="Abrir/fechar a janela do Box Renko (OHLC, fluxo Heikin-Ashi, CVD e convergência do box ativo)"
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+            boxWindowOpen
+              ? 'bg-emerald-500/15 text-emerald-300 font-semibold border border-emerald-500/40'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+          }`}
+        >
+          <Box className="w-3.5 h-3.5" />
+          Box Renko
+          <span className={`w-1.5 h-1.5 rounded-full ${boxWindowOpen ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+        </button>
       </nav>
 
       {/* Zone 3: Primary Actions and Subscription Status Badge (Far Right) */}
@@ -237,12 +241,23 @@ export const Header: React.FC<HeaderProps> = ({
               ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
               : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600'
           }`}
-          title="Conectar com o MetaTrader 5 via WebSocket local"
+          title={
+            mt5State.status !== 'CONNECTED'
+              ? 'Conectar com o MetaTrader 5 via WebSocket local'
+              : mt5State.bridgeLegacy
+              ? 'Ponte antiga (sem token): aceita ordem de qualquer aparelho da rede. Baixe o script novo em Ajustes > Segurança da Ponte.'
+              : mt5State.bridgeArmed === false
+              ? 'Ponte autenticada e EM SEGURO: com o Robô desligado ela recusa ordens de entrada (saídas e zeragem seguem liberadas).'
+              : 'Ponte autenticada e ARMADA: ordens de entrada liberadas, dentro dos tetos de contrato e de ordens por minuto.'
+          }
         >
           {mt5State.status === 'CONNECTED' ? (
             <>
               <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden xl:inline">MT5: CONECTADO</span>
+              <span className="hidden xl:inline">
+                MT5: CONECTADO
+                {mt5State.bridgeArmed === false ? ' · SEGURO' : mt5State.bridgeArmed ? ' · ARMADO' : ''}
+              </span>
             </>
           ) : mt5State.status === 'CONNECTING' ? (
             <>
@@ -271,9 +286,11 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="hidden md:inline">{robotActive ? 'Robô: LIGADO' : 'Robô: PAUSADO'}</span>
         </button>
 
-        {/* Toggle do Feed de Mercado */}
+        {/* Toggle do Feed de Mercado — retoma/pausa só o feed ao vivo (o replay de pelo
+            menos 1 dia roda na setinha da tira de status, progressivo, do primeiro bloco) */}
         <button
           onClick={() => setIsSimulating(!isSimulating)}
+          title="Ligar/desligar apenas o feed de ticks ao vivo. O período de histórico roda no replay da tira de status."
           className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg text-white transition-colors whitespace-nowrap cursor-pointer ${
             isSimulating ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-emerald-600 hover:bg-emerald-500'
           }`}
@@ -281,12 +298,12 @@ export const Header: React.FC<HeaderProps> = ({
           {isSimulating ? (
             <>
               <Pause className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Pausar</span>
+              <span className="hidden md:inline">Pausar feed</span>
             </>
           ) : (
             <>
               <Play className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Iniciar</span>
+              <span className="hidden md:inline">Retomar feed</span>
             </>
           )}
         </button>

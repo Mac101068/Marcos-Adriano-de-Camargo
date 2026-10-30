@@ -40,6 +40,9 @@ interface RenkoFlowChartProps {
   // Janela flutuante de controles (atalho "Dados" no menu)
   dadosWindowOpen?: boolean;
   onDadosWindowClose?: () => void;
+  // Janela flutuante do Box Renko (atalho "Box Renko" no menu)
+  boxWindowOpen?: boolean;
+  onBoxWindowClose?: () => void;
 }
 
 interface FlowHeikinAshi {
@@ -85,6 +88,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   onTimeframeChange,
   dadosWindowOpen = false,
   onDadosWindowClose,
+  boxWindowOpen = false,
+  onBoxWindowClose,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -116,6 +121,15 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     panY: number;
   }>({ x: 0, y: 0, scroll: 0, panY: 0 });
 
+  // Arrasto dos divisores do gráfico (preço↔fluxo e Heikin-Ashi↔histograma) com o dedo, em celulares
+  const touchDividerRef = useRef<{
+    mode: 'MAIN' | 'HIST' | null;
+    startY: number;
+    startValue: number;
+    usableH: number;
+    canvasH: number;
+  }>({ mode: null, startY: 0, startValue: 0.66, usableH: 100, canvasH: 100 });
+
   // Carrega escalas salvas pelo operador (se existirem)
   const initialScales = useMemo(() => {
     try {
@@ -128,12 +142,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           scaleFlow: Math.max(0.3, Math.min(4.0, Number(parsed.scaleFlow) || 1.0)),
           flowPaneRatio: Math.max(0.2, Math.min(0.5, Number(parsed.flowPaneRatio) || 0.33)),
           flowPanOffset: Number(parsed.flowPanOffset) || 0,
+          haHistSplit: Math.max(0.3, Math.min(0.85, Number(parsed.haHistSplit) || 0.66)),
         };
       }
     } catch (e) {
       // Ignora erro de storage
     }
-    return { scaleX: 1.0, scaleY: 1.0, scaleFlow: 1.0, flowPaneRatio: 0.33, flowPanOffset: 0 };
+    return { scaleX: 1.0, scaleY: 1.0, scaleFlow: 1.0, flowPaneRatio: 0.33, flowPanOffset: 0, haHistSplit: 0.66 };
   }, []);
 
   // =========================================================================
@@ -145,6 +160,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   const [scaleFlow, setScaleFlow] = useState<number>(initialScales.scaleFlow); // Zoom vertical do fluxo (0.25x a 4.0x)
   const [flowPanOffset, setFlowPanOffset] = useState<number>(initialScales.flowPanOffset || 0); // Deslocamento vertical do fluxo
   const [flowPaneRatio, setFlowPaneRatio] = useState<number>(initialScales.flowPaneRatio || 0.33); // Divisor: % de altura da janela de fluxo (0.18 a 0.55)
+  const [haHistSplit, setHaHistSplit] = useState<number>(initialScales.haHistSplit ?? 0.66); // Divisor interno: % da janela de fluxo para o Heikin-Ashi (0.30 a 0.85)
 
   const [visibleCount, setVisibleCount] = useState<number>(() =>
     typeof window !== 'undefined' && window.innerWidth < 640 ? 26 : 40
@@ -168,7 +184,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const [hoveredBox, setHoveredBox] = useState<RenkoBox | null>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [dragMode, setDragMode] = useState<'CHART' | 'Y_AXIS' | 'X_AXIS' | 'FLOW_AXIS' | 'DIVIDER' | null>(null);
+  const [dragMode, setDragMode] = useState<'CHART' | 'Y_AXIS' | 'X_AXIS' | 'FLOW_AXIS' | 'DIVIDER' | 'HA_HIST_DIVIDER' | null>(null);
   const [dragStartX, setDragStartX] = useState<number>(0);
   const [dragStartY, setDragStartY] = useState<number>(0);
   const [dragStartScroll, setDragStartScroll] = useState<number>(0);
@@ -178,6 +194,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   const [dragStartScaleFlow, setDragStartScaleFlow] = useState<number>(1.0);
   const [dragStartFlowPanOffset, setDragStartFlowPanOffset] = useState<number>(0);
   const [dragStartFlowRatio, setDragStartFlowRatio] = useState<number>(0.33);
+  const [dragStartHaHistSplit, setDragStartHaHistSplit] = useState<number>(0.66);
 
   // Controle do card flutuante em celulares
   const [isMobileDetailsOpen, setIsMobileDetailsOpen] = useState<boolean>(false);
@@ -213,12 +230,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           scaleFlow: Number(scaleFlow.toFixed(2)),
           flowPaneRatio: Number(flowPaneRatio.toFixed(3)),
           flowPanOffset: Number(flowPanOffset.toFixed(1)),
+          haHistSplit: Number(haHistSplit.toFixed(3)),
         })
       );
     } catch (e) {
       // Ignora
     }
-  }, [scaleX, scaleY, scaleFlow, flowPaneRatio, flowPanOffset]);
+  }, [scaleX, scaleY, scaleFlow, flowPaneRatio, flowPanOffset, haHistSplit]);
 
   // Salva preferência do modo de fluxo
   useEffect(() => {
@@ -326,8 +344,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.fillStyle = '#09090b';
     ctx.fillRect(0, 0, width, height);
 
-    // Divisor interativo de painel (arrastável)
-    ctx.strokeStyle = '#27272a';
+    // Divisor interativo de painel (arrastável) — mesmo acabamento do divisor do histograma
+    const mainDividerActive =
+      dragMode === 'DIVIDER' ||
+      (mousePos !== null && Math.abs(mousePos.y - pricePaneHeight) <= 7 && mousePos.x < chartWidth);
+
+    ctx.strokeStyle = mainDividerActive ? 'rgba(52, 211, 153, 0.65)' : '#27272a';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, pricePaneHeight);
@@ -335,24 +357,43 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.stroke();
 
     // Marcador central no divisor indicando que é redimensionável por arrasto
-    const handleW = isMobile ? 32 : 44;
-    const handleH = 4;
+    const handleW = isMobile ? 34 : 48;
+    const handleH = mainDividerActive ? 5 : 4;
     const handleX = chartWidth / 2 - handleW / 2;
     const handleY = pricePaneHeight - handleH / 2;
-    ctx.fillStyle = '#27272a';
+    ctx.fillStyle = mainDividerActive ? '#10b981' : '#27272a';
     ctx.beginPath();
-    ctx.roundRect(handleX, handleY, handleW, handleH, 2);
+    ctx.roundRect(handleX, handleY, handleW, handleH, 2.5);
     ctx.fill();
-    ctx.strokeStyle = '#52525b';
+    ctx.strokeStyle = mainDividerActive ? 'rgba(16, 185, 129, 0.8)' : '#52525b';
     ctx.lineWidth = 1;
     ctx.stroke();
 
     // 3 pontos no puxador
-    ctx.fillStyle = '#a1a1aa';
+    ctx.fillStyle = mainDividerActive ? '#ecfdf5' : '#a1a1aa';
     for (let d = -1; d <= 1; d++) {
       ctx.beginPath();
-      ctx.arc(chartWidth / 2 + d * (isMobile ? 6 : 8), pricePaneHeight, 1, 0, Math.PI * 2);
+      ctx.arc(chartWidth / 2 + d * (isMobile ? 7 : 10), pricePaneHeight, 1.1, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    // Etiquetas dos painéis, no mesmo padrão das subfaixas de fluxo
+    if (!isMobile) {
+      ctx.font = '8.5px "Plus Jakarta Sans", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#52525b';
+      const pricePaneLabel =
+        chartSeries === 'range' ? 'PREÇO · RANGE' : chartSeries === 'tempo' ? 'PREÇO · TEMPO' : 'PREÇO · RENKO';
+      ctx.fillText(pricePaneLabel, 4, pricePaneHeight - 10);
+      // No Heikin-Ashi a própria subfaixa já vem rotulada logo abaixo, então só rotula o
+      // painel de fluxo nos modos onde ele ocupa a janela inteira.
+      if (flowViewMode !== 'heikin_ashi') {
+        ctx.fillText(
+          flowViewMode === 'histogram' ? 'FLUXO · DELTA' : 'FLUXO · HÍBRIDO',
+          4,
+          pricePaneHeight + 14
+        );
+      }
     }
 
     // Eixo de preços lateral
@@ -633,9 +674,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
     // NOVO: no modo Heikin-Ashi, particiona o painel de fluxo em duas subfaixas:
     // candles Heikin-Ashi em cima + histograma de Delta embaixo, para decisão visual.
+    // A proporção é ajustável arrastando o divisor interno (haHistSplit).
     const haSplitHist = flowViewMode === 'heikin_ashi';
+    const clampedHaSplit = Math.max(0.3, Math.min(0.85, haHistSplit));
     const haBandTop = flowTopMargin;
-    const haBandHeight = haSplitHist ? usableFlowHeight * 0.66 : usableFlowHeight;
+    const haBandHeight = haSplitHist ? usableFlowHeight * clampedHaSplit : usableFlowHeight;
     const haBandBottom = haBandTop + haBandHeight;
     const histBandTop = haSplitHist ? haBandBottom + 12 : flowTopMargin;
     const histBandBottom = flowTopMargin + usableFlowHeight;
@@ -686,16 +729,16 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
       // Calcula haStep dinamicamente para garantir no máximo 1 linha a cada 24px da faixa do HA
       const maxHaTicks = Math.max(2, Math.floor(haBandHeight / 24));
-      const rawHaStep = Math.max(50, effectiveHaRange / maxHaTicks);
+      const rawHaStep = Math.max(1, effectiveHaRange / maxHaTicks);
 
-      // Arredonda para um passo limpo (50, 100, 250, 500, 1000, 2500, 5000, 10000, etc.)
+      // Arredonda para um passo limpo (1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, etc.)
       const pow10 = Math.pow(10, Math.floor(Math.log10(rawHaStep)));
       const rel = rawHaStep / pow10;
       let stepFactor = 1;
       if (rel > 5) stepFactor = 10;
       else if (rel > 2.2) stepFactor = 5;
       else if (rel > 1.2) stepFactor = 2.5;
-      const haStep = Math.max(50, Math.round(stepFactor * pow10));
+      const haStep = Math.max(1, Math.round(stepFactor * pow10));
 
       const startHaVal = Math.ceil(effectiveMinFlowHa / haStep) * haStep;
       ctx.font = isMobile ? '7.5px "JetBrains Mono", monospace' : '8.5px "JetBrains Mono", monospace';
@@ -703,7 +746,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       let lastDrawnFlowY = -999;
       for (let v = startHaVal; v <= effectiveMaxFlowHa; v += haStep) {
         const y = flowHaToY(v);
-        if (y >= pricePaneHeight + 14 && y <= height - 16) {
+        // Restrito à subfaixa do Heikin-Ashi: assim nenhuma grade invade o histograma
+        if (y >= haBandTop - 1 && y <= haBandBottom + 1) {
           // Evita colisão vertical com rótulo anterior ou com o badge do último valor
           if (Math.abs(y - lastDrawnFlowY) < 18) continue;
           if (lastHaY !== null && Math.abs(y - lastHaY) < 14) continue;
@@ -728,7 +772,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
       // Badge com o valor do último candle Heikin-Ashi na régua lateral
       if (lastHa && lastHaY !== null) {
-        if (lastHaY >= pricePaneHeight + 8 && lastHaY <= height - 12) {
+        if (lastHaY >= haBandTop && lastHaY <= haBandBottom) {
           const badgeFill =
             lastHa.state === 'UP' ? '#059669' : lastHa.state === 'DOWN' ? '#dc2626' : '#52525b';
           ctx.fillStyle = badgeFill;
@@ -828,13 +872,41 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // NOVO: SUBFAIXA DE HISTOGRAMA DE DELTA (abaixo do Heikin-Ashi no modo 'heikin_ashi')
     // =======================================================================
     if (haSplitHist && histBandHeight > 8) {
-      // Divisor sutil separando os candles HA do histograma
-      ctx.strokeStyle = '#27272a';
+      // Divisor ARRASTÁVEL entre os candles Heikin-Ashi e o histograma de Delta,
+      // repetindo o estilo do divisor principal (linha + alça central + 3 pontos).
+      const histDividerY = haBandBottom + 6;
+      const histDividerActive =
+        dragMode === 'HA_HIST_DIVIDER' ||
+        (mousePos !== null && Math.abs(mousePos.y - histDividerY) <= 7 && mousePos.x < chartWidth);
+
+      ctx.strokeStyle = histDividerActive ? 'rgba(52, 211, 153, 0.65)' : '#27272a';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(0, haBandBottom + 6);
-      ctx.lineTo(chartWidth, haBandBottom + 6);
+      ctx.moveTo(0, histDividerY);
+      ctx.lineTo(chartWidth, histDividerY);
       ctx.stroke();
+
+      const hHandleW = isMobile ? 34 : 48;
+      const hHandleH = histDividerActive ? 5 : 4;
+      ctx.fillStyle = histDividerActive ? '#10b981' : '#27272a';
+      ctx.beginPath();
+      ctx.roundRect(chartWidth / 2 - hHandleW / 2, histDividerY - hHandleH / 2, hHandleW, hHandleH, 2.5);
+      ctx.fill();
+      ctx.fillStyle = histDividerActive ? '#ecfdf5' : '#a1a1aa';
+      for (let d = -1; d <= 1; d++) {
+        ctx.beginPath();
+        ctx.arc(chartWidth / 2 + d * (isMobile ? 7 : 10), histDividerY, 1.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Etiqueta das subfaixas, para ficar claro o que é vela de fluxo e o que é histograma
+      if (!isMobile) {
+        ctx.font = '8.5px "Plus Jakarta Sans", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#52525b';
+        ctx.fillText('FLUXO · HEIKIN-ASHI', 4, haBandTop + 9);
+        ctx.fillText('HISTOGRAMA · DELTA', 4, histBandTop + 9);
+      }
 
       // Linha de zero do Delta
       ctx.strokeStyle = '#3f3f46';
@@ -844,6 +916,43 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.lineTo(chartWidth, histZeroY);
       ctx.stroke();
       ctx.setLineDash([]);
+
+      // ---- ESCALA NUMÉRICA DO DELTA (grade adaptativa + rótulos na régua direita) ----
+      const maxHistTicks = Math.max(2, Math.floor(histBandHeight / 22));
+      const rawHistStep = Math.max(1, (2 * effectiveMaxAbsDelta) / maxHistTicks);
+      const hPow = Math.pow(10, Math.floor(Math.log10(rawHistStep)));
+      const hRel = rawHistStep / hPow;
+      let hFactor = 1;
+      if (hRel > 5) hFactor = 10;
+      else if (hRel > 2) hFactor = 5;
+      else if (hRel > 1) hFactor = 2;
+      const histStep = Math.max(1, Math.round(hFactor * hPow));
+
+      ctx.font = isMobile ? '7px "JetBrains Mono"' : '8px "JetBrains Mono"';
+      ctx.textAlign = 'left';
+      let lastHistLblY = -999;
+      const histTickStart = -Math.ceil(effectiveMaxAbsDelta / histStep) * histStep;
+      for (let v = histTickStart; v <= effectiveMaxAbsDelta; v += histStep) {
+        const y = histDeltaToY(v);
+        if (y < histBandTop - 1 || y > histBandBottom + 1) continue;
+        if (Math.abs(y - lastHistLblY) < 14) continue;
+        const isZero = Math.abs(v) < 1;
+        if (!isZero) {
+          ctx.strokeStyle = 'rgba(39, 39, 42, 0.5)';
+          ctx.setLineDash([1, 4]);
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(chartWidth, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        ctx.fillStyle = isZero ? '#a1a1aa' : '#71717a';
+        const sign = v > 0 ? '+' : '';
+        const lbl =
+          Math.abs(v) >= 1000 ? `${sign}${(v / 1000).toFixed(1)}kΔ` : `${sign}${Math.round(v)}Δ`;
+        ctx.fillText(lbl, chartWidth + (isMobile ? 3 : 6), y + 3);
+        lastHistLblY = y;
+      }
 
       // Guias de limiar (+/-) para decisão visual de agressão forte
       const upThY = histDeltaToY(minDeltaThreshold);
@@ -866,12 +975,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.stroke();
         ctx.setLineDash([]);
       }
-
-      // Rótulos do eixo Δ na régua lateral direita
-      ctx.fillStyle = '#a1a1aa';
-      ctx.font = isMobile ? '8px "JetBrains Mono"' : '9px "JetBrains Mono"';
-      ctx.textAlign = 'left';
-      ctx.fillText('0Δ', chartWidth + (isMobile ? 3 : 6), histZeroY + 3);
 
       // Selo com o Delta ao vivo do último box (inclui o box em formação)
       const lastLiveBox = displayedBoxes[displayedBoxes.length - 1];
@@ -1509,6 +1612,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     scaleY,
     scaleFlow,
     flowPaneRatio,
+    haHistSplit,
     flowPanOffset,
     pricePanOffset,
     flowViewMode,
@@ -1524,6 +1628,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     partialPoints,
     partialContracts,
     trailingStop,
+    isDragging,
+    dragMode,
     chartSeries,
     renkoBoxPoints,
     rangePoints,
@@ -1599,22 +1705,50 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // =========================================================================
   // MANIPULAÇÃO DE MOUSE: DIVISOR, ESCALAS E EIXOS (PREÇO, TEMPO E FLUXO)
   // =========================================================================
+  /** Espelha o layout do canvas para hit-testing: onde fica cada divisor e a altura útil do fluxo. */
+  const getFlowDividerLayout = (canvasW: number, canvasH: number) => {
+    const isMobile = canvasW < 640;
+    const rightAxisWidth = isMobile ? 54 : 80;
+    const chartW = canvasW - rightAxisWidth;
+    const clampedRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
+    const flowPaneH = canvasH * clampedRatio;
+    const pricePaneH = canvasH - flowPaneH;
+    // Mesma conta do desenho: margem superior 12 + margem inferior 16
+    const usableFlowH = Math.max(40, flowPaneH - 12 - 16);
+    const clampedSplit = Math.max(0.3, Math.min(0.85, haHistSplit));
+    const haBandH = flowViewMode === 'heikin_ashi' ? usableFlowH * clampedSplit : usableFlowH;
+    return {
+      isMobile,
+      chartW,
+      flowPaneH,
+      pricePaneH,
+      usableFlowH,
+      haBandH,
+      // Divisor interno Heikin-Ashi ↔ histograma (só existe no modo Heikin-Ashi)
+      histDividerY: pricePaneH + 12 + haBandH + 6,
+    };
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const isMobile = rect.width < 640;
-    const rightAxisWidth = isMobile ? 54 : 80;
-    const chartW = rect.width - rightAxisWidth;
-    const clampedRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
-    const flowPaneH = rect.height * clampedRatio;
-    const pricePaneH = rect.height - flowPaneH;
+    const { chartW, pricePaneH, histDividerY } = getFlowDividerLayout(rect.width, rect.height);
 
     // 1. Clique no divisor entre o gráfico de preço e a janela de fluxo
     if (Math.abs(y - pricePaneH) <= 8 && x < chartW) {
       setDragMode('DIVIDER');
       setDragStartY(e.clientY);
       setDragStartFlowRatio(flowPaneRatio);
+      setIsDragging(true);
+      return;
+    }
+
+    // 1b. Clique no divisor interno: arrasta a altura do histograma de Delta
+    if (flowViewMode === 'heikin_ashi' && Math.abs(y - histDividerY) <= 8 && x < chartW) {
+      setDragMode('HA_HIST_DIVIDER');
+      setDragStartY(e.clientY);
+      setDragStartHaHistSplit(haHistSplit);
       setIsDragging(true);
       return;
     }
@@ -1678,6 +1812,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         // Arrastar para cima aumenta a altura do fluxo; arrastar para baixo reduz
         const newRatio = Math.max(0.18, Math.min(0.55, dragStartFlowRatio - deltaY / rect.height));
         setFlowPaneRatio(Number(newRatio.toFixed(3)));
+      } else if (dragMode === 'HA_HIST_DIVIDER') {
+        const { usableFlowH } = getFlowDividerLayout(rect.width, rect.height);
+        const deltaY = e.clientY - dragStartY;
+        // Arrastar para baixo aumenta o Heikin-Ashi; para cima aumenta o histograma
+        const newSplit = Math.max(0.3, Math.min(0.85, dragStartHaHistSplit + deltaY / usableFlowH));
+        setHaHistSplit(Number(newSplit.toFixed(3)));
       } else if (dragMode === 'FLOW_AXIS') {
         const deltaY = e.clientY - dragStartY;
         if (e.shiftKey) {
@@ -1721,6 +1861,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   };
 
   const handleMouseUp = () => {
+    touchDividerRef.current.mode = null;
     setIsDragging(false);
     setDragMode(null);
   };
@@ -1736,16 +1877,14 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const isMobile = rect.width < 640;
-    const rightAxisWidth = isMobile ? 54 : 80;
-    const chartW = rect.width - rightAxisWidth;
-    const clampedRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
-    const flowPaneH = rect.height * clampedRatio;
-    const pricePaneH = rect.height - flowPaneH;
+    const { chartW, pricePaneH, histDividerY } = getFlowDividerLayout(rect.width, rect.height);
 
     if (Math.abs(y - pricePaneH) <= 8 && x < chartW) {
       // Duplo clique no divisor: reseta para altura padrão de 33%
       setFlowPaneRatio(0.33);
+    } else if (flowViewMode === 'heikin_ashi' && Math.abs(y - histDividerY) <= 8 && x < chartW) {
+      // Duplo clique no divisor interno: volta a dividir 2/3 fluxo + 1/3 histograma
+      setHaHistSplit(0.66);
     } else if (x >= chartW) {
       if (y > pricePaneH) {
         // Duplo clique na régua da janela de fluxo: reseta escala e pan do fluxo!
@@ -1825,6 +1964,30 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const x = touch.clientX - rect.left;
       const y = touch.clientY - rect.top;
       setMousePos({ x, y });
+
+      // Dedo em cima de um dos divisores: arrasta o painel em vez de rolar o gráfico
+      const lay = getFlowDividerLayout(rect.width, rect.height);
+      if (Math.abs(y - lay.pricePaneH) <= 12 && x < lay.chartW) {
+        touchDividerRef.current = {
+          mode: 'MAIN',
+          startY: touch.clientY,
+          startValue: flowPaneRatio,
+          usableH: lay.usableFlowH,
+          canvasH: rect.height,
+        };
+        return;
+      }
+      if (flowViewMode === 'heikin_ashi' && Math.abs(y - lay.histDividerY) <= 12 && x < lay.chartW) {
+        touchDividerRef.current = {
+          mode: 'HIST',
+          startY: touch.clientY,
+          startValue: haHistSplit,
+          usableH: lay.usableFlowH,
+          canvasH: rect.height,
+        };
+        return;
+      }
+
       touchStartRef.current = {
         x: touch.clientX,
         y: touch.clientY,
@@ -1856,6 +2019,28 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
     if (e.touches.length === 1) {
       const touch = e.touches[0];
+
+      // Divisor sendo arrastado pelo dedo
+      if (touchDividerRef.current.mode) {
+        const deltaY = touch.clientY - touchDividerRef.current.startY;
+        if (touchDividerRef.current.mode === 'MAIN') {
+          const newRatio = Math.max(
+            0.18,
+            Math.min(0.55, touchDividerRef.current.startValue - deltaY / touchDividerRef.current.canvasH)
+          );
+          setFlowPaneRatio(Number(newRatio.toFixed(3)));
+        } else {
+          const newSplit = Math.max(
+            0.3,
+            Math.min(0.85, touchDividerRef.current.startValue + deltaY / touchDividerRef.current.usableH)
+          );
+          setHaHistSplit(Number(newSplit.toFixed(3)));
+        }
+        const rectT = e.currentTarget.getBoundingClientRect();
+        setMousePos({ x: touch.clientX - rectT.left, y: touch.clientY - rectT.top });
+        return;
+      }
+
       const deltaX = touch.clientX - touchStartRef.current.x;
       const offsetDelta = deltaX / (20 * scaleX);
       const maxScroll = Math.max(0, allBoxes.length - 2);
@@ -1903,6 +2088,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     setScaleFlow(1.0);
     setFlowPanOffset(0);
     setFlowPaneRatio(0.33);
+    setHaHistSplit(0.66);
     setVisibleCount(typeof window !== 'undefined' && window.innerWidth < 640 ? 26 : 40);
   };
 
@@ -1912,24 +2098,26 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     scaleX !== 1.0 ||
     scaleFlow !== 1.0 ||
     flowPanOffset !== 0 ||
-    Math.abs(flowPaneRatio - 0.33) > 0.02;
+    Math.abs(flowPaneRatio - 0.33) > 0.02 ||
+    Math.abs(haHistSplit - 0.66) > 0.02;
 
   // Determina classe de cursor baseada na área
   const getCursorClass = () => {
-    if (dragMode === 'DIVIDER') return 'cursor-row-resize';
+    if (dragMode === 'DIVIDER' || dragMode === 'HA_HIST_DIVIDER') return 'cursor-row-resize';
     if (dragMode === 'FLOW_AXIS' || dragMode === 'Y_AXIS') return 'cursor-ns-resize';
     if (dragMode === 'X_AXIS') return 'cursor-ew-resize';
     if (dragMode === 'CHART') return 'cursor-grabbing';
     if (mousePos && canvasRef.current) {
-      const isMobile = canvasRef.current.clientWidth < 640;
-      const rightAxisWidth = isMobile ? 54 : 80;
-      const chartW = canvasRef.current.clientWidth - rightAxisWidth;
+      const { chartW, pricePaneH, histDividerY } = getFlowDividerLayout(
+        canvasRef.current.clientWidth,
+        canvasRef.current.clientHeight
+      );
       const canvasH = canvasRef.current.clientHeight;
-      const clampedRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
-      const flowPaneH = canvasH * clampedRatio;
-      const pricePaneH = canvasH - flowPaneH;
 
       if (Math.abs(mousePos.y - pricePaneH) <= 7 && mousePos.x < chartW) {
+        return 'cursor-row-resize';
+      }
+      if (flowViewMode === 'heikin_ashi' && Math.abs(mousePos.y - histDividerY) <= 7 && mousePos.x < chartW) {
         return 'cursor-row-resize';
       }
       if (mousePos.x >= chartW) return 'cursor-ns-resize';
@@ -2042,18 +2230,17 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             <span className="text-[10px] font-sans">Controles</span>
           </button>
 
-          {/* Seletor da série: Pontos (Renko) x Range x Tempo, com escala editável */}
+          {/* Seletor da série: Pontos (Renko) x Range, com escala editável (Tempo saiu do gráfico) */}
           <div className="flex items-center gap-1.5 shrink-0 rounded-md border border-zinc-600/70 bg-zinc-950/60 px-1.5 py-0.5" title="Escolha o tipo de gráfico e a escala">
             <span className="text-[9.5px] text-zinc-400 font-sans uppercase tracking-wide hidden sm:inline">Gráfico</span>
             <select
               value={chartSeries}
               onChange={(e) => onSeriesChange?.(e.target.value as ChartSeries)}
               className="h-6 rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
-              title="Tipo de gráfico: Pontos (Renko), Range (variação de preço) ou Tempo"
+              title="Tipo de gráfico: Pontos (Renko) ou Range (variação de preço)"
             >
               <option value="renko">Pontos</option>
               <option value="range">Range</option>
-              <option value="tempo">Tempo</option>
             </select>
             {chartSeries === 'renko' && (
               <span className="text-zinc-400 text-[10.5px]" title="Escala do Renko definida no Painel do EA">
@@ -2070,20 +2257,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 {[10, 25, 50, 75, 100, 150].map((p) => (
                   <option key={p} value={p}>
                     {p} pts
-                  </option>
-                ))}
-              </select>
-            )}
-            {chartSeries === 'tempo' && (
-              <select
-                value={timeframeSec}
-                onChange={(e) => onTimeframeChange?.(Number(e.target.value))}
-                className="h-6 rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
-                title="Intervalo de relógio de cada candle"
-              >
-                {[5, 15, 30, 60, 120, 300, 600, 900].map((s) => (
-                  <option key={s} value={s}>
-                    {formatTimeframe(s)}
                   </option>
                 ))}
               </select>
@@ -2137,13 +2310,32 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* CORPO: CANVAS EM LARGURA TOTAL + JANELA FLUTUANTE "DADOS" (CONTROLES)     */}
+      {/* CORPO: CANVAS + JANELAS FLUTUANTES "DADOS" E "BOX RENKO"                 */}
       {/* ========================================================================= */}
       <div className="flex-1 flex flex-row min-h-0 relative">
         {dadosWindowOpen && (
           <DadosPanelWindow title="Dados — Painel Renko" onClose={() => onDadosWindowClose?.()}>
             <ChartControlSidebar {...sidebarProps} isWindow />
           </DadosPanelWindow>
+        )}
+
+        {/* Janela do Box Renko — nasce ao lado da janela Dados para não se sobrepor */}
+        {boxWindowOpen && activeBox && (
+          <div className="hidden sm:contents">
+            <DadosPanelWindow
+              title="Box Renko — 10R"
+              onClose={() => onBoxWindowClose?.()}
+              initialPos={{ x: dadosWindowOpen ? 262 : 10, y: 10 }}
+            >
+              <RenkoBoxCard
+                box={activeBox}
+                haState={activeBoxHaState}
+                isInspection={Boolean(hoveredBox)}
+                bounds={canvasSize}
+                variant="window"
+              />
+            </DadosPanelWindow>
+          </div>
         )}
 
         {/* ====================================================================== */}
@@ -2214,16 +2406,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         )}
 
         {/* ========================================================================= */}
-        {/* BOX RENKO: card flutuante arrastável pelo mouse (desktop)                 */}
+        {/* BOX RENKO: agora vive na janela flutuante "Box Renko" (topo) — ver corpo  */}
         {/* ========================================================================= */}
-        {activeBox && (
-          <RenkoBoxCard
-            box={activeBox}
-            haState={activeBoxHaState}
-            isInspection={Boolean(hoveredBox)}
-            bounds={canvasSize}
-          />
-        )}
 
         {/* ========================================================================= */}
         {/* BOX RENKO: HUD compacto em telas pequenas                                 */}

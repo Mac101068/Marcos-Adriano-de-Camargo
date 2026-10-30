@@ -26,6 +26,9 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   maxDailyTrades: 0, // 0 = sem limite para permitir piramidação contínua a cada box
   mt5Host: 'localhost',
   mt5Port: 8765,
+  // Tetos aceitos pela ponte: defesa contra comando perdido, loop de bug ou app clonado
+  mt5MaxContractsPerOrder: 2,
+  mt5MaxOrdersPerMinute: 12,
   dataSourceMode: 'SIMULATION',
   accountMode: 'HEDGE',
   maxSimultaneousPositions: 15,
@@ -43,7 +46,10 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   tradingCloseAllTime: '17:45',
   strategyMode: 'PYRAMID_FLOW_CONFLUENCE',
   pyramidTpPoints: 50, // TP de 50 pontos para as ordens da pirâmide
+  pyramidSlPoints: 0, // Sem stop fixo na pirâmide por padrão (saída por inversão)
   pyramidContracts: 1, // 1 contrato por pirâmide
+  pyramidEntryType: 'MARKET_ON_CLOSE', // Entrada a mercado no fechamento do box (padrão clássico)
+  moveMainToBreakevenOnPyramidTp: false, // Breakeven da ordem mãe ao bater TP de pirâmide (opcional)
   holdMainUntilFlip: true,
   closeAllOnFlowFlip: true,
   noFixedStopLoss: true,
@@ -56,7 +62,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
     id: 'preset-pyramid-flow-10r',
     name: '10R Pirâmide & Confluência (TP 50p + Surfe)',
     badge: 'PIRÂMIDE 50P',
-    description: 'Compra no fechamento de cada bloco verde com TP de 50 pts na pirâmide. Mantém a ordem principal aberta até a virada do fluxo. Zeragem total por inversão sem SL fixo.',
+    description: 'Compra no fechamento de cada bloco verde com TP de 50 pts na pirâmide. Mantém a ordem principal aberta até a virada do fluxo e, a cada TP batido, protege a ordem mãe no breakeven. Zeragem total por inversão sem SL fixo.',
     config: {
       ...DEFAULT_EA_CONFIG,
       profileName: '10R Pirâmide & Confluência',
@@ -65,6 +71,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       contracts: 1,
       pyramidContracts: 1,
       pyramidTpPoints: 50,
+      moveMainToBreakevenOnPyramidTp: true, // Protege a ordem mãe no breakeven a cada TP de pirâmide batido
       holdMainUntilFlip: true,
       closeAllOnFlowFlip: true,
       noFixedStopLoss: true,
@@ -193,10 +200,15 @@ export class EaConfigService {
           strategyMode: stratMode,
           contracts: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? (parsed.contracts || 1) : (parsed.contracts || 2),
           pyramidTpPoints: parsed.pyramidTpPoints ?? DEFAULT_EA_CONFIG.pyramidTpPoints,
+          pyramidSlPoints: parsed.pyramidSlPoints ?? DEFAULT_EA_CONFIG.pyramidSlPoints,
           pyramidContracts: parsed.pyramidContracts ?? DEFAULT_EA_CONFIG.pyramidContracts,
+          pyramidEntryType: parsed.pyramidEntryType ?? DEFAULT_EA_CONFIG.pyramidEntryType,
+          moveMainToBreakevenOnPyramidTp: parsed.moveMainToBreakevenOnPyramidTp ?? DEFAULT_EA_CONFIG.moveMainToBreakevenOnPyramidTp,
           holdMainUntilFlip: parsed.holdMainUntilFlip ?? DEFAULT_EA_CONFIG.holdMainUntilFlip,
           closeAllOnFlowFlip: parsed.closeAllOnFlowFlip ?? DEFAULT_EA_CONFIG.closeAllOnFlowFlip,
           noFixedStopLoss: parsed.noFixedStopLoss ?? DEFAULT_EA_CONFIG.noFixedStopLoss,
+          mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
+          mt5MaxOrdersPerMinute: parsed.mt5MaxOrdersPerMinute ?? DEFAULT_EA_CONFIG.mt5MaxOrdersPerMinute,
           enablePartialExit: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? false : (parsed.enablePartialExit ?? true),
           lastSavedTimestamp: parsed.lastSavedTimestamp || Date.now(),
         };

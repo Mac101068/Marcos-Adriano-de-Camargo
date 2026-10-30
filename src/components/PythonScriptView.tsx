@@ -41,7 +41,10 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
             </h2>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Sim! Este terminal se conecta diretamente ao seu MetaTrader 5 via WebSocket local (<code className="text-emerald-400 font-mono">ws://localhost:{config.mt5Port}</code>) ou opera 100% autônomo em segundo plano.
+            Sim! Este terminal conecta-se ao MetaTrader 5 via WebSocket (<code className="text-emerald-400 font-mono">ws://IP-DO-WINDOWS:{config.mt5Port}</code>) ou opera 100% autônomo em segundo plano.
+          </p>
+          <p className="text-[11px] text-sky-400/90 mt-1 font-sans">
+            💡 O script roda no <b>Windows</b> (onde o MT5/XP B3 está instalado — a biblioteca Python do MT5 não existe para Mac). Este navegador, em qualquer máquina da mesma rede Wi-Fi, conecta apontando <b>Ajustes → MT5 Host</b> para o IP do Windows.
           </p>
         </div>
 
@@ -96,7 +99,7 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
               <span>2. Script Python (Bridge & Robô)</span>
             </div>
             <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
-              Roda no seu computador junto com o MT5. Abre o servidor <code className="text-emerald-300">ws://localhost:{config.mt5Port}</code> para transmitir dados e executar ordens.
+              Roda no WINDOWS junto com o MT5 da XP. Abre o servidor na porta <code className="text-emerald-300">{config.mt5Port}</code> para TODA a rede local (0.0.0.0), transmitindo ticks e executando ordens para qualquer navegador da rede.
             </p>
           </div>
 
