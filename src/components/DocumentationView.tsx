@@ -525,7 +525,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
             <ul className="list-disc list-inside ml-9 space-y-1 text-slate-300 text-[11px]">
               <li>Os ticks reais do Times & Trades da B3 alimentarão os gráficos atemporais na sua tela em tempo real.</li>
               <li>Toda convergência validada disparará ordens reais diretamente para sua corretora com Stop Loss e Take Profit.</li>
-              <li>Você poderá clicar em <code className="text-emerald-400">▲ COMPRAR</code> ou <code className="text-rose-400">▼ VENDER</code> na boleta rápida para ordens manuais imediatas.</li>
+              <li>Você poderá clicar em <code className="text-emerald-400">▲ COMPRA</code> ou <code className="text-rose-400">▼ VENDA</code> na <b>Boleta</b> — a caixa de ordem rápida no topo do gráfico, que recolhe sozinha e aparece tanto no desktop quanto no celular.</li>
             </ul>
           </div>
         </div>

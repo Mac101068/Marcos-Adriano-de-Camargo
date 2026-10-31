@@ -15,6 +15,7 @@ import {
   snapToTick,
 } from '../assets/assetRegistry';
 import { ChartControlSidebar } from './ChartControlSidebar';
+import { BoletaTicket } from './BoletaTicket';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { RenkoBoxCard } from './RenkoBoxCard';
 import { Sliders, ArrowUp, ArrowDown, Settings } from 'lucide-react';
@@ -54,6 +55,8 @@ interface RenkoFlowChartProps {
   stopLossPoints?: number;
   takeProfitPoints?: number;
   isRealMT5Connected?: boolean;
+  /** Modo da estratégia exibido na boleta (Pirâmide não tem SL/TP fixo). */
+  strategyMode?: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE';
   enablePartialExit?: boolean;
   partialPoints?: number;
   partialContracts?: number;
@@ -113,6 +116,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   stopLossPoints = 100,
   takeProfitPoints = 150,
   isRealMT5Connected = false,
+  strategyMode = 'PULLBACK_RETEST',
   enablePartialExit = true,
   partialPoints = 50,
   partialContracts = 1,
@@ -2760,36 +2764,24 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         />
 
         {/* ========================================================================= */}
-        {/* BOLETA COMPACTA SOMENTE EM TELAS PEQUENAS (no desktop vive na barra lateral) */}
+        {/* BOLETA: uma caixa só, em desktop e mobile, com recolhimento automático.    */}
+        {/* No desktop ela recua da régua de preços (88px) para não cobrir o eixo.      */}
         {/* ========================================================================= */}
         {onManualOrder && (
-          <div className="lg:hidden absolute top-2 left-2 right-2 z-30 flex items-center gap-1.5 bg-zinc-950/92 backdrop-blur-md border border-zinc-700/80 rounded-lg p-1 shadow-2xl pointer-events-auto select-none">
-            <button
-              onClick={() => onManualOrder('BUY')}
-              className="flex-1 px-2 h-[30px] text-[11px] font-bold rounded bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center gap-1"
-              title={`Enviar COMPRA a Mercado (${contracts}ct a ${currentPrice.toLocaleString('pt-BR')} pts)`}
-            >
-              <ArrowUp className="w-3 h-3 stroke-[2.5]" />
-              <span>COMPRA</span>
-            </button>
-            <button
-              onClick={() => onManualOrder('SELL')}
-              className="flex-1 px-2 h-[30px] text-[11px] font-bold rounded bg-rose-600 hover:bg-rose-500 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center gap-1"
-              title={`Enviar VENDA a Mercado (${contracts}ct a ${currentPrice.toLocaleString('pt-BR')} pts)`}
-            >
-              <ArrowDown className="w-3 h-3 stroke-[2.5]" />
-              <span>VENDA</span>
-            </button>
-            {openOrders.length > 0 && onClosePositions && (
-              <button
-                onClick={onClosePositions}
-                className="flex-1 px-2 h-[30px] text-[11px] font-bold rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1"
-                title="Zerar todas as ordens e posições abertas imediatamente"
-              >
-                <span>ZERAR ({openOrders.length})</span>
-              </button>
-            )}
-          </div>
+          <BoletaTicket
+            currentPrice={currentPrice}
+            contracts={contracts}
+            stopLossPoints={stopLossPoints}
+            takeProfitPoints={takeProfitPoints}
+            strategyMode={strategyMode}
+            openOrders={openOrders}
+            pnl={openPnL}
+            isRealMT5Connected={isRealMT5Connected}
+            asset={asset}
+            rightOffset={(canvasSize.w > 0 ? canvasSize.w : 9999) < 640 ? 62 : 96}
+            onManualOrder={onManualOrder}
+            onClosePositions={onClosePositions}
+          />
         )}
 
         {/* ========================================================================= */}

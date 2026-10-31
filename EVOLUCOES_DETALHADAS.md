@@ -157,9 +157,47 @@ do sanitizador.
 - Ficaram onde estavam, por não serem do canto inferior direito: confirmação de gravação do Ajustes
   (superior direito) e aviso discreto do Estúdio (centro de baixo).
 
+### 8.8 ✅ Boleta: uma caixa recolhível no lugar dos botões que somiam com o zoom
+
+**Causa raiz do problema relatado** ("os botões só aparecem quando amplio a tela"): a ordem rápida
+existia em **duas cópias com condições opostas** — a barra grande sobre o gráfico era `lg:hidden` e a
+seção "Ordem rápida" da barra lateral era `hidden lg:flex`. Abaixo do breakpoint `lg` (janela estreita,
+zoom do navegador maior, celular) a lateral some; e a barra sobre o gráfico, quando aparece, ocupa a
+faixa inteira do topo (`left-2 right-2`) com botões de 30px de altura — grande demais e cobrindo o pregão.
+
+**O que foi implementado** — novo `src/components/BoletaTicket.tsx`, montado sobre o canvas dentro de
+`RenkoFlowChart` (no lugar da barra antiga):
+- Uma caixa só, **sem breakpoint de visibilidade**: existe no desktop e no mobile sempre.
+- **Recolhimento automático** (`AUTO_COLLAPSE_MS = 9000`): depois de ~9s vira um chip discreto no topo
+  direito com `BOLETA · preço · nº de abertas`. O timer é rearmado a cada mudança de estado e **não roda
+  enquanto o mouse está em cima** (`onMouseEnter/Leave`) nem com a boleta **fixada** pelo alfinete — assim
+  quem está lendo os dados não perde a caixa do nada.
+- **Dados básicos**: preço (pelas casas decimais do `AssetSpec`), contratos, Stop e Alvo em pontos **e** em
+  preço, risco em R$ (`pointsToBRL(stopLossPoints, contracts, asset)`) e abertas + PnL flutuante em pontos
+  (reaproveitando o `openPnL` que o gráfico já calculava para a barra de status).
+- **Modo Pirâmide não inventa número**: com `strategyMode === 'PYRAMID_FLOW_CONFLUENCE'` a linha vira
+  `Surfe (sem fixo)` e o risco em R$ some, porque a Ordem Mãe real tem `stopLoss = 0` / `takeProfit = 0`.
+- **Selo `MT5` × `SIM`** no cabeçalho, para o clique nunca ser ambíguo sobre ir ou não à corretora.
+- **Posição**: `absolute top-2` com `right` vindo do prop `rightOffset` — 96px no desktop, 62px abaixo de
+  640px — porque a régua de preços do eixo Y tem 64px (desktop) / 46px (mobile) e a boleta nunca pode
+  cobri-la. O gráfico quem calcula, usando a própria largura do canvas (`canvasSize.w`), e não um
+  breakpoint cego do CSS.
+- A seção "Ordem rápida" da barra lateral **ficou onde estava** (é o painel de controles, não a boleta do
+  gráfico), então agora há atalho na lateral do desktop e a boleta sempre visível sobre o canvas.
+- Novo prop `strategyMode` em `RenkoFlowChart`, ligado a `config.strategyMode` no `App.tsx`. Texto do Guia
+  MT5 (`DocumentationView`), `PROJECT_SUMMARY.md §D` e a árvore de arquivos foram atualizados.
+
 ### Verificações deste ciclo
 
-- `npx tsc --noEmit` limpo e `npx vite build` OK (só o aviso pré-existente de chunk > 500 kB).
+- `npx tsc --noEmit` limpo e `npx vite build` OK (só o aviso pré-existente de chunk > 500 kB) — também
+  depois da Boleta do 8.8.
+- **Boleta (8.8)**: conferido por medição de DOM no
+  navegador (sem screenshot — a prévia estava com viewport oculto): caixa de 196×175px dentro do
+  container do gráfico, com `BOLETA` + selo `SIM` + Preço/Contratos/Alvo-Stop/Abertas + COMPRA/VENDA +
+  `ZERAR (1)`; recolheu sozinha a ~9s para o chip de 149×26px e reabriu ao toque; **console limpo, sem erro
+  do `BoletaTicket`**. O que **não** foi conferido de fato: a tela larga de desktop (1440) e a largura real de
+  celular (390) — o recuo da régua em mobile foi corrigido por código depois dessa medição e precisa do seu
+  olho no aparelho.
 - **Headless da Fase 1**: 66 asserts de paridade do WIN (nada do comportamento atual mudou).
 - **Headless da Fase 2** (`tmp/verify-asset-selection.ts`, apagado depois): migração escreve `assetId`
   no config e na biblioteca e não roda duas vezes; sobrevive a JSON corrompido e a storage ausente;
@@ -649,6 +687,23 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 
 ## 🧭 Pendências e próximos passos conhecidos
 
+- 🔎 **Diagnóstico feito, SEM código mexido — "o simulador parece sempre rodando" (31/10, às vésperas da
+  conta demo)**: a guarda do loop (`!isSimulating || isReplaying || CONNECTED`, `App.tsx` ~L2209) funciona —
+  com a ponte CONNECTED não vaza tick sintético. O que causa a sensação (verificado no código, linha a
+  linha): (1) `isSimulating` nasce `true` e não é persistido (L144); (2) o mount effect sempre semeia 350
+  ticks sintéticos (L652-687); (3) o **boot-replay dispara sozinho na abertura sem olhar se a ponte está
+  conectando/conectada** (L2607-2624; com CONNECTED ele vira silencioso e segue rodando no coletor);
+  (4) `generateNextTick()` não tem portão de pregão — roda de madrugada e fim de semana (só o gerador de
+  histórico do replay usa `sessionClock`); (5) disconnect manual / `onerror` / AUTH recusado forçam
+  `setIsSimulating(true)`. **Buraco real**: `socket.onclose` (L1886-1890) NUNCA religa o simulador — se a
+  ponte cair sozinha no pregão, a tela congela sem tick nenhum e parece bug do robô. Extras: botões de
+  agressão da aba Simulador não têm `disabled={mt5Live}` (injetam tick falso com MT5 ao vivo). Correções
+  (decidir com o operador, na conversa do refino/validação demo): religar feed no onclose OU congelar
+  + aviso; pular boot-replay e os 350 ticks quando CONNECTING/CONNECTED; persistir `isSimulating`;
+  desabilitar agressão com mt5Live; portão de pregão no `generateNextTick` (maior mudança).
+- 🎨 **Fase nova anunciada: REFINO VISUAL** (a partir de 31/10) — passar pente-fino no aspecto de todas as
+  telas mantendo as regras fixas (chrome neutro, cor só no acento, nada de quadro no canto inferior
+  direito, controle de operador sem breakpoint). Primeiro item já entregue: Boleta (`8.8`).
 - 🧪 **Homologar WDO e BTC** (Ciclo 8): uma linha cada no `assetRegistry.ts` com `pointValue`,
   `tickSize`, `decimals`, `primarySymbol` no MT5 da XP e o horário de pregão — o seletor destrava sozinho.
   Enquanto `status: 'a_confirmar'`, o ativo só entra em **ensaio**.

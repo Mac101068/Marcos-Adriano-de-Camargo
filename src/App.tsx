@@ -3326,6 +3326,7 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                   stopLossPoints={config.stopLossPoints}
                   takeProfitPoints={config.takeProfitPoints}
                   isRealMT5Connected={mt5State.status === 'CONNECTED'}
+                  strategyMode={config.strategyMode}
                   enablePartialExit={config.enablePartialExit}
                   partialPoints={config.partialPoints}
                   partialContracts={config.partialContracts}

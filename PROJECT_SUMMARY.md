@@ -415,6 +415,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
         ├── ChartControlSidebar.tsx   # Controles de série, escala, preset de janela e reset
         ├── DadosPanelWindow.tsx      # Janela flutuante arrastável que hospeda o painel de dados
         ├── RenkoBoxCard.tsx          # Quadro do box (fixo no canto, HUD mobile e variante `window`)
+        ├── BoletaTicket.tsx          # Boleta de ordem rápida: caixa recolhível, COMPRA/VENDA/ZERAR, sempre visível (desktop e mobile)
         ├── DrawingOverlay.tsx / DrawingToolbar.tsx # Camada e barra de rabiscos técnicos sobre o gráfico
         ├── TimesAndTrades.tsx        # Fita de negócios ao vivo
         ├── AutomationPanel.tsx       # Ajustes: blocos por estratégia, proteção da mãe, limites da ponte, perfis
@@ -495,15 +496,12 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 - Layout de alta resolução formatado com `@media print` para salvar como PDF A4 com diagramas, tabelas de parâmetros, fórmulas do Renko 10R e do Heikin-Ashi tricolor, manual de risco e árvore completa de arquivos.
 - Criação do arquivo `PROJECT_CONSOLIDATION_CHAT_SEED.md` com o prompt pronto para cópia e inicialização em qualquer nova conversa.
 
-### D. Boleta Rápida de Compra e Venda Fixa no Canto Superior Esquerdo do Gráfico
-- **Aprimoramento**: Os botões de envio rápido de ordens a mercado de **COMPRA** (verde esmeralda com indicação de contratos) e **VENDA** (vermelho carmim com indicação de contratos) foram integrados diretamente no interior do container do gráfico Renko no canto superior esquerdo (`absolute top-2.5 left-2.5 z-30`).
-- **Visibilidade Contínua**: Permanecem sempre visíveis e acessíveis para o operador independente da rolagem horizontal da barra de ferramentas, tamanho de viewport ou zoom aplicado.
-- **Ações Rápidas Integradas**:
-  - Botão de **COMPRA** com seta e quantidade de contratos configurada.
-  - Botão de **VENDA** com seta e quantidade de contratos configurada.
-  - Botão de **ZERAR** dinâmico (visível com badge pulsante assim que ordens/posições abertas existem).
-  - Botão de **+ Teste** (quando sem ordens) para inspeção imediata das linhas visuais de trade.
-- **Harmonização com Escalas**: O badge de escala manual customizada foi reposicionado para fluir ao lado ou abaixo da boleta sem sobreposição visual.
+### D. Boleta — Caixa de Ordem Rápida Recolhível no Topo do Gráfico (`src/components/BoletaTicket.tsx`)
+- **Aprimoramento**: a boleta deixou de existir em duas cópias que se anulavam (barra grande sobre o gráfico com `lg:hidden` + seção "Ordem rápida" da barra lateral com `hidden lg:flex`, que sumia conforme o zoom da janela) e passou a ser **uma caixa única**, presente no desktop e no mobile.
+- **Recolhimento automático**: abre expandida, recolhe sozinha após ~9s virando um chip discreto (`Boleta · preço · nº de abertas`). A auto-recolha **não** dispara enquanto o mouse está sobre a caixa, e o botão de alfinete fixa a boleta aberta. O estado aberto/fechado fica em `fluxo_boleta_open_v1`.
+- **Dados básicos dentro da caixa**: preço atual (com as casas do ativo), contratos, Stop e Alvo em pontos **e** em preço (no modo Pirâmide mostra `Surfe (sem fixo)` em vez de inventar número), risco em R$ da operação e posições abertas com PnL flutuante em pontos.
+- **Ações**: **COMPRA** / **VENDA** a mercado e **ZERAR (n)** quando existe posição aberta. Selo `MT5` × `SIM` no cabeçalho, para o operador saber se aquele clique vai ou não à corretora.
+- **Posicionamento**: `absolute top-2` com o `right` vindo do prop `rightOffset` — 96px no desktop e 62px abaixo de 640px, calculado pela largura real do canvas, para nunca cobrir a régua de preços do eixo Y (64px desktop / 46px mobile).
 
 ### E. Estratégia Quantitativa: Pirâmide & Confluência de Fluxo Renko 10R (TP 50p + Surfe até Inversão)
 - **Conceito & Racional Quantitativo**:
@@ -530,6 +528,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 | `fluxo_renko_spacing_mode_v2` | Modo de espaçamento (Preencher/Compacto; padrão `fill`) |
 | `fluxo_renko_flow_mode_v1` | Modo do painel de fluxo (Heikin-Ashi / Delta / Híbrido) |
 | `fluxo_renko_price_levels_v1` | Liga/desliga os níveis do pregão desenhados no gráfico |
+| `fluxo_boleta_open_v1` | Boleta expandida ou recolhida (a caixa abre recolhida depois que você a fecha) |
 | `fluxo_bridge_token_v1` | **Token da ponte** — fora do config de propósito, para nunca ser exportado em JSON |
 | `fluxo_renko_intraday_audit_v3` | Livro de auditoria **legado** (chave única, pré-Fase 2) — mantido, não apagado |
 | `fluxo_renko_intraday_audit_v3_WIN` / `_WDO` / `_BTC` | Livro de auditoria **por mercado** (a partir da Fase 2) |
@@ -562,6 +561,15 @@ Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto
 ```
 
 ### Pendências conhecidas (para não redescobrir)
+- 🔎 **Simulador "sempre rodando": diagnóstico pronto, decisão pendente** (detalhes linha a linha em
+  `EVOLUCOES_DETALHADAS.md` → Pendências, 31/10): a guarda do loop funciona (CONNECTED não vaza tick
+  sintético), mas `isSimulating` nasce `true` sem persistência, o boot-replay dispara na abertura sem
+  olhar a ponte, o mount effect semeia 350 ticks, `generateNextTick()` não tem portão de pregão e —
+  buraco real — `socket.onclose` nunca religa o feed (queda da ponte = tela congelada). Corrigir na
+  validação da conta demo, com o operador decidindo cada comportamento.
+- 🎨 **Fase REFINO VISUAL iniciada** (31/10): pente-fino no aspecto das telas mantendo as regras fixas
+  (chrome neutro, cor só no acento, aviso central, controle sem breakpoint). Primeiro item: Boleta
+  (`BoletaTicket.tsx`, Ciclo 8.8).
 - 🧪 **Homologar WDO e BTC**: me traga `pointValue` (R$/ponto), `tickSize`, `decimals`, `primarySymbol` no MT5 da XP, horário de pregão e a profundidade de histórico da conta demo. Trocar `status: 'a_confirmar'` → `'ativo'` no `assetRegistry.ts` destrava o seletor sozinho.
 - 🧪 **Fases seguintes do registro**: F3 = travas de horário por ativo (leilão, ajuste, fix das 13:00 do WDO, gap de fim de semana do BTC); F4 = ponte Python definitiva e dossiê PDF sem o texto fixo "Mini-Índice B3"; F5 = VTC (PTAX + FRP0) morando no WDO.
 - 🧪 **Conferir o histórico real no Windows**: rodar o script novo, pedir 1 dia de replay conectado e ver se o chip sai `HISTÓRICO REAL (MT5)` com volume `TICK` ou `M1_RATE`.

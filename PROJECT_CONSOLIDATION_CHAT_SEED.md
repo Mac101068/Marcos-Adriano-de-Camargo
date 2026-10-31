@@ -12,7 +12,8 @@
 Você está assumindo o projeto **Fluxo & Renko 10R - MT5 Quant Terminal**: aplicação web de trading
 quantitativo que hoje roda no Mini-Índice B3 (`WIN$`) e está preparada para multi-mercado (WDO e BTC
 já têm linha no registro, mas seguem **`a_confirmar`**), enviando ordens automatizadas ao MetaTrader 5
-por uma ponte WebSocket em Python.
+por uma ponte WebSocket em Python. **Fase atual: refino visual + preparação para a validação na conta
+demo da XP** (a ponte ainda nunca rodou contra a corretora de verdade).
 
 ## 0. QUEM É O USUÁRIO E COMO TRABALHAR
 - Brasileiro, iniciante em programação. **Toda a UI, comentários e documentação em português.**
@@ -27,6 +28,9 @@ por uma ponte WebSocket em Python.
   5. Ser honesto sobre o que foi verificado e o que não foi — ele valoriza saber o que ficou sem teste.
   6. **Chrome neutro, cor só no acento** (ponto de status, ícone, badge); e **nenhum quadro de informação
      no canto inferior direito** — aviso flutuante abre **no centro da tela** (Ciclo 8).
+  7. **Controle do operador não pode depender de breakpoint**: a ordem rápida vive em **uma** caixa sobre o
+     canvas (`BoletaTicket.tsx`), visível no desktop e no mobile, com recolhimento automático. Nunca mais
+     criar par "cópia `lg:hidden` + cópia `hidden lg:flex`" — foi isso que fez a boleta sumir conforme o zoom.
 
 ## 1. PILARES DA ESTRATÉGIA
 1. **Renko 10R = 50 pontos** por box; reversão exige 2 boxes (100 pts); corpo 100% sólido
@@ -162,6 +166,8 @@ src/
 └── components/
     ├── RenkoFlowChart.tsx (≈3.0k linhas), ChartControlSidebar, DadosPanelWindow, RenkoBoxCard,
     │   DrawingOverlay, DrawingToolbar
+    ├── BoletaTicket.tsx           # BOLETA: caixa de ordem rápida sobre o canvas, recolhe sozinha (~9s),
+    │                             #   sempre visível (desktop e mobile); chip fechado mostra preço + abertas
     ├── Header.tsx                # AssetSelector (WIN/WDO/BTC + folha de ensaio), selo ARMADO/SEGURO
     ├── StrategyStudio.tsx        # aba Estúdio (biblioteca de estratégias)
     ├── AutomationPanel.tsx       # Ajustes em BLOCOS por estratégia (Pirâmide tem bloco dedicado:
@@ -175,7 +181,8 @@ scripts/strategyLab.ts           # laboratório headless das duas estratégias (
 
 Chaves de `localStorage`: `fluxo_renko_ea_config_v3` (com `assetId`), `fluxo_renko_ea_profiles_v3`,
 `fluxo_strategy_library_v1`, `fluxo_renko_chart_scales_v2` (inclui `haHistSplit`),
-`fluxo_renko_flow_mode_v1`, `fluxo_renko_price_levels_v1`, `fluxo_bridge_token_v1`,
+`fluxo_renko_flow_mode_v1`, `fluxo_renko_price_levels_v1`, `fluxo_boleta_open_v1` (boleta aberta/recolhida),
+`fluxo_bridge_token_v1`,
 `fluxo_renko_intraday_audit_v3` (legado) **+ `..._WIN` / `_WDO` / `_BTC`**, `fluxo_asset_last_price_v1`,
 flags de migração `fluxo_asset_base_171500_v1`, `fluxo_asset_selection_v1`,
 `fluxo_trading_window_08_55_17_30_v2`, `fluxo_series_collector_v1`, `fluxo_renko_spacing_mode_v2`,
@@ -202,6 +209,20 @@ npm run dev               # porta 3002, --host=0.0.0.0
 \`\`\`
 
 ## 6. PENDÊNCIAS ABERTAS
+- 🎨 **FASE ATUAL (a partir de 31/10): REFINO VISUAL** — pente-fino no aspecto de todas as telas, um
+  pedido por vez, sem mudar comportamento. Primeiro item já entregue: **Boleta** (`BoletaTicket.tsx`,
+  Ciclo 8.8): caixa única de ordem rápida sobre o canvas, recolhimento automático (~9s → chip), sempre
+  visível em desktop e mobile, offset calculado pela largura real do canvas (nunca breakpoint cego).
+- 🧪 **Validação na CONTA DEMO XP iminente** (primeiro contato real com a ponte). Antes dela, resolver o
+  item 🔎 abaixo — os cinco pontos têm correção pequena e mudam o comportamento do feed.
+- 🔎 **Simulador "sempre rodando": diagnóstico PRONTO, nenhuma linha mexida** (detalhe completo com
+  números de linha em `EVOLUCOES_DETALHADAS.md` → Pendências, 31/10). Em resumo: a guarda do loop está
+  certa (CONNECTED não vaza tick), mas (1) `isSimulating` nasce `true` sem persistência, (2) o mount
+  effect semeia 350 ticks sintéticos sempre, (3) o **boot-replay dispara na abertura sem olhar a ponte**,
+  (4) `generateNextTick()` não tem portão de pregão (roda 24/7), (5) disconnect/onerror/AUTH-recusado
+  forçam `setIsSimulating(true)` — e o **buraco real**: `socket.onclose` nunca religa o feed, então queda
+  da ponte = tela congelada sem aviso. Decidir cada correção COM o operador (ele é iniciante; explicar o
+  efeito de cada uma em português simples). Extra: agressões da aba Simulador sem `disabled={mt5Live}`.
 - 🧪 **Homologar WDO e BTC**: ele precisa trazer `pointValue`, `tickSize`, `decimals`, `primarySymbol` no
   MT5 da XP, horário de pregão e a profundidade de histórico da conta demo. Trocar `status` para
   `'ativo'` no `assetRegistry.ts` destrava o seletor sozinho (Fases 3–5: travas de horário por ativo,
