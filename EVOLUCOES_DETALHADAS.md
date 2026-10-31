@@ -687,6 +687,12 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 
 ## 🧭 Pendências e próximos passos conhecidos
 
+- ✅ **Commit `d2f16c2`** — "feat: Boleta — caixa de ordem rápida recolhível, sempre visível (desktop e
+   mobile)": 7 arquivos, **364 inserções / 41 remoções**, incluindo o novo `src/components/BoletaTicket.tsx`
+   e o registro desta conversa nos três docs (Ciclo 8.8, pendência do simulador e fase REFINO VISUAL).
+   Enviado a `origin/main` depois de `npx tsc --noEmit` limpo, `npx vite build` OK e medição de DOM no
+   navegador (auto-recolha, chip, persistência F5 e recuo da régua conferidos; viewport 1440 e celular
+   real ficaram sem conferência visual).
 - 🔎 **Diagnóstico feito, SEM código mexido — "o simulador parece sempre rodando" (31/10, às vésperas da
   conta demo)**: a guarda do loop (`!isSimulating || isReplaying || CONNECTED`, `App.tsx` ~L2209) funciona —
   com a ponte CONNECTED não vaza tick sintético. O que causa a sensação (verificado no código, linha a
