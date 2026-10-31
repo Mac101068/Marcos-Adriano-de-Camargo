@@ -667,6 +667,13 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 - 🧪 Firewall do Windows restringindo a porta 8765 à sua rede (o trecho do comando já está no Guia).
 - 🧪 Token de exemplo gerado durante os testes ainda é o mesmo do seu navegador: gire um novo antes
   de rodar o script no Windows ("Gerar token novo" no Guia).
+- ✅ **Commit `d2ba9d2`** — "feat: registro de ativo (Fases 1-2), Estúdio de Estratégias, níveis do
+   pregão e aviso central": 34 arquivos, **4.610 inserções / 357 remoções**, incluindo os novos
+   `src/assets/` (registro + 2 migrações), `marketHistoryService.ts`, `StrategyStudio.tsx`,
+   `strategyLibraryService.ts`, `types/strategy.ts`, `priceLevels.ts`, `tradingGates.ts`,
+   `tradingWindowMigration.ts` e `scripts/strategyLab.ts`, mais a documentação do Ciclo 8. Enviado para
+   `origin/main` depois de `npx tsc --noEmit` limpo, `npx vite build` OK, asserts headless das Fases 1 e 2
+   e `python3 -m py_compile` no script gerado.
 - ✅ **Commit `3037273`** — "feat: hardened MT5 bridge, two-stage mother protection, pyramid limit
   entries, session lock and chart dividers": 20 arquivos, **3.005 inserções / 563 remoções** — cerca de
   2,6 mil linhas de código (17 arquivos em `src/`, incluindo os novos `bridgeSecurity.ts` e
