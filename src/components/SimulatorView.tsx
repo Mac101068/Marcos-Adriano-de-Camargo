@@ -18,6 +18,8 @@ import { AutomationConfig, MT5ConnectionState } from '../types/trading';
 import { ChartSeries } from '../utils/barEngines';
 import { SeriesKey } from '../utils/paperStrategyBot';
 import { seriesCollectorService, SERIES_LABEL } from '../services/seriesCollectorService';
+import { sessionCloseLockLabel } from '../utils/sessionRules';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, renkoScaleLabel } from '../assets/assetRegistry';
 
 /**
  * Aba SIMULADOR — Raio-X do sistema (pensada para quem está aprendendo).
@@ -47,6 +49,8 @@ interface SimulatorViewProps {
   onInjectAggression: (side: 'BUY' | 'SELL') => void;
   onReplayHistory: (days: number) => void;
   isReplaying: boolean;
+  /** Ativo do simulador: horário de pregão, variação mínima e escala do Renko saem do spec. */
+  asset?: AssetSpec;
 }
 
 const seriesAccent: Record<SeriesKey, string> = {
@@ -157,6 +161,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
   onInjectAggression,
   onReplayHistory,
   isReplaying,
+  asset = ASSETS[DEFAULT_ASSET_ID],
 }) => {
   useSyncExternalStore(seriesCollectorService.subscribe, seriesCollectorService.getVersion);
   const snap = seriesCollectorService.getSnapshot();
@@ -164,7 +169,9 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
   const mt5Live = mt5Status === 'CONNECTED';
   const intervalMs = Math.max(50, Math.floor(2000 / simulationSpeed));
   const paceLabel = `${(intervalMs / 1000).toFixed(1).replace('.', ',')}s por tick`;
-  const renkoR = Math.max(1, Math.round(config.boxPoints / 5));
+  const renkoScale = renkoScaleLabel(config.boxPoints, asset);
+  const tickLabel = `${formatPrice(asset.tickSize, asset)} pts`;
+  const sessionLabel = `${asset.session.open}–${asset.session.close}`;
   const collectorFresh = Date.now() - snap.updatedAt < 6000;
 
   const feedLabel = mt5Live
@@ -295,11 +302,11 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
             <EngineCard
               k="renko"
-              scale={`${renkoR}R · ${config.boxPoints} pts`}
+              scale={`${renkoScale} · ${config.boxPoints} pts`}
               role={
                 chartSeries === 'renko'
                   ? 'SÉRIE ATIVA no gráfico — é esta que o robô usa para as ordens reais'
-                  : 'Motor clássico de blocos de pontos (1R = 5 pts)'
+                  : `Motor clássico de blocos de pontos (1R = ${tickLabel})`
               }
               boxes={boxCounts.renko}
               activeSeries={chartSeries === 'renko'}
@@ -421,7 +428,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
                 Histórico sintético (replay)
               </h3>
               <p className="text-[11px] text-slate-400 leading-snug mb-2">
-                Gera dias úteis falsos (09:05–17:45, com abertura/almoço/fechamento realistas) e reproduz nos
+                Gera {asset.session.weekdaysOnly ? 'dias úteis' : 'dias'} falsos ({sessionLabel}, com leilão/almoço/fechamento realistas) e reproduz nos
                 6 motores e no coletor. <b className="text-slate-200">Nada aqui envia ordens reais.</b> Atenção: o
                 replay zera a contabilidade atual do coletor <b className="text-slate-200">e também as ordens
                 abertas, o livro de auditoria e o PnL da sessão</b> (começa um pregão limpo). Com o MT5
@@ -435,8 +442,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
                 enche a auditoria e move o PnL enquanto o dia passa (precisa do Robô LIGADO). Desligado, ele fica
                 silencioso e só alimenta o coletor. Nos dois casos nada é enviado à corretora — com o MT5 conectado o
                 modo OPERA é bloqueado por segurança.</span>
-                <span className="text-slate-300"> Trava das <b className="text-slate-200">17:30</b>: ao chegar nesse
-                horário (no replay e no feed ao vivo em simulação) o robô liquida todas as posições a mercado, cancela
+                <span className="text-slate-300"> Trava de horário: {config.tradingHoursEnabled ? <b className="text-slate-200">liberado das {config.tradingStartTime} (leilão à vista e o 1º candle já é operável) e bloqueado das {config.tradingStopEntriesTime} até as {config.tradingStartTime}</b> : <b className="text-slate-200">filtro de entradas desligado — o robô pode abrir em qualquer hora do pregão</b>} — a janela é medida na hora da barra simulada, nunca no relógio da sala. Ao chegar na zeragem das <b className="text-slate-200">{sessionCloseLockLabel(config.tradingCloseAllTime)}</b> (hora da estratégia) o robô liquida todas as posições a mercado, cancela
                 as limitadas pendentes e para de abrir operações até o próximo pregão — assim nenhum dia termina
                 pendurado com ordem aberta. Com o MT5 conectado a trava não age, para jamais fechar posição real sem
                 você mandar.</span>
@@ -468,8 +474,8 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <GlossaryItem term="1R e o gráfico de Pontos (Renko)">
-              1R = 1 bloco de 5 pontos do Mini-Índice. O gráfico de Pontos só desenha bloco quando o preço
-              percorre a escala configurada (ex.: 10R = 50 pts, como está agora). Tempo não importa, só movimento.
+              1R = 1 bloco de {tickLabel} do {asset.label}. O gráfico de Pontos só desenha bloco quando o preço
+              percorre a escala configurada (ex.: {renkoScale} = {config.boxPoints} pts, como está agora). Tempo não importa, só movimento.
             </GlossaryItem>
             <GlossaryItem term="Gráfico de Range">
               Bloco fecha quando o preço percorre a metragem escolhida (ex.: 50 pts entre mínima e máxima),

@@ -264,7 +264,7 @@ export const SeriesComparisonView: React.FC<{
                       ? 'bg-violet-500/20 text-violet-400/50 cursor-wait'
                       : 'bg-violet-600/60 hover:bg-violet-500 text-white'
                   }`}
-                  title={`Gera ${d} dia(s) útil(eis) sintético(s) — sessões 09:05–17:45 com 1 tick a cada 2s — e reproduz nos 6 contadores. Zera o coletor atual. Ordens reais NÃO são afetadas.`}
+                  title={`Gera ${d} dia(s) útil(eis) sintético(s) — sessões 08:55–17:45 com 1 tick a cada 2s — e reproduz nos 6 contadores. Zera o coletor atual. Ordens reais NÃO são afetadas.`}
                 >
                   {d}d
                 </button>
@@ -318,7 +318,7 @@ export const SeriesComparisonView: React.FC<{
           Contabilidade 100% interna (paper): entradas no fechamento de cada barra com os mesmos
           parâmetros do EA atual. As escalas 15R/20R/25R são motores de medição paralelos — quem
           dispara ordens reais continua sendo apenas a série ativa no gráfico. O botão
-          "Histórico" gera dias úteis sintéticos (09:05–17:45) para testar a estratégia em
+          "Histórico" gera dias úteis sintéticos (08:55–17:45) para testar a estratégia em
           horários diferentes sem esperar o pregão real.
         </p>
       </div>

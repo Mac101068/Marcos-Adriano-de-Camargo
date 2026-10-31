@@ -1,8 +1,13 @@
 import { AutomationConfig } from '../types/trading';
 import { getBridgeToken } from './bridgeSecurity';
+import { resolveAsset } from '../assets/assetRegistry';
 
 export function generatePythonMT5Script(config: AutomationConfig): string {
   const isPyramidMode = config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE';
+  // Os números do contrato transmitido saem do registro de ativos (Fase 2): decimais para o
+  // print, tick para a deduplicação do histórico e R$/ponto para os tetos em dinheiro. Sem o MT5
+  // conectado o único caminho possível continuam sendo os ticks sintéticos do próprio app.
+  const asset = resolveAsset(config.symbol, config.assetId);
   // O mesmo segredo que o app vai enviar no frame AUTH (criado e guardado no navegador)
   const bridgeToken = getBridgeToken();
 
@@ -10,7 +15,7 @@ export function generatePythonMT5Script(config: AutomationConfig): string {
 ========================================================================================
 ROBÔ QUANTITATIVO MT5: ${isPyramidMode ? 'PIRÂMIDE & CONFLUÊNCIA DE FLUXO RENKO 10R (TP 50p + SURFE)' : 'RENKO 10R COM ENTRADA NO RETESTE / PULLBACK'}
 ========================================================================================
-Ativo Padrão: ${config.symbol} (Mini-Índice B3 / WIN$)
+Ativo: ${config.symbol || asset.primarySymbol} (${asset.label})${asset.status === 'a_confirmar' ? ' — SPEC A CONFIRMAR NA CORRETORA' : ''}
 Estratégia: ${isPyramidMode ? 'PIRÂMIDE EM CADA BOX VERDE/VERMELHO (TP 50p) + ORDEM MÃE ABERTA ATÉ INVERSÃO' : 'PULLBACK / RETESTE DA ABERTURA DO BOX'}
 Modo de Conta: ${config.accountMode}
 
@@ -43,6 +48,10 @@ ARQUITETURA (2 máquinas na mesma rede Wi-Fi):
      - Tetos de risco: ${config.mt5MaxContractsPerOrder || 2} contrato(s) por ordem e
        ${config.mt5MaxOrdersPerMinute || 12} ordem(s) de entrada por minuto.
      - Toda tentativa recusada aparece no console com o IP de origem.
+  5. HISTÓRICO REAL: o app pode pedir {"action": "REQUEST_HISTORY", "reqId", "symbol", "days"}
+     (teto de 10 dias corridos por pedido) e recebe os ticks de mt5.copy_ticks_range em chunks
+     HISTORY_CHUNK + HISTORY_DONE. A chamada bloqueante vai para uma thread, então o feed ao vivo
+     NUNCA para enquanto o histórico desce.
      Para trocar o token: app > Ajustes > Segurança da Ponte > gerar novo, e baixe o
      script outra vez (app e este arquivo precisam estar com o MESMO token).
 ========================================================================================
@@ -53,14 +62,18 @@ import time
 import json
 import secrets
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import MetaTrader5 as mt5
 import websockets
 
 # ==============================================================================
 # CONFIGURAÇÕES DA ESTRATÉGIA E MODO DE OPERAÇÃO
 # ==============================================================================
-SYMBOL = "${config.symbol}"                  # Código do ativo (ex: WIN$N, WING25)
+SYMBOL = "${config.symbol || asset.primarySymbol}"                  # Código do ativo transmitido (ex: WIN$N, WDO$N)
+ASSET_LABEL = "${asset.label}"
+ASSET_DECIMALS = ${asset.decimals}                    # Casas decimais do preço deste contrato
+ASSET_TICK_SIZE = ${asset.tickSize}                   # Variação mínima em pontos
+ASSET_POINT_VALUE = ${asset.pointValue}               # R$ por ponto por contrato
 ACCOUNT_MODE = "${config.accountMode}"        # "HEDGE" ou "NETTING"
 STRATEGY_MODE = "${config.strategyMode || 'PYRAMID_FLOW_CONFLUENCE'}"
 MAX_POSITIONS = ${config.maxSimultaneousPositions || 10}
@@ -84,7 +97,7 @@ PULLBACK_TARGET = "${config.pullbackTarget || 'BOX_OPEN'}"
 PULLBACK_CUSTOM_POINTS = ${config.pullbackCustomPoints || 25}
 PULLBACK_MAX_BOXES_WAIT = ${config.pullbackMaxBoxesWait || 2}
 
-BOX_POINTS = ${config.boxPoints || 50}                 # Tamanho do box: 50 pontos (10R no Mini-Índice)
+BOX_POINTS = ${config.boxPoints || asset.renkoDefaults[Math.floor(asset.renkoDefaults.length / 2)]}                 # Tamanho do box em pontos (${asset.id})
 MIN_DELTA_THRESHOLD = ${config.minDeltaThreshold || 0}   # Delta mínimo de agressão
 REQUIRE_CVD_EXTREME = ${config.requireCvdNewExtreme ? 'True' : 'False'}
 
@@ -119,10 +132,12 @@ MAGIC_NUMBER = ${config.magicNumber || 102030}
 ORDER_COMMENT = "${config.orderComment || 'Renko10R_Flow'}"
 
 # JANELA DE HORÁRIOS CONFIGURADA PELO OPERADOR (DAY TRADE B3)
+# Padrão de trabalho: LIBERADO das 08:55 (leilão à vista, EA opera desde o 1º candle) e BLOQUEADO
+# de 17:30 até 08:55 do dia seguinte, com zeragem compulsória às 17:30 (o WIN$N encerra 17:45).
 TRADING_HOURS_ENABLED = ${config.tradingHoursEnabled ? 'True' : 'False'}
-START_TIME = "${config.tradingStartTime || '09:05'}"
-STOP_ENTRIES_TIME = "${config.tradingStopEntriesTime || '17:00'}"
-CLOSE_ALL_TIME = "${config.tradingCloseAllTime || '17:45'}"
+START_TIME = "${config.tradingStartTime || '08:55'}"
+STOP_ENTRIES_TIME = "${config.tradingStopEntriesTime || '17:30'}"
+CLOSE_ALL_TIME = "${config.tradingCloseAllTime || '17:30'}"
 
 # ==============================================================================
 # SEGURANÇA DA PONTE (LEIA ANTES DE LIGAR EM CONTA REAL)
@@ -141,6 +156,15 @@ MAX_ORDERS_PER_MINUTE = ${config.mt5MaxOrdersPerMinute || 12}
 # só autenticação, porque encerrar posição reduz risco e você precisa poder zerar.
 ENTRY_ACTIONS = {"ORDER_SEND"}
 TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_POSITIONS"}
+
+# HISTÓRICO REAL (rota REQUEST_HISTORY): teto de dias corridos por pedido e tamanho do chunk
+# transmitido. A corretora demo limita a profundidade disponível — pedir mais dias que isso
+# simplesmente volta vazio, e o app cai no gerador sintético ROTULANDO a origem na tela.
+HISTORY_MAX_DAYS = 10
+HISTORY_CHUNK_TICKS = 1500
+# Fração de ticks sem volume que liga o fallback das barras de 1min (tick de índice futuro no
+# MT5 costuma chegar com volume 0, e é disso que vivem CVD, delta e convergência no app).
+HISTORY_VOLUME_FALLBACK_RATIO = 0.8
 
 # A ponte escuta em 0.0.0.0 = todas as interfaces da rede local,
 # assim o app em OUTRO computador (ex: Mac) consegue conectar via Wi-Fi.
@@ -939,6 +963,8 @@ async def send_account_info(websocket):
             "trailingStop": TRAILING_STOP,
             "requireAuth": REQUIRE_AUTH,
             "armed": state["armed"],
+            "symbol": SYMBOL,
+            "decimals": ASSET_DECIMALS,
             "maxContractsPerOrder": MAX_CONTRACTS_PER_ORDER,
             "maxOrdersPerMinute": MAX_ORDERS_PER_MINUTE
         }
@@ -1001,6 +1027,20 @@ async def ws_handler(websocket):
                 print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if state['armed'] else '🔒 PONTE EM SEGURO: nenhuma entrada nova'} — {peer}")
                 continue
 
+            if action == "REQUEST_HISTORY":
+                # Histórico só entrega DADO de mercado e nunca toca ordem, então a única trava é o
+                # token (a mesma do broadcast_to_web): ponte EM SEGURO também atende normalmente.
+                if REQUIRE_AUTH and not state["authenticated"]:
+                    print(f" ⛔ REQUEST_HISTORY de {peer} sem autenticação — ignorado")
+                    continue
+                await handle_request_history(
+                    websocket,
+                    str(data.get("reqId") or ""),
+                    str(data.get("symbol") or SYMBOL),
+                    data.get("days") or 1
+                )
+                continue
+
             if action in TRADE_ACTIONS:
                 allowed, reason = check_trade_allowed(state, data, action)
                 if not allowed:
@@ -1061,6 +1101,139 @@ async def broadcast_to_web(msg_dict):
     for d in disconnected:
         CONNECTED_CLIENTS.discard(d)
         CLIENT_STATES.pop(d, None)
+
+def _field(row, name, default):
+    try:
+        value = row[name]
+    except Exception:
+        return default
+    return default if value is None else value
+
+
+def _history_tick_record(raw, seq):
+    """Tick cru do MT5 no MESMO shape do TICK ao vivo — o app já sabe ler isto, não precisa
+    de um segundo contrato. O campo "id" é único e estável porque o front deduplica por id."""
+    time_msc = int(_field(raw, "time_msc", 0) or 0)
+    flags = int(_field(raw, "flags", 0) or 0)
+    if flags & mt5.TICK_FLAG_BUY:
+        aggressor = "BUY"
+    elif flags & mt5.TICK_FLAG_SELL:
+        aggressor = "SELL"
+    else:
+        aggressor = "CROSS"
+    return {
+        "id": f"mt5-h-{time_msc}-{seq}",
+        "timestamp": time_msc,
+        "timeStr": datetime.fromtimestamp(time_msc / 1000).strftime('%H:%M:%S.%f')[:-3],
+        "price": round(float(_field(raw, "price", 0) or 0), ASSET_DECIMALS),
+        "volume": int(_field(raw, "volume", 0) or 0),
+        "aggressor": aggressor,
+    }
+
+
+def _apply_m1_volume(symbol, ticks):
+    """Tick de índice futuro no MT5 chega quase sempre com volume 0 e flag CROSS — e é disso que
+    vivem CVD, delta e convergência no app (sem volume a estratégia não erra: ela fica MUDA).
+    Distribui o tick_volume da barra de 1min entre os ticks daquele minuto e atribui agressão por
+    uptick/downtick quando a flag não veio. Devolve False se nem as barras existem."""
+    date_from = datetime.fromtimestamp(ticks[0]["timestamp"] / 1000, timezone.utc)
+    date_to = datetime.fromtimestamp(ticks[-1]["timestamp"] / 1000, timezone.utc)
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, date_from, date_to)
+    if rates is None or len(rates) == 0:
+        return False
+
+    volume_per_minute = {}
+    for r in rates:
+        minute = int(_field(r, "time", 0) or 0) // 60 * 60
+        volume_per_minute[minute] = int(_field(r, "tick_volume", 0) or 0)
+
+    groups = {}
+    for i, t in enumerate(ticks):
+        groups.setdefault(t["timestamp"] // 1000 // 60 * 60, []).append(i)
+    for minute, indexes in groups.items():
+        total = volume_per_minute.get(minute, 0)
+        if total <= 0:
+            continue
+        base, extra = divmod(total, len(indexes))
+        for pos, i in enumerate(indexes):
+            ticks[i]["volume"] = base + (1 if pos < extra else 0)
+
+    for i in range(1, len(ticks)):
+        if ticks[i]["aggressor"] != "CROSS":
+            continue
+        if ticks[i]["price"] > ticks[i - 1]["price"]:
+            ticks[i]["aggressor"] = "BUY"
+        elif ticks[i]["price"] < ticks[i - 1]["price"]:
+            ticks[i]["aggressor"] = "SELL"
+    return True
+
+
+async def handle_request_history(websocket, req_id, symbol, days):
+    """Histórico REAL pedido pelo Terminal Web. A chamada bloqueante do MT5 vai para uma thread e
+    os ticks descem em HISTORY_CHUNK (o feed ao vivo continua transmitindo durante todo o tempo);
+    zero ticks ou exceção viram HISTORY_ERROR com motivo legível — nunca um DONE vazio, porque o
+    app precisa saber que caiu no gerador sintético."""
+    try:
+        days = max(1, min(HISTORY_MAX_DAYS, int(days or 1)))
+    except (TypeError, ValueError):
+        days = 1
+    date_to = datetime.now(timezone.utc)
+    date_from = date_to - timedelta(days=days)
+
+    try:
+        raw_ticks = await asyncio.to_thread(mt5.copy_ticks_range, symbol, date_from, date_to, mt5.COPY_TICKS_TRADE)
+    except Exception as exc:
+        await send_json(websocket, {
+            "type": "HISTORY_ERROR",
+            "data": {"reqId": req_id, "reason": f"mt5.copy_ticks_range falhou: {exc}"}
+        })
+        return
+
+    if raw_ticks is None or len(raw_ticks) == 0:
+        hint = "o contrato não existe no terminal logado" if mt5.symbol_info(symbol) is None else \
+               "a conta não tem essa profundidade de histórico (peça menos dias)"
+        await send_json(websocket, {
+            "type": "HISTORY_ERROR",
+            "data": {"reqId": req_id, "reason": f"Zero ticks de '{symbol}' nos últimos {days} dia(s) — {hint}."}
+        })
+        return
+
+    ticks = [_history_tick_record(raw, i) for i, raw in enumerate(raw_ticks)]
+    ticks.sort(key=lambda t: (t["timestamp"], t["id"]))
+
+    volume_source = "TICK"
+    zero_volume = sum(1 for t in ticks if t["volume"] <= 0)
+    if zero_volume >= max(1, int(len(ticks) * HISTORY_VOLUME_FALLBACK_RATIO)):
+        fixed = await asyncio.to_thread(_apply_m1_volume, symbol, ticks)
+        volume_source = "M1_RATE" if fixed else "NONE"
+
+    total = len(ticks)
+    chunks = 0
+    for start in range(0, total, HISTORY_CHUNK_TICKS):
+        await send_json(websocket, {
+            "type": "HISTORY_CHUNK",
+            "data": {
+                "reqId": req_id,
+                "index": chunks,
+                "volumeSource": volume_source,
+                "ticks": ticks[start:start + HISTORY_CHUNK_TICKS]
+            }
+        })
+        chunks += 1
+
+    await send_json(websocket, {
+        "type": "HISTORY_DONE",
+        "data": {
+            "reqId": req_id,
+            "count": total,
+            "chunks": chunks,
+            "days": days,
+            "symbol": symbol,
+            "volumeSource": volume_source
+        }
+    })
+    print(f"📜 HISTÓRICO enviado a {get_peer_ip(websocket)}: {total} ticks de '{symbol}' ({days} dia(s), volume {volume_source}) em {chunks} chunk(s).")
+
 
 async def mt5_stream_loop():
     last_tick_time_msc = 0

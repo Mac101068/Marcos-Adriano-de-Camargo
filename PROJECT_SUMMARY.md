@@ -21,15 +21,19 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
 8. **Simulador & Replay**: feed autônomo B3, reprodução progressiva de dias úteis e modo **OPERA**, que roda a estratégia de verdade pelo mesmo `handleIncomingTick` do terminal.
 9. **Responsividade Mobile Completa**: gestos touch (Pan, Pinch-to-Zoom, arrasto dos divisores com o dedo), Bottom Navigation com "Mais" e HUD adaptativo.
 10. **Integração MetaTrader 5 (Python Bridge) blindada**: WebSocket com handshake de token, armamento `ARM`/`DISARM` e tetos de risco impostos pela própria ponte.
-11. **Auditoria Intraday & Compliance**: trilha de eventos por ordem, filtros, timeline e exportação CSV padrão brasileiro.
+11. **Auditoria Intraday & Compliance**: trilha de eventos por ordem, filtros, timeline e exportação CSV padrão brasileiro, com **livro separado por mercado** (`..._WIN`, `..._WDO`, `..._BTC`).
 12. **Módulo SaaS & Painel Master do Administrador**: licenciamento por dias, paywall com checkout PIX/Cartão e gestão de clientes (⚠️ ainda maquete em `localStorage`, sem backend).
+13. **Estúdio de Estratégias**: biblioteca versionada de snapshots do `AutomationConfig`, independente dos perfis do Ajustes — ativar uma estratégia é gesto explícito e o Robô continua PAUSADO.
+14. **Registro de Ativo (multi-mercado)**: todos os números que mudam de contrato para contrato (R$/ponto, tick, casas decimais, preço-base, janelas de sessão, escalas de Renko) moram em `src/assets/assetRegistry.ts`. WIN está homologado; **WDO e BTC aparecem no seletor como `A CONFIRMAR`** e só entram em **ensaio** (Robô OFF, ponte em SEGURO). O histórico do replay vem do MT5 quando a ponte está conectada, e do gerador sintético (rotulado) quando não está.
+
+> A estratégia em si é escrita em **pontos**, não em reais: trocar de ativo não muda regra de entrada, gestão de risco ou layout do painel de parâmetros — muda só a conversão na tela.
 
 ---
 
 ## ⚙️ 2. Regras da Estratégia Quantitativa
 
 ### A. Renko 10R (50 pontos no Mini-Índice)
-- **Tamanho do Box**: 50 pontos por box (10R na convenção clássica brasileira de 5 ticks/ponto).
+- **Tamanho do Box**: 50 pontos por box (10R na convenção clássica brasileira de 5 ticks/ponto — o `tickSize` de cada ativo mora em `src/assets/assetRegistry.ts`; as escalas sugeridas por ativo estão em `renkoDefaults`).
 - **Fechamento de Alta**: Fechamento = Abertura + 50 pts.
 - **Fechamento de Baixa**: Fechamento = Abertura - 50 pts.
 - **Reversão**: Exige 2 boxes (100 pontos) no sentido oposto para inverter a direção.
@@ -213,7 +217,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
   - **Reiniciar Pregão**: Botão com confirmação para limpar e reiniciar o livro de auditoria para um novo dia de operações.
 - **Trilha de Auditoria Interativa (Timeline Modal)**:
   - Clicar em qualquer ordem abre uma linha do tempo vertical detalhada com todos os eventos cronológicos daquela ordem (Detecção de Sinal ➔ Disparo ➔ Preenchimento no Reteste ➔ Saída Parcial ➔ Breakeven ➔ Trailing Stop ➔ Liquidação Final) e selo de validação.
-- **Persistência**: Registros salvos em `localStorage` sob a chave `fluxo_renko_intraday_audit_v1`.
+- **Persistência**: um **livro por mercado** — `fluxo_renko_intraday_audit_v3_WIN` (e `_WDO`, `_BTC`). Antes da Fase 2 era uma chave única, o que misturaria R$0,20/pt do WIN com R$0,10/pt do WDO no mesmo PnL; a migração **copiou** o legado para a prateleira do WIN sem apagar a chave antiga.
 
 ---
 
@@ -230,6 +234,10 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
   - **Dias equilibrados**: o gerador sorteia ~40% alta / ~40% baixa / ~20% lateral (sem viés comprador embutido), com o viés valendo a sessão inteira e perdendo força no almoço.
   - **Ritmo**: o 1x foi desacelerado para ficar assistível — agora é **compasso por tick** (1x ≈ 2,0 s/tick; um dia leva ~1min45 no replay; 10x ≈ 5 s), e o mesmo controle vive na tira de status abaixo do menu.
   - **Replay progressivo**: começa na primeira barra e desenha o período todo (mínimo 1 dia), dispara sozinho na abertura da plataforma.
+  - **Fonte dos ticks rotulada (Fase 2)**: com a ponte conectada o replay pede **histórico real** ao MT5
+    (`marketHistoryService` → `REQUEST_HISTORY`); sem conexão, com erro ou sem resposta, usa o gerador
+    sintético. O resumo da corrida diz `HISTÓRICO REAL (MT5) · N ticks` (sem seed) ou `SINTÉTICO · #seed`,
+    e informa a origem do volume (`TICK` / `M1_RATE` / `NONE`) — sem volume não existe delta nem CVD.
   - **Dia anterior ESTÁTICO**: sempre +1 dia de contexto na tela (a abertura do dia‑alvo tem o fechamento de ontem como referência), processado de uma vez, sem animação, **sem nunca operar** e **sem nenhuma marca ▲/▼** (`isStaticContext` suprime as setas no gráfico) — a linha âmbar `ABERTURA` separa os dias.
   - **Modo OPERA**: o replay roda a estratégia **de verdade** pelo mesmo `handleIncomingTick` do terminal — abre mãe e pirâmides, enche a auditoria e move o PnL (precisa do Robô LIGADO).
   - **Zera a sessão**: o replay limpa ordens abertas, livro de auditoria e PnL (pregão limpo), mas **não apaga** coleta marcada como real.
@@ -285,6 +293,22 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 - **Toasts** de `AUTH_RESULT`, `ARM_RESULT` e `RISK_REJECT` (“🔒 PONTE RECUSOU O TOKEN”, “🔓 PONTE AUTENTICADA E ARMADA”, “⛔ ORDEM RECUSADA PELA PONTE” + motivo).
 - **Diagnóstico**: teste de ping e status de conexão na própria aba Guia.
 
+### 5.5 Histórico de ticks (rota `REQUEST_HISTORY`, Fase 2)
+- Pedido `{action:'REQUEST_HISTORY', reqId, symbol, days}` — **só exige o token** (a mesma guarda do
+  `broadcast_to_web`), porque entregar dado de mercado não toca ordem: ponte em SEGURO atende normal.
+- Resposta em `HISTORY_CHUNK{reqId, index, ticks[]}` (mesmo shape do `TICK` ao vivo, chunks de ~1.500),
+  `HISTORY_DONE{reqId, count, volumeSource, days}` ou `HISTORY_ERROR{reqId, reason}`.
+- `mt5.copy_ticks_range` roda dentro de `asyncio.to_thread`, com **teto de 10 dias** por pedido: o feed
+  ao vivo nunca para enquanto o histórico desce.
+- **Fallback de volume**: tick de índice futuro no MT5 costuma chegar com `volume = 0`, e é disso que
+  vivem CVD, delta e convergência. Se ≥80% dos ticks da janela vierem sem volume, o script distribui o
+  `tick_volume` da barra de **M1** entre os ticks do minuto. `volumeSource` sai como `TICK`, `M1_RATE` ou `NONE`.
+- No front, `src/services/marketHistoryService.ts` correlaciona por `reqId`, deduplica por `id`, rejeita
+  em 25 s e limpa pendências no `onclose`. `ACCOUNT_INFO` agora reporta `symbol`, e o seletor de ativo
+  mostra ponto âmbar quando o script rodando no Windows transmite outro contrato.
+- Sem resposta (MT5 fechado, histórico raso na conta demo, erro), o replay cai no **gerador sintético e
+  isso aparece na tela**: chip `HISTÓRICO REAL (MT5) · N ticks` versus `SINTÉTICO · #seed`.
+
 ---
 
 ## 👥 6. Módulo SaaS, Licenciamento & Admin Master
@@ -306,6 +330,13 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 ## 💾 7. Registro e Memória Persistente do EA & Controle Total pelo Operador
 
+- **Ativo escolhido também é memória (`assetId`)**: o seletor do Header grava o id do ativo no
+  `AutomationConfig` e o `symbol` do contrato (`WIN$N` / `WDO$N` / `BIT$N`). Na leitura, `assetId` vence;
+  sem ele, o terminal resolve pelo prefixo do símbolo — estratégia antiga salva antes da Fase 2 continua
+  funcionando. A régua de preço usa o **último preço real visto** (`fluxo_asset_last_price_v1`, válido por
+  7 dias) e só cai no `basePrice` do registro quando não há dado fresco.
+- **Estúdio de Estratégias** (`fluxo_strategy_library_v1`): biblioteca separada dos perfis abaixo — salvar
+  ou editar ali **nunca** mexe no config ativo; ativar é um clique explícito, e o Robô continua PAUSADO.
 - **Persistência Automática na Memória Local (`localStorage`)**:
   - Toda alteração feita pelo operador nos parâmetros é imediatamente registrada e persistida no navegador através do serviço `EaConfigService`.
   - Ao recarregar a página ou abrir o terminal em outra sessão, o EA restaura exatamente a última configuração estabelecida.
@@ -341,32 +372,46 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ├── EVOLUCOES_DETALHADAS.md           # Diário de obra: causa raiz, implementação e verificação de cada ciclo
 ├── PROJECT_SUMMARY.md                # Estado atual consolidado (este arquivo)
 ├── PROJECT_CONSOLIDATION_CHAT_SEED.md# Prompt mestre para retomar em bate-papo novo
+├── scripts/
+│   ├── strategyLab.ts                # Laboratório headless: variações das duas estratégias no mesmo motor do coletor
+│   └── strategy_lab_results.csv      # Veredito por expectativa/fator de lucro/consistência (5 réplicas × 10 dias)
 └── src/
     ├── main.tsx                      # Bootstrap (sem StrictMode, para não duplicar loops de tick)
-    ├── index.css                     # Tailwind v4 + @media print do dossiê
-    ├── App.tsx                       # ≈3.0k linhas: ticks, estado das ordens, WebSocket MT5, abas, bottom nav, toast
+    ├── index.css                     # Tailwind v4 + @media print do dossiê + entrada `.flow-toast` do aviso central
+    ├── App.tsx                       # ≈3.8k linhas: ticks, ordens, WebSocket MT5, abas, bottom nav, toast central
+    ├── assets/
+    │   ├── assetRegistry.ts          # ÚNICA fonte dos números por ativo (WIN ativo; WDO/BTC `a_confirmar`) + helpers puros
+    │   ├── assetMigration.ts         # Migração do preço-base (flag `fluxo_asset_base_171500_v1`): quita/expira ordem presa no preço antigo
+    │   └── assetSelectionMigration.ts # Migração da seleção de ativo (flag `fluxo_asset_selection_v1`): config, biblioteca e livro de auditoria
     ├── types/
-    │   ├── trading.ts                # RenkoBox (regimeFactor, isStaticContext), Tick, TradeOrder (role MAIN/PYRAMID, PENDING_LIMIT), AuditEvent, AutomationConfig
+    │   ├── trading.ts                # RenkoBox (regimeFactor, isStaticContext), Tick, TradeOrder (role MAIN/PYRAMID, PENDING_LIMIT), AuditEvent, AutomationConfig (`assetId`, `scriptSymbol`)
+    │   ├── strategy.ts               # SavedStrategy: snapshot versionado do AutomationConfig para o Estúdio
     │   ├── auth.ts                   # Usuários, licenças e transações SaaS
     │   └── drawing.ts                # Formas desenhadas no canvas (linha, retângulo, fibra, zona)
     ├── services/
-    │   ├── eaConfigService.ts        # Persistência do config, presets, perfis customizados e merge defensivo de defaults
+    │   ├── eaConfigService.ts        # Persistência do config, presets, perfis e merge defensivo (normaliza `assetId` no load E no import JSON)
+    │   ├── strategyLibraryService.ts # Biblioteca do Estúdio em `fluxo_strategy_library_v1` (CRUD defensivo, nunca toca o config ativo)
     │   ├── authService.ts            # Licenças, contagem de dias e personas (⚠️ maquete em localStorage)
-    │   ├── orderAuditService.ts      # Livro de auditoria intraday, métricas e CSV padrão BR (UTF-8 BOM, `;`)
+    │   ├── orderAuditService.ts      # Livro de auditoria intraday **por ativo** (`auditKeyForAsset`), métricas e CSV padrão BR
+    │   ├── marketHistoryService.ts   # Pedido de histórico real: reqId, chunks, dedupe, timeout, `dispose` e suficiência de volume
     │   └── seriesCollectorService.ts # Coletor multi-série: seis motores, marcas real/replay e snapshot persistido
     ├── utils/
-    │   ├── renkoCalculator.ts        # Construção dos boxes Renko + CVD/delta por box e Heikin-Ashi de fluxo
+    │   ├── renkoCalculator.ts        # Construção dos boxes Renko + CVD/delta por box e Heikin-Ashi de fluxo (com `setAsset`)
     │   ├── barEngines.ts             # Motores de barra das séries (Renko 10R, Renko 15R, Range, Tempo…)
     │   ├── convergenceEvaluator.ts   # Regra de confluência preço × fluxo que qualifica o sinal (com limiar adaptativo)
     │   ├── sessionRegime.ts          # Medidor de regime de sessão: fator de volume/direção que adapta o Delta Mínimo
-    │   ├── marketSimulator.ts        # Feed autônomo de ticks simulando o WIN$ (dias equilibrados alta/baixa/lateral)
+    │   ├── priceLevels.ts            # Níveis do pregão (AJUSTE/FECHAMENTO/ABERTURA/LEILÃO/MÁX/MÍN) + curva de VWAP — função pura
+    │   ├── tradingGates.ts           # Portões de entrada compartilhados (janela na hora do tick, trava financeira), puros
+    │   ├── tradingWindowMigration.ts # Migração da trava de horário (flag `fluxo_trading_window_08_55_17_30_v2`)
+    │   ├── marketSimulator.ts        # Feed autônomo de ticks do ativo escolhido (dias equilibrados alta/baixa/lateral)
     │   ├── paperStrategyBot.ts       # Robô sombra: espelho fiel das regras do terminal (mesma proteção da mãe)
-    │   ├── sessionRules.ts           # Trava de fim de pregão 17:30 → 18:05 (DAY_CLOSE / DAY_CLOSE_FORCED)
+    │   ├── sessionRules.ts           # Trava de fim de pregão lendo `tradingCloseAllTime` da estratégia
     │   ├── bridgeSecurity.ts         # Token da ponte (gerar, ler, rotacionar, mascarar) em fluxo_bridge_token_v1
-    │   └── pythonScriptGenerator.ts  # Gera o .py da ponte MT5 já com AUTH/ARM/tetos — o script não vive no repo
+    │   └── pythonScriptGenerator.ts  # Gera o .py da ponte: AUTH/ARM/tetos + REQUEST_HISTORY (copy_ticks_range, 10 dias, fallback M1)
     └── components/
-        ├── Header.tsx                # 3 zonas, selo de conexão MT5 (· ARMADO / · SEGURO), badge do EA, PDF — botões clean (chrome neutro, cor só no acento)
-        ├── RenkoFlowChart.tsx        # ≈2.8k linhas de canvas: séries, 2 divisores arrastáveis, escalas adaptativas, zoom multidia (3000 tijolos), engrenagem de ajustes, linhas de ordens, desenho
+        ├── Header.tsx                # 3 zonas, **AssetSelector (WIN/WDO/BTC + folha de ensaio)**, selo MT5 (· ARMADO / · SEGURO), badge do EA, PDF
+        ├── StrategyStudio.tsx        # Aba Estúdio: biblioteca de estratégias, editor por blocos, ativar/duplicar/exportar
+        ├── RenkoFlowChart.tsx        # ≈3.0k linhas de canvas: séries, 2 divisores arrastáveis, níveis de preço + VWAP, zoom multidia, linhas de ordens, desenho
         ├── ChartControlSidebar.tsx   # Controles de série, escala, preset de janela e reset
         ├── DadosPanelWindow.tsx      # Janela flutuante arrastável que hospeda o painel de dados
         ├── RenkoBoxCard.tsx          # Quadro do box (fixo no canto, HUD mobile e variante `window`)
@@ -392,6 +437,17 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ## 🆕 9. Resumo dos últimos ciclos
 
 > Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+### Ciclo 8 (31/10/2026) — Estúdio, níveis do pregão, Registro de Ativo (Fases 1–2) e aviso central
+
+- ✅ **Estúdio de Estratégias** (`StrategyStudio.tsx` + `strategyLibraryService.ts` + `types/strategy.ts`): biblioteca em `fluxo_strategy_library_v1` com editor por blocos, duplicar, exportar/importar e **ativar sem mexer no que está operando** (Robô continua PAUSADO).
+- ✅ **Níveis do pregão no gráfico** (`priceLevels.ts`, puro): AJUSTE, FECHAMENTO, ABERTURA, LEILÃO (VWAP dos primeiros minutos), MÁX e MÍN + curva de VWAP laranja; toggle em `fluxo_renko_price_levels_v1`.
+- ✅ **Portões de entrada compartilhados** (`tradingGates.ts`) entre terminal e robôs sombra, `sessionRules.ts` lendo `tradingCloseAllTime`, e migração da trava de horário (`fluxo_trading_window_08_55_17_30_v2`).
+- ✅ **Laboratório headless** (`scripts/strategyLab.ts` + CSV): as duas estratégias reais em variações de escala/reteste, 5 réplicas × 10 dias com os mesmos ticks para todas.
+- ✅ **Registro de Ativo — Fase 1** (`src/assets/assetRegistry.ts`): R$/ponto, tick, casas decimais, preço-base e janelas de sessão saíram do código (estavam soldados em 15, 22 e 10 pontos diferentes); `basePrice` do WIN corrigido para 171.500 com migração (`fluxo_asset_base_171500_v1`) que quita/expira ordem presa no preço antigo.
+- ✅ **Registro de Ativo — Fase 2**: seletor **WIN/WDO/BTC** no Header com **folha de ensaio** para spec `a_confirmar` (Robô forçado em OFF + chip permanente `SPEC NÃO HOMOLOGADO`), `assetId` persistido no config com migração (`fluxo_asset_selection_v1`), **livro de auditoria por ativo**, e **histórico real pela ponte**: `marketHistoryService.ts` no front + `REQUEST_HISTORY`/`copy_ticks_range`/chunks com fallback de volume por M1 no script gerado. O replay agora se rotula `HISTÓRICO REAL (MT5)` ou `SINTÉTICO · #seed`.
+- ✅ **Aviso flutuante no CENTRO da tela** (seu pedido): nada de quadro no canto inferior direito; o toast ganhou ✕ para fechar e animação real (as classes `animate-in` eram no-ops sem plugin de animação no Tailwind v4).
+- ⚠️ **Histórico real ainda não conferido com o MT5 da XP** (profundidade de ticks e qualidade do volume só se provam rodando o script no Windows), e **WDO/BTC seguem sem homologar** — preciso dos números oficiais.
 
 ### Ciclo 7 (30/10/2026) — limiar adaptativo, Avaliação Técnica e gráfico de estudo
 
@@ -466,14 +522,21 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 | Chave | Conteúdo |
 | --- | --- |
-| `fluxo_renko_ea_config_v3` | Configuração ativa do robô (`AutomationConfig`) |
+| `fluxo_renko_ea_config_v3` | Configuração ativa do robô (`AutomationConfig`, agora com `assetId`) |
 | `fluxo_renko_ea_profiles_v3` | Perfis customizados salvos pelo operador |
+| `fluxo_strategy_library_v1` | **Biblioteca do Estúdio de Estratégias** (snapshots do config) |
 | `fluxo_renko_chart_scales_v2` | `scaleX`, `scaleY`, `scaleFlow`, `flowPaneRatio`, `flowPanOffset`, `haHistSplit` |
 | `fluxo_renko_visible_count_v3` | Janela "Tijolos X" do gráfico (padrão 250 desktop / 50 mobile; teto 3000 — modo estudo) |
 | `fluxo_renko_spacing_mode_v2` | Modo de espaçamento (Preencher/Compacto; padrão `fill`) |
 | `fluxo_renko_flow_mode_v1` | Modo do painel de fluxo (Heikin-Ashi / Delta / Híbrido) |
+| `fluxo_renko_price_levels_v1` | Liga/desliga os níveis do pregão desenhados no gráfico |
 | `fluxo_bridge_token_v1` | **Token da ponte** — fora do config de propósito, para nunca ser exportado em JSON |
-| `fluxo_renko_intraday_audit_v3` | Livro de auditoria intraday |
+| `fluxo_renko_intraday_audit_v3` | Livro de auditoria **legado** (chave única, pré-Fase 2) — mantido, não apagado |
+| `fluxo_renko_intraday_audit_v3_WIN` / `_WDO` / `_BTC` | Livro de auditoria **por mercado** (a partir da Fase 2) |
+| `fluxo_asset_last_price_v1` | Último preço REAL visto por ativo (régua do eixo Y, partida do sintético e tolerância do sanitizador; válido por 7 dias) |
+| `fluxo_asset_base_171500_v1` | Flag da migração do preço-base (Fase 1) — apague para rodar de novo |
+| `fluxo_asset_selection_v1` | Flag da migração da seleção de ativo (Fase 2) — apague para rodar de novo |
+| `fluxo_trading_window_08_55_17_30_v2` | Flag da migração da trava de horário |
 | `fluxo_series_collector_v1` | Snapshot do coletor multi-série (com marca `real` por dia) |
 | `fluxo_renko_hud_pos_v1` | Posição do quadro HUD/Box Renko |
 | `fluxo_chart_series_v1` / `fluxo_chart_range_pts_v1` / `fluxo_chart_time_sec_v1` | Série ativa do gráfico e escalas de Range/Tempo |
@@ -499,6 +562,10 @@ Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto
 ```
 
 ### Pendências conhecidas (para não redescobrir)
+- 🧪 **Homologar WDO e BTC**: me traga `pointValue` (R$/ponto), `tickSize`, `decimals`, `primarySymbol` no MT5 da XP, horário de pregão e a profundidade de histórico da conta demo. Trocar `status: 'a_confirmar'` → `'ativo'` no `assetRegistry.ts` destrava o seletor sozinho.
+- 🧪 **Fases seguintes do registro**: F3 = travas de horário por ativo (leilão, ajuste, fix das 13:00 do WDO, gap de fim de semana do BTC); F4 = ponte Python definitiva e dossiê PDF sem o texto fixo "Mini-Índice B3"; F5 = VTC (PTAX + FRP0) morando no WDO.
+- 🧪 **Conferir o histórico real no Windows**: rodar o script novo, pedir 1 dia de replay conectado e ver se o chip sai `HISTÓRICO REAL (MT5)` com volume `TICK` ou `M1_RATE`.
+- 🧪 Para retestar as migrações no navegador, apague as flags `fluxo_asset_base_171500_v1` / `fluxo_asset_selection_v1` / `fluxo_trading_window_08_55_17_30_v2` em DevTools → Local Storage.
 - Módulo SaaS/paywall continua **maquete em `localStorage`**, sem backend nem gateway de pagamento real.
 - A pergunta de infraestrutura “até 100 clientes pagantes” segue em aberto (hoje cada cliente precisa do próprio Windows com MT5 logado).
 - Recomenda-se **rotacionar o token** da ponte antes de operar em conta real e aplicar a regra de firewall `New-NetFirewallRule` na porta 8765.

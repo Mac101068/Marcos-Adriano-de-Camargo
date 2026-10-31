@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AutomationConfig, ConfigPreset } from '../types/trading';
+import { pointsToBRL, renkoScaleLabel, resolveAsset } from '../assets/assetRegistry';
 import { EaConfigService } from '../services/eaConfigService';
 import {
   Sliders,
@@ -167,8 +168,11 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
     }
   };
 
-  const slFinancial = (config.stopLossPoints * 0.2 * config.contracts).toFixed(2);
-  const tpFinancial = (config.takeProfitPoints * 0.2 * config.contracts).toFixed(2);
+  // Números do ativo da estratégia (R$/ponto e tick). Só converte e rotula: nenhum parâmetro,
+  // campo ou ordem desta tela muda por causa disso.
+  const asset = resolveAsset(config.symbol, config.assetId);
+  const slFinancial = pointsToBRL(config.stopLossPoints, config.contracts, asset).toFixed(2);
+  const tpFinancial = pointsToBRL(config.takeProfitPoints, config.contracts, asset).toFixed(2);
 
   const formattedSavedDate = config.lastSavedTimestamp
     ? new Date(config.lastSavedTimestamp).toLocaleString('pt-BR', {
@@ -915,7 +919,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               <div className="flex items-center justify-between mb-1">
                 <label className="text-slate-400">Tamanho do Renko</label>
                 <span className="font-mono text-emerald-400 font-semibold">
-                  {config.boxPoints} pts ({config.boxPoints / 5}R)
+                  {config.boxPoints} pts ({renkoScaleLabel(config.boxPoints, asset)})
                 </span>
               </div>
               <input
@@ -1295,7 +1299,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                     <span className="text-slate-400">Alvo da Parcial:</span>
                     <span className="font-mono text-neutral-400 font-semibold">
                       +{config.partialPoints} pts (R${' '}
-                      {(config.partialPoints * 0.2 * config.partialContracts).toFixed(2)})
+                      {pointsToBRL(config.partialPoints, config.partialContracts, asset).toFixed(2)})
                     </span>
                   </div>
                   <input

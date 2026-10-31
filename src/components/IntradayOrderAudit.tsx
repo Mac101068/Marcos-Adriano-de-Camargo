@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { TradeOrder, OrderAuditEvent } from '../types/trading';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, pointsToBRL } from '../assets/assetRegistry';
 import { OrderAuditService } from '../services/orderAuditService';
 import {
   ShieldCheck,
@@ -30,6 +31,8 @@ interface IntradayOrderAuditProps {
   orders: TradeOrder[];
   currentPrice: number;
   symbol?: string;
+  /** Spec do ativo (R$/ponto e casas do preço); `symbol` continua sendo o código do contrato nos relatórios. */
+  asset?: AssetSpec;
   onClearAudit?: () => void;
   onOpenSettings?: () => void;
 }
@@ -38,6 +41,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
   orders,
   currentPrice,
   symbol = 'WIN$N',
+  asset = ASSETS[DEFAULT_ASSET_ID],
   onClearAudit,
   onOpenSettings,
 }) => {
@@ -387,7 +391,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                   let fin = order.financialResult;
                   if (isOpen) {
                     pts = order.type === 'BUY' ? currentPrice - order.entryPrice : order.entryPrice - currentPrice;
-                    fin = pts * 0.2 * (order.remainingContracts || order.contracts) + (order.partialFinancial || 0);
+                    fin = pointsToBRL(pts, order.remainingContracts || order.contracts, asset) + (order.partialFinancial || 0);
                   }
 
                   const isWin = (pts || 0) > 0;

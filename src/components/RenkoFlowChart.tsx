@@ -3,6 +3,17 @@ import { RenkoBox, TradeOrder } from '../types/trading';
 import { ChartSeries } from '../utils/barEngines';
 import { Drawing, DrawingColor, DrawingTool, loadDrawings, saveDrawings } from '../types/drawing';
 import { ChartLayout, DrawingOverlay } from './DrawingOverlay';
+import { PriceLevel, VWAP_CURVE_COLOR, VwapCurve } from '../utils/priceLevels';
+import {
+  ASSETS,
+  AssetSpec,
+  DEFAULT_ASSET_ID,
+  formatPrice,
+  pointsToBRL,
+  referencePrice,
+  renkoScaleLabel,
+  snapToTick,
+} from '../assets/assetRegistry';
 import { ChartControlSidebar } from './ChartControlSidebar';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { RenkoBoxCard } from './RenkoBoxCard';
@@ -17,6 +28,19 @@ const STORAGE_KEY_SPACING_MODE = 'fluxo_renko_spacing_mode_v2';
 // gerar 120-200 tijolos, então 120 apertava e empurrava a fronteira para fora).
 // Teto agora é 3000 tijolos (~15 dias) — modo estudo: máximo de dias possível na tela.
 const STORAGE_KEY_VISIBLE_COUNT = 'fluxo_renko_visible_count_v3';
+// Níveis relevantes do pregão (leilão / abertura / VWAP / máx / mín / fechamento e ajuste) ligados por padrão.
+const STORAGE_KEY_PRICE_LEVELS = 'fluxo_renko_price_levels_v1';
+
+/**
+ * '#rrggbb' -> rgba(...) com a transparência pedida. Cada nível chega ao canvas já discreto: a cor
+ * serve para identificar o nível de relance, nunca para brigar com os tijolos do gráfico.
+ */
+const levelRgba = (hex: string, alpha: number) => {
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+};
 
 interface RenkoFlowChartProps {
   boxes: RenkoBox[];
@@ -49,6 +73,15 @@ interface RenkoFlowChartProps {
   // Janela flutuante do Box Renko (atalho "Box Renko" no menu)
   boxWindowOpen?: boolean;
   onBoxWindowClose?: () => void;
+  /** Níveis relevantes do pregão (utils/priceLevels), desenhados como tracejado cinza discreto. */
+  priceLevels?: PriceLevel[];
+  /** VWAP acumulada do dia amostrada nos tijolos — a curva laranja. */
+  vwapCurve?: VwapCurve;
+  /**
+   * Ativo desenhado: valor do ponto (R$), variação mínima do hover e casas decimais do preço.
+   * O gráfico continua medindo tudo em PONTOS; o spec só entra na conversão e na formatação.
+   */
+  asset?: AssetSpec;
 }
 
 interface FlowHeikinAshi {
@@ -96,6 +129,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   onDadosWindowClose,
   boxWindowOpen = false,
   onBoxWindowClose,
+  priceLevels = [],
+  vwapCurve,
+  asset = ASSETS[DEFAULT_ASSET_ID],
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -232,6 +268,17 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
   // Preferências visuais
   const [showOrderLines, setShowOrderLines] = useState<boolean>(true);
+  // Níveis do pregão: traço fino na cor do nível + etiqueta curta. Persistido porque é preferência de
+  // leitura de tela, não parâmetro de estratégia.
+  const [showPriceLevels, setShowPriceLevels] = useState<boolean>(
+    () => localStorage.getItem(STORAGE_KEY_PRICE_LEVELS) !== '0'
+  );
+  const togglePriceLevels = () => {
+    setShowPriceLevels((prev) => {
+      localStorage.setItem(STORAGE_KEY_PRICE_LEVELS, prev ? '0' : '1');
+      return !prev;
+    });
+  };
   const [boxThickness, setBoxThickness] = useState<'thin' | 'ultrathin' | 'medium'>('thin');
   // 'compact' = tijolos sempre agrupados à direita | 'fill' = auto-ajuste que preenche a tela
   const [spacingMode, setSpacingMode] = useState<'compact' | 'fill'>(() => {
@@ -619,7 +666,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     });
 
     if (!isFinite(boxMin) || !isFinite(boxMax) || boxMin >= boxMax) {
-      const fallbackCenter = currentPrice > 0 ? currentPrice : 128500;
+      // eixo Y sem nenhum box na tela: a régua do ativo (preço real fresco ou basePrice do registro)
+      const fallbackCenter = currentPrice > 0 ? currentPrice : referencePrice(asset);
       boxMin = fallbackCenter - 100;
       boxMax = fallbackCenter + 100;
     }
@@ -1467,6 +1515,97 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     });
 
     // =======================================================================
+    // NÍVEIS RELEVANTES DO PREGÃO (leilão, abertura, VWAP, máx/mín e o dia anterior:
+    // fechamento e ajuste): tracejado fino com a cor do nível e etiqueta curta à esquerda. Vem
+    // ANTES do preço atual e das linhas de ordem de propósito: referência de estudo não pode
+    // brigar com o que se opera.
+    // =======================================================================
+    if (showPriceLevels && priceLevels.length > 0) {
+      ctx.font = isMobile ? '8px "JetBrains Mono", monospace' : '9px "JetBrains Mono", monospace';
+      ctx.textAlign = 'left';
+      let lastLabelY = -999;
+      priceLevels.forEach((lv) => {
+        const y = priceToY(lv.price);
+        if (y < 8 || y > pricePaneHeight - 6) return;
+        ctx.strokeStyle = levelRgba(lv.color, 0.45);
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(chartWidth, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Duas etiquetas no mesmo pixel viram ruído: a segunda fica só com o traço.
+        if (Math.abs(y - lastLabelY) < 12) return;
+        lastLabelY = y;
+        const tag = `${lv.label} ${formatPrice(lv.price, asset)}`;
+        const tw = ctx.measureText(tag).width + 8;
+        ctx.fillStyle = 'rgba(9, 9, 11, 0.74)';
+        ctx.beginPath();
+        ctx.roundRect(4, y - 8, tw, 12, 2);
+        ctx.fill();
+        // A etiqueta usa a cor do nível, mas um tom acima do traço para continuar legível.
+        ctx.fillStyle = levelRgba(lv.color, 0.85);
+        ctx.fillText(tag, 8, y + 1.5);
+      });
+    }
+
+    // =======================================================================
+    // VWAP ACUMULADA DO DIA (curva laranja): um ponto por tijolo, com a VWAP calculada até o
+    // fechamento dele. Quebra a cada novo pregão — VWAP é por dia, então ontem também tem a sua.
+    // =======================================================================
+    if (showPriceLevels && vwapCurve && vwapCurve.points.length > 1) {
+      ctx.strokeStyle = levelRgba(VWAP_CURVE_COLOR, 0.9);
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([]);
+      let opened = false;
+      let prevSeg = -1;
+      let tip: { x: number; y: number } | null = null;
+      for (const p of vwapCurve.points) {
+        const x = lastBoxX - (endIdx - 1 - p.index) * stepX;
+        const y = priceToY(p.price);
+        if (x < 0 || x > chartWidth || y < 2 || y > pricePaneHeight - 2) {
+          // Fora da tela: fecha o traço atual para não riscar por cima do vazio.
+          if (opened) {
+            ctx.stroke();
+            opened = false;
+          }
+          continue;
+        }
+        if (!opened || p.seg !== prevSeg) {
+          if (opened) ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          opened = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+        prevSeg = p.seg;
+        tip = { x, y };
+      }
+      if (opened) ctx.stroke();
+      // O último ponto visível é o número que se persegue durante o dia: merece etiqueta.
+      if (tip) {
+        const vTag = `VWAP ${formatPrice(vwapCurve.current ?? vwapCurve.points[vwapCurve.points.length - 1].price, asset)}`;
+        ctx.font = isMobile ? 'bold 8px "JetBrains Mono", monospace' : 'bold 9px "JetBrains Mono", monospace';
+        ctx.textAlign = 'right';
+        const vw = ctx.measureText(vTag).width + 8;
+        const vx = Math.min(tip.x, chartWidth - 4);
+        const vy = Math.max(8, Math.min(pricePaneHeight - 20, tip.y - 16));
+        ctx.fillStyle = 'rgba(9, 9, 11, 0.8)';
+        ctx.beginPath();
+        ctx.roundRect(vx - vw, vy, vw, 13, 2);
+        ctx.fill();
+        ctx.fillStyle = levelRgba(VWAP_CURVE_COLOR, 0.95);
+        ctx.fillText(vTag, vx - 4, vy + 9.5);
+        ctx.beginPath();
+        ctx.arc(tip.x, tip.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.textAlign = 'left';
+      }
+    }
+
+    // =======================================================================
     // LINHA DO PREÇO ATUAL E ORDENS ABERTAS (MTM)
     // =======================================================================
     const currentPriceY = priceToY(currentPrice);
@@ -1754,7 +1893,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
         // Badge de preço flutuante na régua do eixo Y
         if (mousePos.y <= pricePaneHeight) {
-          const hoveredPrice = Math.round(yToPrice(mousePos.y) / 5) * 5;
+          const hoveredPrice = snapToTick(yToPrice(mousePos.y), asset);
           ctx.fillStyle = '#27272a';
           ctx.fillRect(chartWidth + 1, mousePos.y - 8, rightAxisWidth - 2, 16);
           ctx.strokeStyle = '#71717a';
@@ -1763,7 +1902,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.font = isMobile ? 'bold 8.5px "JetBrains Mono"' : 'bold 9.5px "JetBrains Mono"';
           ctx.textAlign = 'center';
           ctx.fillText(
-            hoveredPrice.toLocaleString('pt-BR'),
+            formatPrice(hoveredPrice, asset),
             chartWidth + rightAxisWidth / 2,
             mousePos.y + 3.5
           );
@@ -1816,6 +1955,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     minDeltaThreshold,
     openOrders,
     showOrderLines,
+    showPriceLevels,
+    priceLevels,
+    vwapCurve,
+    asset,
     boxThickness,
     spacingMode,
     rightMargin,
@@ -2359,7 +2502,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const pts = o.type === 'BUY' ? currentPrice - o.entryPrice : o.entryPrice - currentPrice;
         const ctros = o.remainingContracts ?? o.contracts ?? 1;
         ptsTotal += pts;
-        finTotal += pts * 0.2 * ctros;
+        finTotal += pointsToBRL(pts, ctros, asset);
         openCount++;
         if (o.role === 'MAIN') mainCount++;
         if (o.role === 'PYRAMID') pyramidCount++;
@@ -2463,7 +2606,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             </select>
             {chartSeries === 'renko' && (
               <span className="text-zinc-400 text-[10.5px]" title="Escala do Renko definida no Painel do EA">
-                {Math.max(1, Math.round(renkoBoxPoints / 5))}R
+                {renkoScaleLabel(renkoBoxPoints, asset)}
               </span>
             )}
             {chartSeries === 'range' && (
@@ -2517,6 +2660,32 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Níveis do pregão: ficam ligados por padrão e este chip serve para sumir com eles
+              quando a tela estiver cheia demais. No hover, a lista completa com os preços. */}
+          {priceLevels.length > 0 && (
+            <button
+              onClick={togglePriceLevels}
+              className={`flex items-center gap-1 px-1.5 h-[22px] rounded border font-sans text-[10px] cursor-pointer transition-colors ${
+                showPriceLevels
+                  ? 'bg-zinc-800/80 border-zinc-600/70 text-zinc-200 hover:text-white'
+                  : 'bg-zinc-950/60 border-zinc-800 text-zinc-500 hover:text-zinc-300'
+              }`}
+              title={
+                (showPriceLevels
+                  ? 'Níveis do pregão visíveis — clique para ocultar\n'
+                  : 'Níveis do pregão ocultos — clique para mostrar\n') +
+                  priceLevels.map((lv) => `${lv.label} ${formatPrice(lv.price, asset)} pts · ${lv.detail}`).join('\n') +
+                  (vwapCurve?.current != null
+                    ? `\nVWAP (curva laranja) ${formatPrice(vwapCurve.current, asset)} pts · acumulada do dia, reinicia a cada pregão`
+                    : '') +
+                  '\n(níveis fora da faixa de preço desenhada não aparecem no gráfico — abra mais dias na tela)'
+              }
+            >
+              <span className="w-3 border-t border-dashed border-slate-400/80" />
+              <span>NÍVEIS</span>
+              <span className="text-zinc-500 tabular-nums">{priceLevels.length}</span>
+            </button>
+          )}
           {openOrders.length > 0 ? (
             <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-zinc-900/80 border border-zinc-600/40 text-zinc-300 text-[10px]">
               <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-pulse" />

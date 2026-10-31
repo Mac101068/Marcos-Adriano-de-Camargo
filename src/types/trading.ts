@@ -1,3 +1,5 @@
+import type { AssetId } from '../assets/assetRegistry';
+
 export interface Tick {
   id: string;
   timestamp: number;
@@ -71,7 +73,7 @@ export interface TradeOrder {
   exitPrice?: number;
   exitTimestamp?: number;
   exitTimeStr?: string;
-  exitReason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'BREAKEVEN' | 'TRAILING_STOP' | 'MANUAL' | 'EXPIRED_PULLBACK' | 'FLIP_REVERSAL' | 'DAY_CLOSE';
+  exitReason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'BREAKEVEN' | 'TRAILING_STOP' | 'MANUAL' | 'EXPIRED_PULLBACK' | 'FLIP_REVERSAL' | 'DAY_CLOSE' | 'FINANCIAL_LOCK';
   source?: 'ROBOT_EA' | 'MANUAL' | 'MT5_LIVE';
   magicNumber?: number;
   contracts: number;
@@ -118,6 +120,11 @@ export interface IntradayAuditSummary {
 
 export interface AutomationConfig {
   active: boolean;
+  /**
+   * Ativo escolhido no seletor do Header (Fase 2). Opcional de propósito: config e estratégia
+   * salvos antes disto não têm o campo e continuam resolvendo pelo prefixo do `symbol`.
+   */
+  assetId?: AssetId;
   symbol: string; // Ex: WIN$N ou WINFUT
   boxPoints: number; // 50 pontos (10R no Mini-Índice)
   contracts: number; // Lote (ex: 1, 2, 5 contratos)
@@ -144,6 +151,7 @@ export interface AutomationConfig {
   maxDailyLoss: number; // Trava de perda diária em R$
   maxDailyProfit: number; // Meta diária de ganho em R$
   maxDailyTrades: number; // Trava máxima de trades por dia
+  closeAllOnFinancialLock: boolean; // Ao bater qualquer trava financeira, zerar o que está aberto (false = só para de abrir)
   mt5Host: string; // Ex: "localhost" ou "127.0.0.1"
   mt5Port: number; // Porta do WebSocket bridge Python (default 8765)
 
@@ -169,11 +177,12 @@ export interface AutomationConfig {
   pullbackCustomPoints: number; // Se custom, quantos pontos de recuo
   pullbackMaxBoxesWait: number; // Quantos boxes esperar o preço voltar antes de cancelar (ex: 2 boxes)
 
-  // Filtro de Horários de Negociação (Day Trade B3)
-  tradingHoursEnabled: boolean; // Habilitar filtro de horários
-  tradingStartTime: string; // Início das operações (ex: "09:05")
-  tradingStopEntriesTime: string; // Fim de novas entradas (ex: "17:00")
-  tradingCloseAllTime: string; // Encerramento compulsório day trade (ex: "17:45")
+  // TRAVA DE HORÁRIO DE NEGOCIAÇÃO (Day Trade B3) — livre das 08:55 às 17:30, bloqueado de 17:30
+  // até 08:55 do dia seguinte (assim o leilão de abertura aparece e o 1º candle já é operável)
+  tradingHoursEnabled: boolean; // Ligar/desligar a trava de horário
+  tradingStartTime: string; // Primeira entrada permitida ("HH:MM", padrão "08:55")
+  tradingStopEntriesTime: string; // Última entrada permitida ("HH:MM", padrão "17:30")
+  tradingCloseAllTime: string; // Zeragem compulsória do pregão ("HH:MM", padrão "17:30")
 
   // Modalidade de Estratégia Quantitativa
   strategyMode: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE'; // Reteste clássico ou Pirâmide com Confluência de Fluxo
@@ -214,6 +223,8 @@ export interface MT5ConnectionState {
   bridgeArmed?: boolean;
   /** Ponte antiga, sem suporte a token (AUTH_TOKEN vazio no script baixado) */
   bridgeLegacy?: boolean;
+  /** Contrato que o script .py está transmitindo (ACCOUNT_INFO.symbol) — confere com o ativo escolhido */
+  scriptSymbol?: string;
 }
 
 export interface TerminalStats {

@@ -8,6 +8,177 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 8 — 31/10/2026 · Estúdio de Estratégias, níveis do pregão e o Registro de Ativo (Fases 1 e 2)
+
+O ciclo em que o terminal parou de ser "o WIN". Nasceu o **Estúdio de Estratégias** (biblioteca
+separada do config ativo), o gráfico ganhou os **níveis relevantes do pregão** com curva de VWAP,
+os portões de entrada saíram do `App.tsx` para um módulo puro, e o **Registro de Ativo** tirou do
+código os números que mudam de um contrato para o outro — terminando com seletor WIN/WDO/BTC na
+tela e histórico REAL pela ponte MT5 no lugar do gerador sintético. No fim, os avisos flutuantes
+migraram do canto inferior direito para o centro da tela.
+
+### 8.1 ✅ Estúdio de Estratégias (biblioteca que não encosta no config ativo)
+
+**Causa raiz.** Os "perfis" do painel Ajustes sempre escreveram **no config ativo**: trocar de
+perfil no meio de um pregão muda o robô que está operando, e não havia lugar para guardar, comparar
+e versionar variações sem tocar no que está no ar.
+
+**O que foi implementado.**
+- `src/types/strategy.ts` (16): `SavedStrategy` é snapshot completo do `AutomationConfig` com `createdAt`/`updatedAt`.
+- `src/services/strategyLibraryService.ts` (133): CRUD defensivo em `fluxo_strategy_library_v1`; toda
+  leitura volta a receber os campos novos via merge com `DEFAULT_EA_CONFIG` — estratégia salva antes
+  de um parâmetro existir não quebra o terminal. `mergeConfig` normaliza `assetId` pelo símbolo (item 8.6).
+- `src/components/StrategyStudio.tsx` (660): aba **Estúdio** (Header + bottom nav mobile), editor com
+  nome/descrição, blocos de Fluxo & Regime, Pirâmide, Reteste, Gestão de Risco, Janela de horário e
+  limites da ponte; duplicar, excluir (sem `window.confirm`), exportar/importar JSON.
+- **Ativação é gesto explícito e defensivo**: `App.tsx` aplica o snapshot, grava e mantém o **Robô
+  PAUSADO** com o aviso "Robô mantido PAUSADO por segurança — ligue no On quando quiser operar".
+  Salvar/editar no Estúdio nunca altera o que está operando.
+
+### 8.2 ✅ Níveis relevantes do pregão e curva de VWAP no gráfico
+
+- `src/utils/priceLevels.ts` (285, **função pura sem React**, conferível headless): devolve `AJUSTE`,
+  `FECHAMENTO` (pregão anterior), `ABERTURA`, `LEILÃO` (VWAP dos primeiros minutos), `MÁX` e `MÍN`
+  do dia mais recente, calculados sobre o buffer de ticks — abaixo de 20 ticks do dia nenhum nível
+  sai, para não desenhar chute.
+- `computeRunningVwap` produz a curva acumulada do dia (laranja `#fb923c`) — única curva de nível no gráfico.
+- As janelas de leilão e de ajuste agora vêm do **registro de ativos** (`ASSETS[...].session`), não de
+  constante solta.
+- `RenkoFlowChart.tsx`: traços traceados discretos + legenda com contagem e detalhe de cada nível;
+  liga/desliga persistido em `fluxo_renko_price_levels_v1`.
+
+### 8.3 ✅ Portões de entrada compartilhados e migração da trava de horário
+
+- `src/utils/tradingGates.ts` (95): `isWithinTradingWindow` (medida na **hora do tick**, falha aberta
+  quando o horário vem vazio/fora do formato `HH:MM`) e `sessionFinancialLock`. Usados pelo `App.tsx`
+  **e** pelo `paperStrategyBot.ts` — a mesma função nos dois lados, para o coletor não medir estratégia
+  diferente da que aparece na tela. Nenhum helper daqui envia ordem.
+- `src/utils/sessionRules.ts` passou a ler `tradingCloseAllTime` da estratégia (antes a hora de zerar
+  era hardcoded no front e só a ponte Python respeitava o campo).
+- `src/utils/tradingWindowMigration.ts` (112, flag `fluxo_trading_window_08_55_17_30_v2`): mudou o
+  padrão de horário **não basta mudar o DEFAULT**, porque `loadSavedConfig`/`mergeConfig` fazem
+  `{...DEFAULT, ...salvo}` e o valor gravado sempre vence. A migração só toca quem está exatamente no
+  quarteto antigo, roda uma vez por navegador, escreve a flag por último e retorna resumo para o aviso.
+
+### 8.4 ✅ Laboratório de estratégias (headless)
+
+- `scripts/strategyLab.ts`: roda as duas estratégias reais (PULLBACK_RETEST e PYRAMID_FLOW_CONFLUENCE)
+  em variações de escala/nível de reteste sobre o **mesmo** motor de contabilidade do coletor
+  (`PaperStrategyBot`) e o **mesmo** avaliador de convergência. 5 réplicas × 10 dias úteis, todas as
+  variações comem os mesmos ticks (RNG semeado), simulador equilibrado (~40% alta / ~40% baixa / ~20%
+  lateral). Veredito por expectativa, fator de lucro e consistência entre réplicas.
+- Saída: tabela no terminal + `scripts/strategy_lab_results.csv` (padrão BR). **Nenhum caminho do
+  script toca a ponte MT5, ordens reais ou localStorage.**
+
+### 8.5 ✅ Registro de Ativo — Fase 1 (os números saíram do código)
+
+**Causa raiz.** O Mini-Índice estava **soldado** no código: `* 0.2` (R$/ponto) em 15 pontos de 7
+arquivos, o preço-base `128500` em 22 pontos e o "tick de 5 pts / 1R = 5 pts" em 10. Trocar de ativo
+era caçar número por número — e errava: o sanitizador de ordens comparava com 128.500 e descartaria
+QUALQUER ordem de um WDO (~5.300 pts).
+
+**O que foi implementado.**
+- `src/assets/assetRegistry.ts` (276) — única fonte dos números por ativo. `AssetSpec` traz
+  `pointValue`, `tickSize`, `decimals`, `basePrice`, `prefixes`, `primarySymbol`, `session`
+  (leilão/trava/ajuste/`weekdaysOnly`), `renkoDefaults`, `contractNote` e `status`.
+  WIN está `ativo`; **WDO e BTC seguem `a_confirmar`** até você homologar os números.
+- Helpers puros: `resolveAsset`, `pointsToBRL`, `snapToTick`, `formatPrice`, `renkoScaleLabel`,
+  `sessionClock`, `isStaleOrderPrice`. Estratégia, Renko, fluxo e portões continuam falando em
+  **pontos**; dinheiro e formatação só aparecem na tela.
+- `basePrice` do WIN corrigido de 128.500 para **171.500** (ajuste real do WINZ26), com tolerância
+  percentual (`staleTolerancePct`) no sanitizador em vez de "400 pontos".
+- `src/assets/assetMigration.ts` (flag `fluxo_asset_base_171500_v1`): quita como `CLOSED_MANUAL` (0
+  pts, 0 R$) toda ordem `OPEN` presa no preço antigo e expira (`EXPIRED_PULLBACK`) as `PENDING_LIMIT`
+  fora da tolerância — uma limitada a 128.450 num mercado de 171.500 travaria o estado para sempre.
+  **Não toca** ordem já fechada, config, biblioteca nem escolha do operador.
+
+### 8.6 ✅ Registro de Ativo — Fase 2 (seletor, spec persistido e histórico real)
+
+**Seletor no Header** (`Header.tsx`, 516 linhas): `AssetSelector` na Zona 1 (aparece no celular, onde a
+Zona 2 some abaixo de `lg`), chrome neutro com cor só no ponto de status. WDO e BTC aparecem com chip
+`A CONFIRMAR`; clicar neles **não troca o ativo** — abre a **folha de ensaio** listando os três números
+pendentes (R$/ponto, variação mínima, casas decimais) e, se você confirmar, entra em ensaio com o
+**Robô forçado em OFF** e a ponte em SEGURO. Um chip âmbar permanente `SPEC NÃO HOMOLOGADO` fica na
+tira de status enquanto o ativo não for homologado. Trava de pânico: `ALLOW_UNCONFIRMED_PREVIEW = false`
+no registro deixa as linhas não homologadas mortas em uma linha só.
+
+**Spec persistido:** `assetId?: AssetId` entrou no `AutomationConfig` (`assetId` vence o prefixo do
+símbolo; sem id, cai no prefixo — comportamento antigo preservado). `assetSelectionMigration.ts` (flag
+`fluxo_asset_selection_v1`) grava o id no config ativo, nas estratégias do Estúdio e copia o livro de
+auditoria legado para a prateleira do WIN (cópia, nunca destruição).
+
+> ⚠️ **Armadilha descoberta na verificação**: a migração só conserta o que já está no storage — ela não
+> protege JSON importado depois. Por isso os TRÊS sítios de merge normalizam o campo:
+> `EaConfigService.loadSavedConfig`, `EaConfigService.importConfigFromJson` e
+> `strategyLibraryService.mergeConfig` fazem `assetId: ASSETS[x] ? x : resolveAsset(symbol).id`.
+> Regra geral: ao adicionar campo persistido cujo valor depende de outro persistido, grep em todo
+> `{...DEFAULT, ...salvo}` — migração sozinha não basta.
+
+**Auditoria por ativo:** `auditKeyForAsset(assetId)` → `fluxo_renko_intraday_audit_v3_WIN|WDO|BTC`.
+Um livro único misturando R$0,20/pt com R$0,10/pt daria PnL e curva de patrimônio sem sentido.
+
+**Trocar de ativo com posição aberta é BLOQUEADO** (toast avisando quantas ordens vivem), nunca
+liquidado silenciosamente — é dinheiro real em outro mercado. A escala de Renko só muda se o
+`boxPoints` atual não for múltiplo válido do tick novo ou cair fora da faixa `renkoDefaults` do ativo;
+não se reescala risco em silêncio.
+
+**Histórico real pela ponte:**
+- `src/services/marketHistoryService.ts` (219): dono do pedido. `requestHistory()` correlaciona por
+  `reqId`, acumula `HISTORY_CHUNK` (chunks de ~1.500 ticks) deduplicando por `id`, resolve no
+  `HISTORY_DONE`, rejeita no `HISTORY_ERROR`/timeout (25s, `dispose()` no `onclose` para nada ficar
+  prometendo para sempre), normaliza tick (`snapToTick` só quando o desvio é ≤ metade do tick,
+  agressor sempre `BUY|SELL|CROSS`, `timeStr` local) e mede suficiência (`assessSufficiency`).
+- Rota nova no **script Python gerado**: `REQUEST_HISTORY` atrás do mesmo guarda de autenticação do
+  broadcast, `mt5.copy_ticks_range` dentro de `asyncio.to_thread` (o feed ao vivo nunca para), teto de
+  **10 dias** por pedido, e **fallback de volume pelas barras de M1** quando ≥80% dos ticks chegam com
+  `volume = 0` — sem volume, CVD, delta e convergência morrem em silêncio e a estratégia fica muda.
+  `ACCOUNT_INFO` passou a reportar `symbol`, então o seletor avisa quando o script rodando no Windows
+  transmite outro contrato.
+- **Replay rotulado**: conectado → histórico real; desconectado/erro/vazio → sintético. O resumo e o
+  chip dizem `HISTÓRICO REAL (MT5) · N ticks` (sem seed, que é conceito do sintético) ou
+  `SINTÉTICO · #seed`, e mostram a origem do volume.
+
+**A régua do ativo envelhece, então o preço real visto manda:** `referencePrice(asset)` devolve o
+último preço real persistido (`fluxo_asset_last_price_v1`, com escrita amortecida a cada ~30s) se ele
+tiver menos de 7 dias, senão o `basePrice` do registro. Entram por ela o preço inicial do terminal, as
+âncoras das ordens de demonstração, o ponto de partida do sintético, o eixo Y do gráfico e a tolerância
+do sanitizador.
+
+### 8.7 ✅ Aviso flutuante agora no centro da tela
+
+**Pedido direto do operador**: nada de quadro de informação no canto inferior direito.
+- `App.tsx`: o toast global saiu de `fixed bottom-… right-…` para um palco `fixed inset-0 flex items-center
+  justify-center` com `pointer-events-none` (o gráfico continua inspecionável atrás do aviso) e o cartão
+  `max-w-sm` recebendo os eventos. auto-dismiss de 4,5s intacto + **✕ para fechar na hora**, porque no
+  centro ele cobre o pregão.
+- A animação de entrada agora é real (`.flow-toast` no `index.css`, 180ms, com
+  `prefers-reduced-motion` respeitado): as classes `animate-in slide-in-from-bottom-2` que estavam lá
+  eram **no-ops** — este projeto usa Tailwind v4 sem plugin de animação.
+- Ficaram onde estavam, por não serem do canto inferior direito: confirmação de gravação do Ajustes
+  (superior direito) e aviso discreto do Estúdio (centro de baixo).
+
+### Verificações deste ciclo
+
+- `npx tsc --noEmit` limpo e `npx vite build` OK (só o aviso pré-existente de chunk > 500 kB).
+- **Headless da Fase 1**: 66 asserts de paridade do WIN (nada do comportamento atual mudou).
+- **Headless da Fase 2** (`tmp/verify-asset-selection.ts`, apagado depois): migração escreve `assetId`
+  no config e na biblioteca e não roda duas vezes; sobrevive a JSON corrompido e a storage ausente;
+  `resolveAsset` com id explícito vence o prefixo e o WIN antigo resolve igual; chaves de auditoria por
+  ativo não se misturam (grava WIN, lê WDO → vazio); `referencePrice` usa o real com < 7 dias e cai no
+  `basePrice` com 8; import JSON e estratégias do Estúdio resolvem o ativo certo; WDO com 1 casa,
+  `snapToTick(5299,7, WDO) = 5300`, `renkoScaleLabel(5, WDO) = '10R'`, `pointsToBRL(5, 1, WDO) = 0,5`;
+  `marketHistoryService` monta chunks fora de ordem, deduplica por `id`, rejeita no timeout sem dizer
+  "em 0s" e não estoura com `HISTORY_ERROR`.
+- **Script da ponte**: o `.py` gerado (1.325 linhas) contém `REQUEST_HISTORY`, `copy_ticks_range`,
+  `HISTORY_CHUNK/DONE/ERROR`, o teto de 10 dias, o fallback `TIMEFRAME_M1` e o `symbol` no
+  `ACCOUNT_INFO`; o cabeçalho fixo "Mini-Índice B3" deu lugar ao `label` do ativo. `python3 -m
+  py_compile` aprovado.
+- ⚠️ **Ainda não conferido com MT5 real**: profundidade de histórico que a conta demo da XP entrega e a
+  qualidade do volume dos ticks só se provam rodando o script no Windows (é o teste manual que fica
+  para você).
+
+---
+
 ## 📆 Ciclo 7 — 30/10/2026 · Limiar adaptativo de regime, Avaliação Técnica e gráfico de estudo
 
 Metade estratégia, metade usabilidade: o Delta Mínimo deixou de ser um número único para o dia
@@ -459,8 +630,33 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
    aviso visível de que ele é inseguro.
 5. **Matemática de layout em um lugar só.** `getFlowDividerLayout` elimina divergência entre onde a
    linha é desenhada e onde ela é clicável.
+6. **Nenhum número de contrato no código (Ciclo 8).** O que muda de ativo para ativo (R$/ponto, tick,
+   casas decimais, preço-base, janelas de sessão, escalas de Renko) mora em `src/assets/assetRegistry.ts`;
+   estratégia, Renko e fluxo continuam falando em PONTOS e só se convertem em dinheiro/formatação na
+   tela. Homologar um ativo é trocar `status` naquela tabela — nenhum outro código.
+7. **Spec escolhido manda, símbolo é fallback (Ciclo 8).** `assetId` no config vence; sem ele, cai no
+   prefixo do símbolo. E todo sítio de merge (`loadSavedConfig`, `importConfigFromJson`,
+   `mergeConfig` do Estúdio) normaliza o campo derivado: migração uma-vez não protege import futuro.
+8. **Um livro de auditoria por mercado (Ciclo 8).** Misturar WIN (R$0,20/pt) e WDO (R$0,10/pt) na mesma
+   chave geraria PnL e curva de patrimônio sem sentido; a migração **copia** o legado para `..._WIN`
+   sem apagar nada.
+9. **Trocar de ativo nunca liquida posição (Ciclo 8).** Com ordem viva o seletor recusa e avisa; e
+   spec `a_confirmar` só entra em **ensaio** (Robô OFF + ponte em SEGURO + chip permanente), porque um
+   R$/ponto errado contamina PnL e a trava financeira em dinheiro real.
+10. **Dado sintético é honesto no rótulo (Ciclo 8).** Sem MT5, o replay roda no gerador e o chip diz
+    `SINTÉTICO · #seed`; com histórico real, diz `HISTÓRICO REAL (MT5)` e some o seed (determinismo do
+    real é o mercado ter acontecido). Volume vindo de barra de M1 também aparece na tela.
 
 ## 🧭 Pendências e próximos passos conhecidos
+
+- 🧪 **Homologar WDO e BTC** (Ciclo 8): uma linha cada no `assetRegistry.ts` com `pointValue`,
+  `tickSize`, `decimals`, `primarySymbol` no MT5 da XP e o horário de pregão — o seletor destrava sozinho.
+  Enquanto `status: 'a_confirmar'`, o ativo só entra em **ensaio**.
+- 🧪 **Fase 3 do registro**: travas de horário por ativo (leilão, ajuste, fix das 13:00 do WDO, gap de
+  fim de semana no replay do BTC). **Fase 4**: dossiê PDF sem o texto fixo "Mini-Índice B3".
+  **Fase 5**: VTC (PTAX + FRP0) morando no WDO.
+- 🧪 **Histórico real ainda não provado no Windows**: profundidade de ticks que a conta demo da XP
+  entrega e fração de ticks que chegam sem volume (o fallback de M1 existe exatamente para isso).
 
 - 🧪 **Infraestrutura para 100 clientes** (pergunta sua, ainda sem resposta): o app é estático, então
   o servidor em si é barato; o que custa é autenticação/licença **no servidor**, webhook PIX, a

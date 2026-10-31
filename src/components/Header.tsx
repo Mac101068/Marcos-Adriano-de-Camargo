@@ -22,12 +22,15 @@ import {
   Box,
   Settings,
   ClipboardCheck,
+  Palette,
+  Layers,
 } from 'lucide-react';
 import { MT5ConnectionState } from '../types/trading';
 import { UserProfile } from '../types/auth';
 import { SubscriptionStatusBadge } from './SubscriptionStatusBadge';
+import { ALLOW_UNCONFIRMED_PREVIEW, ASSETS, type AssetId, type AssetSpec } from '../assets/assetRegistry';
 
-type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'admin';
+type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'studio' | 'admin';
 
 interface HeaderProps {
   activeTab: TabId;
@@ -40,6 +43,13 @@ interface HeaderProps {
   openOrdersCount: number;
   mt5State: MT5ConnectionState;
   onToggleMT5Connect: () => void;
+  /** Spec do ativo em operação (Fase 2) — os números vêm todos daqui, nunca soldado. */
+  asset: AssetSpec;
+  /** Id escolhido no seletor (pode diferir do spec resolvido do símbolo em config antigo). */
+  assetId: AssetId;
+  onSelectAsset: (id: AssetId) => void;
+  /** MT5 conectado E o símbolo do script é o do ativo? false = ponto de atenção no seletor. */
+  mt5SymbolOk?: boolean;
   currentUser: UserProfile;
   onUserChanged: (user: UserProfile) => void;
   onOpenRenewModal: () => void;
@@ -142,6 +152,177 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
   );
 };
 
+interface AssetSelectorProps {
+  asset: AssetSpec;
+  assetId: AssetId;
+  onSelect: (id: AssetId) => void;
+  mt5SymbolOk?: boolean;
+}
+
+/**
+ * Seletor de ativo (Fase 2). Fica na Zona 1, ao lado do título, e não dentro da barra de menus:
+ * a Zona 2 só existe a partir de `lg`, e trocar de ativo é controle primário — precisa existir no
+ * celular. Moldura neutra como o resto do chrome: a ÚNICA cor aqui é o ponto de status
+ * (esmeralda = spec homologado; âmbar = spec 'a_confirmar' ou símbolo do script diferente).
+ *
+ * WDO e BTC aparecem na lista marcados A CONFIRMAR. Clicar neles NÃO troca de ativo: abre a
+ * folha de ensaio, que exige um "Ensaiar" explícito, porque um R$/ponto errado contamina PnL e
+ * trava financeira em dinheiro de verdade. Homologar é mudar `status` no registro.
+ */
+const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect, mt5SymbolOk }) => {
+  const [open, setOpen] = useState(false);
+  // Spec 'a_confirmar' escolhido aguardando a confirmação explícita do operador.
+  const [previewFor, setPreviewFor] = useState<AssetId | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setPreviewFor(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        setPreviewFor(null);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const ids = Object.keys(ASSETS) as AssetId[];
+  const previewSpec = previewFor ? ASSETS[previewFor] : null;
+
+  const pick = (id: AssetId) => {
+    if (id === assetId) {
+      setOpen(false);
+      setPreviewFor(null);
+      return;
+    }
+    const spec = ASSETS[id];
+    if (spec.status === 'ativo') {
+      onSelect(id);
+      setOpen(false);
+      setPreviewFor(null);
+      return;
+    }
+    // Não homologado: o dropdown continua aberto e mostra a folha de ensaio.
+    if (ALLOW_UNCONFIRMED_PREVIEW) setPreviewFor(id);
+  };
+
+  const money = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title={`Ativo em operação: ${asset.label} — ${asset.contractNote}`}
+        className="flex items-center gap-1.5 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer"
+      >
+        <Layers className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+        <span className="flex flex-col items-start leading-tight">
+          <span className="text-xs font-semibold text-slate-100">{asset.id}</span>
+          <span className="hidden sm:block text-[9px] font-mono text-slate-500">{asset.primarySymbol}</span>
+        </span>
+        <span
+          className={`w-2 h-2 rounded-full shrink-0 ${
+            asset.status === 'a_confirmar' ? 'bg-amber-400' : mt5SymbolOk === false ? 'bg-amber-400' : 'bg-emerald-400'
+          }`}
+        />
+        <ChevronDown className={`w-3 h-3 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1.5 z-50 w-[248px] py-1 rounded-lg bg-slate-900 border border-slate-700/80 shadow-2xl shadow-black/50">
+          <p className="px-3 py-1 text-[10px] uppercase tracking-wider text-slate-500">Ativo em operação</p>
+          {ids.map((id) => {
+            const spec = ASSETS[id];
+            const isActive = id === assetId;
+            const locked = spec.status === 'a_confirmar' && !ALLOW_UNCONFIRMED_PREVIEW;
+            return (
+              <button
+                key={id}
+                onClick={() => pick(id)}
+                disabled={locked}
+                title={
+                  locked
+                    ? `${spec.contractNote} — homologue em src/assets/assetRegistry.ts para habilitar`
+                    : spec.status === 'a_confirmar'
+                    ? `${spec.contractNote} — clicável para ENSAIAR com o Robô bloqueado`
+                    : spec.contractNote
+                }
+                className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
+                  isActive ? 'bg-slate-800 text-slate-50 font-semibold' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
+                }`}
+              >
+                <span className="flex-1">
+                  <span className="block">{spec.label}</span>
+                  <span className="block text-[9px] font-mono text-slate-500">{spec.primarySymbol}</span>
+                </span>
+                {spec.status === 'a_confirmar' && (
+                  <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 text-[9px] font-semibold whitespace-nowrap">
+                    A CONFIRMAR
+                  </span>
+                )}
+              </button>
+            );
+          })}
+
+          {mt5SymbolOk === false && (
+            <p className="mx-2 mt-1 px-2 py-1.5 rounded bg-amber-500/10 text-amber-300/90 text-[10px] leading-snug">
+              O MT5 está conectado rodando OUTRO símbolo. Baixe o script de novo (aba Código Python) depois de
+              trocar de ativo.
+            </p>
+          )}
+
+          {previewSpec && (
+            <div className="mx-2 mt-2 mb-1 p-2.5 rounded-lg bg-slate-950/80 border border-amber-500/30">
+              <p className="text-[11px] font-semibold text-slate-100">Ensaiar {previewSpec.label}?</p>
+              <p className="mt-1 text-[10px] text-slate-400 leading-snug">
+                Estes três números ainda não foram confirmados na corretora e são deles que dependem PnL em
+                R$ e trava financeira:
+              </p>
+              <ul className="mt-1.5 space-y-0.5 text-[10px] font-mono text-slate-300">
+                <li>R$ {money(previewSpec.pointValue)} por ponto</li>
+                <li>variação mínima: {previewSpec.tickSize} pts</li>
+                <li>{previewSpec.decimals} casa(s) decimal(is)</li>
+              </ul>
+              <p className="mt-1.5 text-[10px] text-amber-300/90 leading-snug">
+                Em ensaio o Robô vai para OFF e a ponte fica EM SEGURO: nenhuma ordem de entrada sai.
+              </p>
+              <div className="mt-2 flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    onSelect(previewSpec.id);
+                    setOpen(false);
+                    setPreviewFor(null);
+                  }}
+                  className="flex-1 px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 text-[11px] font-semibold transition-colors cursor-pointer"
+                >
+                  Ensaiar
+                </button>
+                <button
+                  onClick={() => setPreviewFor(null)}
+                  className="px-2 py-1 rounded-md text-slate-400 hover:text-slate-200 text-[11px] transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
@@ -153,6 +334,10 @@ export const Header: React.FC<HeaderProps> = ({
   openOrdersCount,
   mt5State,
   onToggleMT5Connect,
+  asset,
+  assetId,
+  onSelectAsset,
+  mt5SymbolOk,
   currentUser,
   onUserChanged,
   onOpenRenewModal,
@@ -180,6 +365,7 @@ export const Header: React.FC<HeaderProps> = ({
     { tab: 'python', label: 'Código Python MT5', icon: FileCode },
     { tab: 'docs', label: 'Guia MT5', icon: BookOpen },
     { tab: 'settings', label: 'Parâmetros', icon: Sliders },
+    { tab: 'studio', label: 'Estúdio de Estratégias', icon: Palette, title: 'Programar, salvar e gerenciar estratégias completas — sem mexer no painel de Parâmetros' },
     ...(currentUser.role === 'ADMIN'
       ? [{ tab: 'admin' as TabId, label: 'Rede de Assinantes', icon: Users, title: 'Gestão da rede de assinantes (somente administrador)' }]
       : []),
@@ -192,6 +378,7 @@ export const Header: React.FC<HeaderProps> = ({
         <span className="text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
           Flow Quant MT5
         </span>
+        <AssetSelector asset={asset} assetId={assetId} onSelect={onSelectAsset} mt5SymbolOk={mt5SymbolOk} />
       </div>
 
       {/* Zone 2: Menu superior agrupado — encostado no título, ocupando a linha livre */}

@@ -29,6 +29,7 @@ const EXIT_REASON_LABEL: Record<string, string> = {
   PYRAMID_TP: 'Alvo da pirâmide',
   PYRAMID_SL: 'Stop da pirâmide',
   DAY_CLOSE: 'Fim de pregão',
+  FINANCIAL_LOCK: 'Trava financeira',
 };
 
 const fmtR$ = (v: number) =>

@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { TradeOrder, TerminalStats } from '../types/trading';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, pointsToBRL } from '../assets/assetRegistry';
 import {
   TrendingUp,
   TrendingDown,
@@ -37,12 +38,15 @@ interface EquityCurveViewProps {
   orders: TradeOrder[];
   stats: TerminalStats;
   currentPrice: number;
+  /** Ativo das ordens: só serve para converter pontos em R$ no PnL flutuante. */
+  asset?: AssetSpec;
 }
 
 export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
   orders,
   stats,
   currentPrice,
+  asset = ASSETS[DEFAULT_ASSET_ID],
 }) => {
   // Configuração de Capital Inicial
   const [initialCapital, setInitialCapital] = useState<number>(5000); // R$ 5.000 padrão Mini-Índice
@@ -57,10 +61,10 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
       .reduce((acc, o) => {
         const activeCtros = o.remainingContracts || o.contracts;
         const pts = o.type === 'BUY' ? currentPrice - o.entryPrice : o.entryPrice - currentPrice;
-        const fin = pts * 0.2 * activeCtros + (o.partialFinancial || 0);
+        const fin = pointsToBRL(pts, activeCtros, asset) + (o.partialFinancial || 0);
         return acc + fin;
       }, 0);
-  }, [orders, currentPrice]);
+  }, [orders, currentPrice, asset]);
 
   const floatingPoints = useMemo(() => {
     return orders

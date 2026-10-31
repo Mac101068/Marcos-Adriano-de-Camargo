@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { TradeOrder, TerminalStats } from '../types/trading';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, pointsToBRL } from '../assets/assetRegistry';
 import {
   CheckCircle2,
   TrendingUp,
@@ -28,10 +29,12 @@ interface OrdersAndStatsProps {
   orders: TradeOrder[];
   stats: TerminalStats;
   currentPrice: number;
+  /** Ativo das ordens: valor do ponto para o PnL flutuante da tabela. */
+  asset?: AssetSpec;
   onNavigateToAudit?: () => void;
 }
 
-export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, currentPrice, onNavigateToAudit }) => {
+export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, currentPrice, asset = ASSETS[DEFAULT_ASSET_ID], onNavigateToAudit }) => {
   const [chartMetric, setChartMetric] = useState<'FINANCIAL' | 'POINTS'>('FINANCIAL');
 
   // Prepara os dados cronológicos da Curva de Patrimônio (Equity Curve)
@@ -529,7 +532,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
                   let fin = order.financialResult;
                   if (isOpen) {
                     pts = order.type === 'BUY' ? currentPrice - order.entryPrice : order.entryPrice - currentPrice;
-                    fin = pts * 0.2 * order.contracts;
+                    fin = pointsToBRL(pts, order.contracts, asset);
                   }
 
                   const isWin = (pts || 0) > 0;

@@ -91,3 +91,18 @@
 .safe-area-pb {
   padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
 }
+
+/* Entrada do aviso flutuante central. Os utilitários `animate-in`/`slide-in-from-*` usados
+   antes não existem nesta configuração do Tailwind v4 (sem plugin de animação instalado),
+   então a animação real mora aqui. O cartão é centrado pelo flex do pai, por isso dá para
+   usar `transform` livremente sem brigar com o posicionamento. */
+@keyframes flow-toast-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.flow-toast {
+  animation: flow-toast-in 180ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-toast { animation: none; }
+}

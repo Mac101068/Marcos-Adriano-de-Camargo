@@ -1,5 +1,7 @@
 import { RenkoBox, AutomationConfig } from '../types/trading';
 import { isSessionCloseLock } from './sessionRules';
+import { isWithinTradingWindow } from './tradingGates';
+import { ASSETS, DEFAULT_ASSET_ID } from '../assets/assetRegistry';
 
 /**
  * Robô Sombra (Paper Strategy Bot)
@@ -18,7 +20,11 @@ import { isSessionCloseLock } from './sessionRules';
  * - Execução sempre no close da barra (BOX_CLOSE), a mercado, sem latência.
  */
 
-export const POINT_VALUE_BRL = 0.2; // R$ 0,20 por ponto por contrato (WIN)
+/**
+ * Valor do ponto usado pelo Robô Sombra. NÃO é mais um número solto: vem do registro de ativos
+ * (default WIN). Fase 2 passa a receber o spec da estratégia simulada em vez deste default.
+ */
+export const POINT_VALUE_BRL = ASSETS[DEFAULT_ASSET_ID].pointValue; // R$ 0,20 por ponto por contrato (WIN)
 
 export type SeriesKey =
   | 'renko'
@@ -284,13 +290,12 @@ export class PaperStrategyBot {
 
   /**
    * Paridade terminal x coletor: a janela de entradas configurada é comparada com a HORA
-   * DA BARRA (box.timeEnd), exatamente como o App faz com o timestamp do tick. Fora da
-   * janela não abrem entradas novas — posições abertas continuam geridas normalmente.
+   * DA BARRA (box.timeEnd), exatamente como o App faz com o timestamp do tick — e chama a
+   * MESMA função do portão (utils/tradingGates), para as duas pontas nunca divergirem.
+   * Fora da janela não abrem entradas novas — posições abertas continuam geridas normalmente.
    */
   private entryWindowBlocked(ts: number, config: AutomationConfig): boolean {
-    if (!config.tradingHoursEnabled) return false;
-    const hm = new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    return hm < config.tradingStartTime || hm >= config.tradingStopEntriesTime;
+    return !isWithinTradingWindow(ts, config);
   }
 
   /**
@@ -299,10 +304,11 @@ export class PaperStrategyBot {
    */
   onClosedBox(box: RenkoBox, signal: 'BUY' | 'SELL' | undefined, config: AutomationConfig) {
     if (box.close > 0) this.livePrice = box.close;
-    // TRAVA DE FIM DE PREGÃO (17:30): quita as posições sombra a mercado, derruba as limitadas
-    // pendentes e para de abrir operações. Sem isso a posição "surfada" da Pirâmide atravessaria
-    // a noite e viraria uma trade do dia seguinte, contaminando a estatística por dia.
-    if (isSessionCloseLock(box.timeEnd)) {
+    // TRAVA DE FIM DE PREGÃO (hora `tradingCloseAllTime` da estratégia, padrão 17:30): quita as
+    // posições sombra a mercado, derruba as limitadas pendentes e para de abrir operações. Sem isso
+    // a posição "surfada" da Pirâmide atravessaria a noite e viraria uma trade do dia seguinte,
+    // contaminando a estatística por dia.
+    if (isSessionCloseLock(box.timeEnd, config.tradingCloseAllTime)) {
       for (const pos of this.openPositions) {
         this.book(pos.trade, box.close, box.timeEnd, 'DAY_CLOSE');
       }
@@ -597,31 +603,82 @@ export class PaperStrategyBot {
       }
     }
 
+    // 1.5) Execução das LIMITADAS de reteste (paridade com o terminal): só entram se o preço
+    // recuar até o nível dentro da validade; SL/TP nascem ancorados no nível executado.
+    if (!this.entryWindowBlocked(box.timeEnd, config)) {
+      for (const pend of [...this.pendingEntries]) {
+        const waitBoxes = Math.max(1, config.pullbackMaxBoxesWait ?? 2);
+        if (box.index - pend.placedIndex >= waitBoxes) {
+          this.pendingEntries = this.pendingEntries.filter((p) => p !== pend);
+          continue;
+        }
+        const filled = pend.direction === 'BUY' ? box.low <= pend.level : box.high >= pend.level;
+        if (!filled) continue;
+        this.pendingEntries = this.pendingEntries.filter((p) => p !== pend);
+        this.openPullbackPosition(pend.direction, pend.contracts, pend.level, box.timeEnd, config, pend.triggerReason, box.regimeFactor);
+      }
+    }
+
     // 2) Nova entrada por convergência (uma por lado por vez)
     if (!signal) return;
     // Paridade com a tela: fora da janela de horários configurada não abre entrada nova
     if (this.entryWindowBlocked(box.timeEnd, config)) return;
     if (this.openPositions.some((p) => p.trade.direction === signal)) return;
-    const entry = box.close;
+    if (this.pendingEntries.some((p) => p.direction === signal)) return;
+
+    // Entradas LIMITADAS no reteste (PULLBACK_ENTRY): espelha o cálculo de nível do App.tsx
+    if (config.entryTriggerType === 'PULLBACK_ENTRY') {
+      const level =
+        config.pullbackTarget === 'BOX_50_PCT'
+          ? (box.open + box.close) / 2
+          : config.pullbackTarget === 'CUSTOM_POINTS'
+          ? signal === 'BUY'
+            ? box.close - config.pullbackCustomPoints
+            : box.close + config.pullbackCustomPoints
+          : box.open; // BOX_OPEN (100% de recuo)
+      this.pendingEntries.push({
+        direction: signal,
+        role: 'MAIN',
+        level,
+        contracts: config.contracts,
+        placedIndex: box.index,
+        triggerReason: `Box #${box.index} [LIMIT ${config.pullbackTarget} @ ${level.toFixed?.(0) ?? level}]`,
+      });
+      return;
+    }
+
+    this.openPullbackPosition(signal, config.contracts, box.close, box.timeEnd, config, `Box #${box.index} @ ${box.close.toFixed?.(0) ?? box.close}`, box.regimeFactor);
+  }
+
+  /** Abre a posição do Reteste com SL/TP ancorados no preço real de entrada (fechamento ou nível do Limit). */
+  private openPullbackPosition(
+    direction: 'BUY' | 'SELL',
+    contracts: number,
+    entryPrice: number,
+    entryTime: number,
+    config: AutomationConfig,
+    triggerReason: string,
+    regimeFactor?: number
+  ) {
     const trade: PaperTrade = {
       id: nextId(),
       series: this.series,
       mode: 'PULLBACK_RETEST',
-      direction: signal,
+      direction,
       role: 'MAIN',
-      contracts: config.contracts,
-      entryPrice: entry,
-      entryTime: box.timeEnd,
-      triggerReason: `Box #${box.index} @ ${entry.toFixed?.(0) ?? entry}`,
-      regimeFactor: box.regimeFactor,
+      contracts,
+      entryPrice,
+      entryTime,
+      triggerReason,
+      regimeFactor,
     };
     this.openPositions.push({
       trade,
-      sl: signal === 'BUY' ? entry - config.stopLossPoints : entry + config.stopLossPoints,
-      tp: signal === 'BUY' ? entry + config.takeProfitPoints : entry - config.takeProfitPoints,
+      sl: direction === 'BUY' ? entryPrice - config.stopLossPoints : entryPrice + config.stopLossPoints,
+      tp: direction === 'BUY' ? entryPrice + config.takeProfitPoints : entryPrice - config.takeProfitPoints,
       partialExecuted: false,
       slIsBreakeven: false,
-      remainingContracts: config.contracts,
+      remainingContracts: contracts,
     });
   }
 

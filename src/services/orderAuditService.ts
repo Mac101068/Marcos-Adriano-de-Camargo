@@ -1,6 +1,18 @@
 import { TradeOrder, OrderAuditEvent, IntradayAuditSummary } from '../types/trading';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, isStaleOrderPrice, type AssetId } from '../assets/assetRegistry';
 
-const AUDIT_STORAGE_KEY = 'fluxo_renko_intraday_audit_v3';
+/**
+ * Prefixo-base do livro de auditoria. Desde a Fase 2 cada ativo tem o SEU livro
+ * (`..._v3_WIN`, `..._v3_WDO`): um livro único misturando WIN (R$ 0,20/pt) e WDO (R$ 0,10/pt)
+ * daria PnL e curva de patrimônio sem sentido. A migração de seleção
+ * (assets/assetSelectionMigration.ts) copia o conteúdo legado para `..._WIN` sem apagar nada.
+ */
+export const AUDIT_STORAGE_KEY = 'fluxo_renko_intraday_audit_v3';
+
+/** Chave do livro de auditoria de um ativo. Exportada para as migrações lerem as mesmas chaves. */
+export function auditKeyForAsset(assetId: AssetId): string {
+  return `${AUDIT_STORAGE_KEY}_${assetId}`;
+}
 
 export class OrderAuditService {
   /**
@@ -29,11 +41,11 @@ export class OrderAuditService {
   }
 
   /**
-   * Salva a lista de ordens do pregão atual no LocalStorage
+   * Salva a lista de ordens do pregão atual no LocalStorage, no livro DO ATIVO informado.
    */
-  static saveIntradayOrders(orders: TradeOrder[]): void {
+  static saveIntradayOrders(orders: TradeOrder[], assetId: AssetId = DEFAULT_ASSET_ID): void {
     try {
-      localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(orders));
+      localStorage.setItem(auditKeyForAsset(assetId), JSON.stringify(orders));
     } catch {
       // Ignora erro de quota em navegadores restritos
     }
@@ -41,16 +53,19 @@ export class OrderAuditService {
 
   /**
    * Recupera a lista de ordens do pregão salvas
+   * @param asset ativo corrente — decide QUAL livro é lido e qual é a régua de "ordem velha",
+   *              que é o preço de referência DELE, nunca um número soldado (com 128.500 fixo,
+   *              qualquer ordem legítima de WDO sumia).
    */
-  static loadIntradayOrders(): TradeOrder[] | null {
+  static loadIntradayOrders(asset: AssetSpec = ASSETS[DEFAULT_ASSET_ID]): TradeOrder[] | null {
     try {
-      const raw = localStorage.getItem(AUDIT_STORAGE_KEY);
+      const raw = localStorage.getItem(auditKeyForAsset(asset.id));
       if (raw) {
         const parsed = JSON.parse(raw) as TradeOrder[];
         if (Array.isArray(parsed)) {
-          // Sanitiza ordens abertas muito distantes (> 400 pts do baseline 128.500)
+          // Sanitiza ordens abertas longe demais do preço de referência do ativo
           return parsed.map((o) => {
-            if (o.status === 'OPEN' && Math.abs(o.entryPrice - 128500) > 400) {
+            if (o.status === 'OPEN' && isStaleOrderPrice(o.entryPrice, asset)) {
               return {
                 ...o,
                 status: 'CLOSED_MANUAL' as const,
@@ -69,11 +84,12 @@ export class OrderAuditService {
   }
 
   /**
-   * Limpa o histórico de auditoria para iniciar um novo pregão
+   * Limpa o histórico de auditoria para iniciar um novo pregão (só o livro do ativo dado —
+   * zerar o WIN nunca apaga a auditoria do WDO).
    */
-  static clearIntradayAudit(): void {
+  static clearIntradayAudit(assetId: AssetId = DEFAULT_ASSET_ID): void {
     try {
-      localStorage.removeItem(AUDIT_STORAGE_KEY);
+      localStorage.removeItem(auditKeyForAsset(assetId));
     } catch {
       // Fallback
     }

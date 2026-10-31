@@ -1,4 +1,5 @@
 import { Tick } from '../types/trading';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, sessionClock, snapToTick } from '../assets/assetRegistry';
 
 const BROKERS = [
   'XP Investimentos',
@@ -14,18 +15,52 @@ const BROKERS = [
   'Nova Futura',
 ];
 
+/**
+ * RNG determinística (mulberry32) — a mesma usada no Laboratório de Estratégias.
+ * Serve para reproduzir EXATAMENTE o mesmo mercado sintético corrida após corrida.
+ */
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Sorteia um seed de tela (0 é evitado para não colidir com o "sem seed" de chamadas antigas). */
+export function randomReplaySeed(): number {
+  return 1 + Math.floor(Math.random() * 999_999_999);
+}
+
 export class B3MarketSimulator {
-  private currentPrice: number = 128500;
+  private currentPrice: number = ASSETS[DEFAULT_ASSET_ID].basePrice;
   private trend: number = 0; // neutro: sem deriva compradora embutida
   private volatility: number = 1.0;
   private tickCounter: number = 0;
+  private asset: AssetSpec;
 
-  constructor(initialPrice: number = 128500) {
-    this.currentPrice = initialPrice;
+  /**
+   * `initialPrice` omitted = preço de referência do ativo (WIN: 171.500). O passo de preço do
+   * mercado sintético é a variação mínima do spec, então nenhum "5 pontos" fica soldado aqui.
+   */
+  constructor(initialPrice?: number, asset: AssetSpec = ASSETS[DEFAULT_ASSET_ID]) {
+    this.asset = asset;
+    this.currentPrice = initialPrice ?? asset.basePrice;
   }
 
   public setPrice(price: number) {
     this.currentPrice = price;
+  }
+
+  /**
+   * Troca de ativo no simulador (seletor do Header, Fase 2): passo, horário do pregão sintético
+   * e casas passam a ser os do spec novo. Quem chama costuma dar setPrice em seguida.
+   */
+  public setAsset(asset: AssetSpec) {
+    this.asset = asset;
   }
 
   public getPrice(): number {
@@ -63,11 +98,11 @@ export class B3MarketSimulator {
       volume = (Math.floor(Math.random() * 8) + 2) * 25; // 50-250
     }
 
-    // Movimentação de preço do Mini-Índice (passo de 5 pontos)
+    // Movimentação de preço do ativo (passo = variação mínima do spec)
     // Se o volume da agressão for forte, maior chance de deslocar a fila
     const moveChance = Math.min(0.85, 0.25 + (volume / 150));
     if (Math.random() < moveChance) {
-      const step = 5;
+      const step = this.asset.tickSize;
       if (aggressor === 'BUY') {
         this.currentPrice += step;
       } else {
@@ -98,9 +133,9 @@ export class B3MarketSimulator {
 }
 
 /**
- * Gera histórico SINTÉTICO de N dias úteis (sessões completas 09:05–17:45),
+ * Gera histórico SINTÉTICO de N dias (sessões completas no horário do ativo),
  * com 1 tick a cada 2 segundos e perfil intradiário realista da B3:
- * - Abertura (09:05–10:30): alta volatilidade e volume
+ * - Pré-abertura/leilão e abertura (08:55–10:30): alta volatilidade e volume
  * - Meio da manhã: fluxo ainda forte
  * - Almoço (11:30–13:30): mercado lateral e quieto
  * - Tarde: mantém o viés do dia (alta/baixa/lateral sorteado no início da sessão)
@@ -110,16 +145,40 @@ export class B3MarketSimulator {
  * já traz dias de viés baixista — necessário para testar o limiar adaptativo sem o antigo
  * enviesamento comprador. Serve para testar a estratégia em horários diferentes sem esperar o pregão real.
  * Os ticks retornam em ordem cronológica, terminando no preço que o replay deve adotar.
+ *
+ * `seed`: com um número informado, todo o sorteio da geração usa uma RNG determinística e a
+ * MESMA sequência de ticks sai igual em qualquer execução — inclusive em velocidades
+ * diferentes (1x, 2x, 5x, 10x). Sem seed, o mercado é sorteado de novo a cada corrida.
  */
-export function generateHistoricalTicks(days: number, startPrice: number = 128500): Tick[] {
+export function generateHistoricalTicks(
+  days: number,
+  startPrice: number = ASSETS[DEFAULT_ASSET_ID].basePrice,
+  seed?: number,
+  asset: AssetSpec = ASSETS[DEFAULT_ASSET_ID]
+): Tick[] {
   const TICK_STEP_MS = 2000;
 
-  // Dias úteis terminando hoje (sáb/dom são pulados)
+  // A geração inteira sorteia em Math.random; com seed, trocamos o Math.random por uma RNG
+  // determinística SÓ dentro desta função e restauramos no fim (mesma técnica do laboratório).
+  const realRandom = Math.random;
+  if (typeof seed === 'number' && Number.isFinite(seed)) {
+    Math.random = mulberry32(seed);
+  }
+  try {
+    return buildHistoricalTicks(days, startPrice, TICK_STEP_MS, asset);
+  } finally {
+    Math.random = realRandom;
+  }
+}
+
+function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: number, asset: AssetSpec): Tick[] {
+  const clock = sessionClock(asset);
+  // Dias terminando hoje; sáb/dom só são pulados se o pregão do ativo for de dias úteis
   const sessionDays: Date[] = [];
   const cursor = new Date();
   while (sessionDays.length < Math.max(1, Math.min(10, days))) {
     const dow = cursor.getDay();
-    if (dow !== 0 && dow !== 6) {
+    if (!asset.session.weekdaysOnly || (dow !== 0 && dow !== 6)) {
       sessionDays.unshift(new Date(cursor));
     }
     cursor.setDate(cursor.getDate() - 1);
@@ -130,9 +189,9 @@ export function generateHistoricalTicks(days: number, startPrice: number = 12850
   let counter = 0;
 
   for (const day of sessionDays) {
-    // Gap de abertura do dia (0 a 40 pts)
+    // Gap de abertura do dia
     price += (Math.random() - 0.5) * 80;
-    price = Math.round(price / 5) * 5;
+    price = snapToTick(price, asset);
 
     // Tipo de dia EQUILIBRADO (a base precisa ter dias baixistas para testar o limiar adaptativo):
     // ~40% dia de ALTA, ~40% dia de BAIXA, ~20% LATERAL. O viés do dia vale a sessão inteira
@@ -144,8 +203,10 @@ export function generateHistoricalTicks(days: number, startPrice: number = 12850
       : (Math.random() - 0.5) * 0.2; // lateral, quase sem direção
     let trend = (Math.random() - 0.5) * 0.6; // ruído intradiário (neutro)
 
-    const open = new Date(day); open.setHours(9, 5, 0, 0);
-    const close = new Date(day); close.setHours(17, 45, 0, 0);
+    // Abertura do pregão do ativo: é o início da janela de entradas do EA (trava de horário) — o
+    // leilão de abertura aparece na tela e o 1º candle já pode ser operado.
+    const open = new Date(day); open.setHours(clock.openHour, clock.openMinute, 0, 0);
+    const close = new Date(day); close.setHours(clock.closeHour, clock.closeMinute, 0, 0);
 
     for (let ts = open.getTime(); ts <= close.getTime(); ts += TICK_STEP_MS) {
       const d = new Date(ts);
@@ -183,7 +244,8 @@ export function generateHistoricalTicks(days: number, startPrice: number = 12850
 
       const moveChance = Math.min(0.9, (0.25 + volume / 150) * activity);
       if (Math.random() < moveChance) {
-        const step = activity > 1.2 && Math.random() < 0.3 ? 10 : 5;
+        // Nos picos de atividade o mercado salta 2 variações mínimas em vez de 1
+        const step = activity > 1.2 && Math.random() < 0.3 ? asset.tickSize * 2 : asset.tickSize;
         price += aggressor === 'BUY' ? step : -step;
       }
 

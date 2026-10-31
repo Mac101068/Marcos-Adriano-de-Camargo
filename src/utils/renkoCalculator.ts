@@ -1,6 +1,7 @@
 import { Tick, RenkoBox, AutomationConfig } from '../types/trading';
 import { evaluateBoxConvergence } from './convergenceEvaluator';
 import { SessionRegimeMeter } from './sessionRegime';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, snapToTick } from '../assets/assetRegistry';
 
 /**
  * Calculador de Gráficos Atemporais:
@@ -20,6 +21,11 @@ export class RenkoFlowEngine {
   // Medidor de regime desta série: o box fechado alimenta o medidor ANTES da avaliação de
   // convergência, então o limiar adaptativo julga o box com o fator com que ele fechou.
   private regimeMeter = new SessionRegimeMeter(20);
+  /**
+   * Ativo do motor. A estratégia continua operando em PONTOS; o spec só entra aqui para
+   * normalizar o preço de âncora na variação mínima real do contrato (WIN 5 pts, WDO 0,5).
+   */
+  private asset: AssetSpec;
 
   /** Dia local (YYYY-MM-DD) de um timestamp — âncora de sessão contra o gap de abertura. */
   private sessionKey(ts: number): string {
@@ -27,12 +33,22 @@ export class RenkoFlowEngine {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  constructor(boxPoints: number = 50) {
+  constructor(boxPoints: number = 50, asset: AssetSpec = ASSETS[DEFAULT_ASSET_ID]) {
     this.boxPoints = boxPoints;
+    this.asset = asset;
   }
 
   public setBoxPoints(points: number) {
     this.boxPoints = points;
+  }
+
+  /**
+   * Troca de ativo sem jogar o motor fora (seletor do Header, Fase 2). A variação mínima
+   * continua sendo a do spec antigo até o próximo initialize — quem chama é obrigado a
+   * reiniciar em seguida, e é o que App.handleSelectAsset faz no handleResetData.
+   */
+  public setAsset(asset: AssetSpec) {
+    this.asset = asset;
   }
 
   public getBoxes(): RenkoBox[] {
@@ -62,8 +78,8 @@ export class RenkoFlowEngine {
     // Série reiniciada: o regime medido da série antiga não vale para a nova
     this.regimeMeter.reset();
 
-    // Normaliza para múltiplos de 5 (tick do WIN)
-    const basePrice = Math.round(startPrice / 5) * 5;
+    // Normaliza para a variação mínima do ativo (WIN: múltiplos de 5 pts)
+    const basePrice = snapToTick(startPrice, this.asset);
 
     this.currentBox = {
       index: 0,
@@ -113,7 +129,7 @@ export class RenkoFlowEngine {
     const tickSession = this.sessionKey(tick.timestamp);
     if (this.lastSessionKey !== undefined && tickSession !== this.lastSessionKey) {
       this.lastSessionKey = tickSession;
-      const basePrice = Math.round(tick.price / 5) * 5;
+      const basePrice = snapToTick(tick.price, this.asset);
       this.currentBox = {
         index: this.boxes.length,
         direction: 'UP',

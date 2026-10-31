@@ -1,11 +1,15 @@
 import { AutomationConfig, ConfigPreset } from '../types/trading';
+import { ASSETS, DEFAULT_ASSET_ID, resolveAsset, type AssetId } from '../assets/assetRegistry';
 
 const STORAGE_KEY_CONFIG = 'fluxo_renko_ea_config_v3';
 const STORAGE_KEY_PROFILES = 'fluxo_renko_ea_profiles_v3';
 
 export const DEFAULT_EA_CONFIG: AutomationConfig = {
   active: true,
-  symbol: 'WIN$N',
+  // Ativo do seletor (Fase 2) e o código do contrato andam juntos: o símbolo vem do registro,
+  // então trocar de ativo num lugar não deixa o outro apontando para outro mercado.
+  assetId: DEFAULT_ASSET_ID,
+  symbol: ASSETS[DEFAULT_ASSET_ID].primarySymbol,
   boxPoints: 50, // 10R no Mini-Índice
   contracts: 1, // 1 contrato padrão na Ordem Mãe
   minDeltaThreshold: 100, // Delta mínimo de agressão líquida
@@ -26,6 +30,7 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   maxDailyLoss: 1000,
   maxDailyProfit: 2500,
   maxDailyTrades: 0, // 0 = sem limite para permitir piramidação contínua a cada box
+  closeAllOnFinancialLock: false, // Trava batida: por padrão só para de abrir (posições abertas seguem gerenciadas)
   mt5Host: 'localhost',
   mt5Port: 8765,
   // Tetos aceitos pela ponte: defesa contra comando perdido, loop de bug ou app clonado
@@ -42,10 +47,16 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   pullbackTarget: 'BOX_OPEN',
   pullbackCustomPoints: 25,
   pullbackMaxBoxesWait: 2,
-  tradingHoursEnabled: false,
-  tradingStartTime: '09:05',
-  tradingStopEntriesTime: '17:00',
-  tradingCloseAllTime: '17:45',
+  // Trava de horário de trabalho: o EA fica BLOQUEADO de 17:30 até 08:55 (madrugada do dia
+  // seguinte) e LIBERADO das 08:55 — assim o leilão de abertura aparece na tela e desde o 1º
+  // candle o robô pode operar. Zeragem compulsória às 17:30 (o WIN$N encerra às 17:45).
+  // Os dois portões são obedecidos pelo terminal E pela ponte Python.
+  // Janelas antigas intocadas (09:05–17:00/17:45 e 09:00–17:30/17:30) são convertidas uma única
+  // vez por utils/tradingWindowMigration.ts; valor que você ajustou nunca é mexido.
+  tradingHoursEnabled: true,
+  tradingStartTime: '08:55',
+  tradingStopEntriesTime: '17:30',
+  tradingCloseAllTime: '17:30',
   strategyMode: 'PYRAMID_FLOW_CONFLUENCE',
   pyramidTpPoints: 50, // TP de 50 pontos para as ordens da pirâmide
   pyramidSlPoints: 0, // Sem stop fixo na pirâmide por padrão (saída por inversão)
@@ -199,6 +210,9 @@ export class EaConfigService {
         return {
           ...DEFAULT_EA_CONFIG,
           ...parsed,
+          // assetId só vale se for um ativo conhecido; config antigo sem o campo resolve pelo
+          // símbolo gravado (e a migração versionada trata do que ficou no storage).
+          assetId: (ASSETS[parsed.assetId as AssetId] ? parsed.assetId : resolveAsset(parsed.symbol).id) as AssetId,
           strategyMode: stratMode,
           contracts: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? (parsed.contracts || 1) : (parsed.contracts || 2),
           pyramidTpPoints: parsed.pyramidTpPoints ?? DEFAULT_EA_CONFIG.pyramidTpPoints,
@@ -339,6 +353,9 @@ export class EaConfigService {
     const validConfig: AutomationConfig = {
       ...DEFAULT_EA_CONFIG,
       ...candidate,
+      // JSON importado de antes da Fase 2 não traz `assetId`: sem esta linha o spread jogaria o
+      // WIN por cima e uma estratégia de WDO$N ficaria com R$/ponto e tick de outro mercado.
+      assetId: (ASSETS[candidate.assetId as AssetId] ? candidate.assetId : resolveAsset(candidate.symbol).id) as AssetId,
       profileName: candidate.profileName || 'Configuração Importada',
       lastSavedTimestamp: Date.now(),
     };
