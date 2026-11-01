@@ -842,19 +842,11 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
 
                     <div>
                       <label className="block text-slate-400 mb-1">Piso de proteção (taxas B3)</label>
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          min="0"
-                          max="50"
-                          step="5"
-                          value={config.breakevenOffsetPoints ?? 5}
-                          onChange={(e) =>
-                            handleConfigChange('breakevenOffsetPoints', Math.min(50, Math.max(0, Number(e.target.value) || 0)))
-                          }
-                          className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
-                        />
-                        <span className="text-[11px] font-mono text-emerald-400 font-bold shrink-0">pts</span>
+                      {/* O editor migrou para a boleta do gráfico — fonte única dos valores-base das
+                          estratégias. Aqui só leitura, para o painel continuar explicando a gestão. */}
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-emerald-400 font-bold">{config.breakevenOffsetPoints ?? 5} pts</span>
+                        <span className="text-[10px] text-slate-500">edite na Boleta do gráfico</span>
                       </div>
                       <span className="block text-[10px] text-slate-500 mt-0.5">
                         Mínimo que o stop garante: entrada + {config.breakevenOffsetPoints ?? 5} pts. Vale para o breakeven
@@ -1184,15 +1176,11 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                   {config.takeProfitPoints} pts (R$ {tpFinancial})
                 </span>
               </div>
-              <input
-                type="range"
-                min="50"
-                max="450"
-                step="25"
-                value={config.takeProfitPoints}
-                onChange={(e) => handleConfigChange('takeProfitPoints', Number(e.target.value))}
-                className="w-full accent-emerald-500"
-              />
+              {/* O slider foi eliminado: o Alvo variável é definido na boleta do gráfico — a base
+                  que Robô, script Python e ordens manuais buscam. Aqui só leitura. */}
+              <span className="block text-[10px] text-slate-500">
+                edite na Boleta do gráfico (linha “Alvo”)
+              </span>
             </div>
               </div>
             ) : (
@@ -1316,38 +1304,18 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-400 mb-1">Lote Parcial (Contratos)</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max={Math.max(1, config.contracts - 1)}
-                      value={config.partialContracts}
-                      onChange={(e) =>
-                        handleConfigChange('partialContracts', Math.max(1, Number(e.target.value)))
-                      }
-                      className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-neutral-500 focus:outline-hidden"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 mb-1">Offset Breakeven (Taxas B3)</label>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        min="0"
-                        max="25"
-                        step="5"
-                        value={config.breakevenOffsetPoints}
-                        onChange={(e) =>
-                          handleConfigChange('breakevenOffsetPoints', Number(e.target.value))
-                        }
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-neutral-500 focus:outline-hidden"
-                      />
-                      <span className="text-slate-400 text-[11px]">pts</span>
-                    </div>
-                  </div>
+                <div>
+                  <label className="block text-slate-400 mb-1">Lote Parcial (Contratos)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={Math.max(1, config.contracts - 1)}
+                    value={config.partialContracts}
+                    onChange={(e) =>
+                      handleConfigChange('partialContracts', Math.max(1, Number(e.target.value)))
+                    }
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-neutral-500 focus:outline-hidden"
+                  />
                 </div>
 
                 <div className="pt-1">

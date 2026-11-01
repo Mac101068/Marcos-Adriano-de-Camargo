@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Clock,
   Wifi,
+  RefreshCw,
 } from 'lucide-react';
 import { AutomationConfig } from '../types/trading';
 import { SavedStrategy } from '../types/strategy';
@@ -204,6 +205,26 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, a
     setDraft({ ...base, name: '' });
   };
 
+  /**
+   * Puxar da boleta: a boleta do gráfico é a BASE dos valores-gestão (Contratos, Stop, Alvo,
+   * Parcial, Break even, Trailing) — o rascunho passa a começar neles, e o operador varre o
+   * restante para encontrar os melhores parâmetros do EA.
+   */
+  const pullFromBoleta = () => {
+    setCfg({
+      contracts: currentConfig.contracts,
+      stopLossPoints: currentConfig.stopLossPoints,
+      takeProfitPoints: currentConfig.takeProfitPoints,
+      // A parcial só aparece no rascunho com a saída parcial ligada — puxar o flag junto evita
+      // o "puxei e não veo": a boleta manda também em qual gestão está ativa.
+      enablePartialExit: currentConfig.enablePartialExit,
+      partialPoints: currentConfig.partialPoints,
+      breakevenOffsetPoints: currentConfig.breakevenOffsetPoints,
+      trailingDistancePoints: currentConfig.trailingDistancePoints,
+    });
+    flash('Valores-gestão da boleta do gráfico puxados para o rascunho.');
+  };
+
   const saveDraft = (activate: boolean): SavedStrategy | null => {
     if (!draft) return null;
     if (!draft.name.trim()) {
@@ -363,7 +384,9 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, a
             <h2 className="text-sm font-semibold text-slate-300">Estúdio de Estratégias</h2>
             <p className="text-[11px] text-slate-500 mt-1.5 max-w-[420px] leading-snug">
               Selecione uma estratégia à esquerda para editar, ou clique em{' '}
-              <span className="text-slate-300">Nova do config atual</span> para programar a partir do que está rodando agora.
+              <span className="text-slate-300">Nova do config atual</span> para programar a partir do que está rodando agora
+              — inclusive os valores editados na boleta do gráfico (Contratos, Stop, Alvo, Parcial, Break even e Trailing),
+              que são a base das estratégias.
               Cada estratégia é um retrato completo dos parâmetros: estratégia, fluxo, entradas, gestão, limites e execução.
             </p>
             <button
@@ -401,6 +424,14 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, a
                 >
                   <Play className="w-3.5 h-3.5 text-emerald-400" />
                   Salvar e Ativar
+                </button>
+                <button
+                  onClick={pullFromBoleta}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-colors cursor-pointer"
+                  title="Puxar Contratos, Stop, Alvo, Parcial, Break even e Trailing da boleta do gráfico (a base dos valores)"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+                  Puxar da boleta
                 </button>
                 <button
                   onClick={exportDraft}

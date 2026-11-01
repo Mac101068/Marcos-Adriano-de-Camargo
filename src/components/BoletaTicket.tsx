@@ -13,39 +13,134 @@ import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, pointsToBRL } from '.
  */
 
 // v1: abre expandida na primeira vez; depois obedece a última escolha do operador
-const STORAGE_KEY_OPEN = 'fluxo_boleta_open_v1';
+export const STORAGE_KEY_OPEN = 'fluxo_boleta_open_v1';
 // Recolhe sozinho depois desse tempo (não fecha enquanto o mouse estiver em cima, nem se fixado)
 const AUTO_COLLAPSE_MS = 9000;
+// Largura fixa da caixa expandida e o vão que o gráfico deixa a ela: quem desenha o canvas
+// precisa saber desses números para o gráfico parar a 5px da borda esquerda da boleta
+// (e, recolhida, a 5px da régua). É a única fonte desse número — mexa aqui e os dois lados seguem.
+export const BOLETA_WIDTH = 196;
+export const BOLETA_GAP = 5;
+// Recuo do topo: 5px abaixo da linha de dados (a faixa de controles/indicadores do gráfico)
+export const BOLETA_TOP = 5;
+
+/**
+ * Livro de hedge de um lado (COMPRAS ou VENDAS) — contas batidas no App, a boleta só exibe.
+ * É a migração dos chips que viviam nas linhas de menu (tira do topo, barra do gráfico, janela
+ * de Dados) para a área abaixo dos botões de compra e venda.
+ */
+export interface HedgeSideBook {
+  /** Ordens abertas + limites paradas aguardando neste lado. */
+  orders: number;
+  /** Ordens efetivamente abertas (posição viva). */
+  filled: number;
+  /** Ordens paradas (limite) aguardando execução. */
+  pending: number;
+  /** Contratos vivos no lado (respeita saída parcial). */
+  contracts: number;
+  /** Preço médio de entrada ponderado por contrato. */
+  avgEntry: number;
+  /** Pontos flutuantes (mesma convenção do antigo chip: soma dos pontos por ordem). */
+  livePts: number;
+  /** R$ flutuante das posições abertas no lado. */
+  liveBRL: number;
+  /** R$ já realizado em saídas parciais de ordens ainda abertas neste lado. */
+  partialBRL: number;
+}
+
+export interface HedgeBook {
+  buy: HedgeSideBook;
+  sell: HedgeSideBook;
+  /** Soma dos resultados fechados POSITIVOS da sessão (realizado a mercado). */
+  realizedProfit: number;
+  /** Soma dos resultados fechados NEGATIVOS da sessão (número negativo). */
+  realizedLoss: number;
+  /** Realizado + flutuante dos dois lados + parciais — o PnL do dia na boleta. */
+  dayPnl: number;
+  /** Contratos negociados HOJE em compras (abertas + fechadas da sessão, sem limites paradas). */
+  buyContractsToday: number;
+  /** Contratos negociados HOJE em vendas. */
+  sellContractsToday: number;
+  /** Total de contratos do dia (C + V) — o giro completo da sessão. */
+  contractsTodayTotal: number;
+}
 
 interface BoletaTicketProps {
   currentPrice: number;
   contracts: number;
+  /** Preço atual do feed (o STOP read-only é derivado dele). */
   stopLossPoints: number;
+  /**
+   * Alvo variável (TP em pontos) — a boleta é a BASE: Robô, script Python e estratégias
+   * buscam este valor; os sliders/painéis que o editavam antes foram eliminados.
+   */
   takeProfitPoints: number;
+  /** Piso do breakeven (offset de taxas sobre a entrada) — também editável só aqui. */
+  breakevenOffsetPoints?: number;
+  /** Pontos da saída parcial (1/2 do lote) — sexta linha editável da base. */
+  partialPoints?: number;
   /** Modo da estratégia: na Pirâmide a Ordem Mãe não tem SL/TP fixo — a boleta diz isso, não inventa número. */
   strategyMode?: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE';
   openOrders: TradeOrder[];
-  /** PnL flutuante já calculado pelo gráfico (pontos + R$ + quantidade de posições). */
-  pnl: { points: number; financial: number; openCount: number };
+  /**
+   * Livro do hedge (contratos por lado, preço médio, flutuante, ganhos/perdas/PnL do dia).
+   * Quem calcula é o App — único dono das ordens; sem ele o painel some (mas as ordens seguem).
+   */
+  hedgeBook?: HedgeBook;
   isRealMT5Connected?: boolean;
   asset?: AssetSpec;
+  /** Distância do trailing stop (pts atrás do extremo) — quinta linha editável da base. */
+  trailingDistancePoints?: number;
   /**
-   * Recuo da borda direita, em px: a boleta nunca pode cobrir a régua de preços do eixo Y
-   * (46px no mobile, 64px no desktop — quem passa o valor é o gráfico, que já sabe a largura).
+   * Recuo da borda direita, em px: a boleta fica ENCARADA na grade lateral (régua de preços).
+   * Quem passa o valor é o gráfico: é a largura do eixo (46px mobile / 64px desktop). O vão de
+   * BOLETA_GAP é do DESENHO (o canvas que recua), não da caixa.
    */
   rightOffset?: number;
+  /** Estado aberto/recolhido vem do gráfico (controlled): ele precisa saber o vão para o canvas. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onManualOrder?: (type: 'BUY' | 'SELL') => void;
+  /** Zerar por lado (estratégia de hedge): cada botão manda fechar só o seu lado. */
+  onClosePositionsSide?: (side: 'BUY' | 'SELL') => void;
+  /** ZERAR TUDO: fecha os dois lados de uma vez (mesma ação do zerar-geral do gráfico). */
   onClosePositions?: () => void;
+  /** Escrita dos valores-base das estratégias (persistem no config do EA via App). */
+  onTakeProfitChange?: (v: number) => void;
+  onStopLossPointsChange?: (v: number) => void;
+  onPartialPointsChange?: (v: number) => void;
+  onBreakevenChange?: (v: number) => void;
+  onTrailingChange?: (v: number) => void;
+  onContractsChange?: (v: number) => void;
 }
 
-const readOpenPref = (): boolean => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_OPEN);
-    if (raw === null) return true;
-    return raw === 'true';
-  } catch {
-    return true;
-  }
+const brl = (v: number) =>
+  `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+
+/**
+ * Linha de um lado do hedge: `C 3ct @ 121,30` à esquerda, o R$ flutuante colorido à direita.
+ * Tono segue o RESULTADO (verde positivo / vermelho negativo), não o lado — em hedge os dois
+ * lados costumam apontar para cores opostas, e quem lê quer saber quem está no lucro.
+ */
+const SideRow: React.FC<{ tag: 'C' | 'V'; book: HedgeSideBook; asset: AssetSpec }> = ({ tag, book, asset }) => {
+  const total = book.liveBRL + book.partialBRL;
+  const tone = book.filled === 0 ? 'text-zinc-500' : total > 0 ? 'text-emerald-300' : total < 0 ? 'text-rose-300' : 'text-zinc-100';
+  return (
+    <div
+      className="flex items-baseline justify-between gap-2 leading-tight"
+      title={`${tag === 'C' ? 'COMPRAS' : 'VENDAS'}: ${book.filled} ordem(ns) aberta(s)${book.pending ? ` + ${book.pending} parada(s)` : ''} · ${book.contracts} contrato(s) · médio ${formatPrice(book.avgEntry, asset)} pts · flutuante ${brl(total)}${book.partialBRL ? ` (sendo ${brl(book.partialBRL)} de parcial já realizada)` : ''}`}
+    >
+      <span className="text-[9.5px] uppercase tracking-wide shrink-0">
+        <span className={tag === 'C' ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>{tag}</span>
+        <span className="text-zinc-500"> {book.contracts}ct</span>
+        {book.avgEntry > 0 && <span className="text-zinc-500"> @ {formatPrice(book.avgEntry, asset)}</span>}
+        {book.pending > 0 && <span className="text-amber-400/90"> +{book.pending}P</span>}
+      </span>
+      <span className={`text-[11px] font-semibold tabular-nums truncate ${tone}`}>
+        {book.filled === 0 ? '—' : brl(total)}
+      </span>
+    </div>
+  );
 };
 
 const Row: React.FC<{ label: string; value: string; tone?: 'neutral' | 'emerald' | 'rose' | 'sky' }> = ({
@@ -69,60 +164,133 @@ const Row: React.FC<{ label: string; value: string; tone?: 'neutral' | 'emerald'
   );
 };
 
+/**
+ * Linha editável da boleta (Contratos / Alvo / Breakeven / Trailing), no padrão de mercado de
+ * order ticket (CQG/Trading Technologies): os dois lados da caixa mandam − e + (as setinhas
+ * nativas do input somem), a unidade em cinza à direita. O número É a fonte — Robô, script e
+ * estratégias leem este valor do config; os editores que viviam nos painéis foram eliminados.
+ */
+const StepperRow: React.FC<{
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  unit: string;
+  onChange?: (v: number) => void;
+  hint: string;
+}> = ({ label, value, min, max, step = 5, unit, onChange, hint }) => {
+  const clamp = (v: number) => Math.min(max, Math.max(min, Math.round(v)));
+  const bump = (dir: 1 | -1) => onChange?.(clamp((Number.isFinite(value) ? value : min) + dir * step));
+  const btn =
+    'w-[18px] h-[18px] shrink-0 rounded bg-zinc-900 border border-zinc-700 text-zinc-300 hover:text-white hover:border-zinc-500 active:scale-90 disabled:opacity-40 disabled:cursor-default text-[12px] font-bold leading-none flex items-center justify-center cursor-pointer transition-colors select-none';
+  return (
+    <div className="flex items-center justify-between gap-1.5 leading-tight" title={hint}>
+      <span className="text-[9px] uppercase tracking-wide text-zinc-500 shrink-0">{label}</span>
+      <span className="flex items-center gap-1">
+        <button type="button" className={btn} disabled={!onChange} onClick={() => bump(-1)} aria-label={`Diminuir ${label}`}>
+          −
+        </button>
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          disabled={!onChange}
+          onChange={(e) => onChange?.(clamp(Number(e.target.value) || 0))}
+          className="w-[40px] h-[18px] rounded bg-zinc-900 border border-zinc-700 px-0.5 text-center text-[10.5px] font-semibold font-mono tabular-nums text-zinc-100 focus:border-emerald-500 focus:outline-hidden disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        />
+        <button type="button" className={btn} disabled={!onChange} onClick={() => bump(1)} aria-label={`Aumentar ${label}`}>
+          +
+        </button>
+        <span className="text-[8.5px] text-zinc-600 w-[16px] shrink-0">{unit}</span>
+      </span>
+    </div>
+  );
+};
+
 export const BoletaTicket: React.FC<BoletaTicketProps> = ({
   currentPrice,
   contracts,
   stopLossPoints,
   takeProfitPoints,
+  breakevenOffsetPoints = 5,
   strategyMode = 'PULLBACK_RETEST',
   openOrders,
-  pnl,
+  hedgeBook,
   isRealMT5Connected = false,
   asset = ASSETS[DEFAULT_ASSET_ID],
-  rightOffset = 96,
+  trailingDistancePoints = 50,
+  partialPoints = 50,
+  rightOffset = 64,
+  open,
+  onOpenChange,
   onManualOrder,
+  onClosePositionsSide,
   onClosePositions,
+  onTakeProfitChange,
+  onStopLossPointsChange,
+  onPartialPointsChange,
+  onBreakevenChange,
+  onTrailingChange,
+  onContractsChange,
 }) => {
-  const [open, setOpen] = useState<boolean>(readOpenPref);
   const [pinned, setPinned] = useState<boolean>(false);
   const [hovered, setHovered] = useState<boolean>(false);
-
-  // Persiste só a escolha de aberto/fechado (o resto é transitório)
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_OPEN, String(open));
-    } catch {
-      // Ignora erro de storage
-    }
-  }, [open]);
 
   // Recolhimento automático: roda de novo a cada mudança de estado e não interfere com o mouse
   // em cima da caixa, nem quando o operador fixou a boleta aberta.
   useEffect(() => {
     if (!open || pinned || hovered) return;
-    const t = setTimeout(() => setOpen(false), AUTO_COLLAPSE_MS);
+    const t = setTimeout(() => onOpenChange(false), AUTO_COLLAPSE_MS);
     return () => clearTimeout(t);
-  }, [open, pinned, hovered]);
+  }, [open, pinned, hovered, onOpenChange]);
 
   const isPyramid = strategyMode === 'PYRAMID_FLOW_CONFLUENCE';
   // R$ em risco na operação: a perda se o stop for batido (só faz sentido com SL fixo do modo Reteste)
   const riskBRL = isPyramid || stopLossPoints <= 0 ? 0 : pointsToBRL(stopLossPoints, contracts, asset);
+  // Chip aberto: TUDO sempre visível — lados C/V (ainda que zerados), resultado da sessão e os
+  // dois ZERAR (desabilitados quando o lado está vazio). A boleta é a base: dados e controles
+  // dos dois lados vivem aqui, não atrás de um estado que some entre uma ordem e outra.
+  const hedgeVisible =
+    !!hedgeBook &&
+    hedgeBook.buy.filled + hedgeBook.sell.filled + hedgeBook.buy.pending + hedgeBook.sell.pending > 0;
 
   // Chip fechado: um toque abre de novo (e a posição oposta do tijolo fica livre)
   if (!open) {
     return (
-      <div className="absolute top-2 z-30 pointer-events-auto select-none" style={{ right: rightOffset }}>
+      <div
+        className="absolute z-30 pointer-events-auto select-none"
+        style={{ right: rightOffset, top: BOLETA_TOP }}
+      >
         <button
-          onClick={() => setOpen(true)}
+          onClick={() => onOpenChange(true)}
           className="flex items-center gap-1.5 px-2 h-[26px] rounded-md bg-zinc-950/92 backdrop-blur-md border border-zinc-700/80 shadow-xl text-[11px] font-mono text-zinc-200 hover:text-white hover:border-zinc-600 cursor-pointer transition-colors"
           title="Abrir a boleta (ordem rápida)"
         >
           <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-zinc-500">Boleta</span>
           <span className="font-semibold text-emerald-300 tabular-nums">{formatPrice(currentPrice, asset)}</span>
-          {openOrders.length > 0 && (
-            <span className="text-[9.5px] font-sans font-bold px-1 rounded bg-zinc-800 text-zinc-300">
-              {openOrders.length}
+          {/* Recolhida, a boleta ainda resume o hedge: C/V com contratos de cada lado */}
+          {hedgeVisible && (hedgeBook!.buy.contracts > 0 || hedgeBook!.sell.contracts > 0) ? (
+            <span className="flex items-center gap-1 font-sans font-bold">
+              {hedgeBook!.buy.contracts > 0 && (
+                <span className="text-[9.5px] px-1 rounded bg-emerald-500/15 text-emerald-300 tabular-nums">
+                  C{hedgeBook!.buy.contracts}
+                </span>
+              )}
+              {hedgeBook!.sell.contracts > 0 && (
+                <span className="text-[9.5px] px-1 rounded bg-rose-500/15 text-rose-300 tabular-nums">
+                  V{hedgeBook!.sell.contracts}
+                </span>
+              )}
             </span>
+          ) : (
+            openOrders.length > 0 && (
+              <span className="text-[9.5px] font-sans font-bold px-1 rounded bg-zinc-800 text-zinc-300">
+                {openOrders.length}
+              </span>
+            )
           )}
           <ChevronUp className="w-3 h-3 text-zinc-500" />
         </button>
@@ -134,8 +302,8 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{ right: rightOffset }}
-      className="absolute top-2 z-30 w-[196px] rounded-lg bg-zinc-950/94 backdrop-blur-md border border-zinc-700/80 shadow-2xl pointer-events-auto select-none"
+      style={{ right: rightOffset, top: BOLETA_TOP, width: BOLETA_WIDTH }}
+      className="absolute z-30 rounded-lg bg-zinc-950/94 backdrop-blur-md border border-zinc-700/80 shadow-2xl pointer-events-auto select-none"
     >
       {/* Cabeçalho: título + estado do feed + fixar + recolher */}
       <div className="flex items-center gap-1.5 px-2 h-7 border-b border-zinc-800/80">
@@ -161,7 +329,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           {pinned ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />}
         </button>
         <button
-          onClick={() => setOpen(false)}
+          onClick={() => onOpenChange(false)}
           className="p-0.5 text-zinc-500 hover:text-zinc-100 cursor-pointer"
           title="Recolher a boleta"
           aria-label="Recolher boleta"
@@ -173,23 +341,68 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
       {/* Dados básicos da ordem */}
       <div className="px-2 py-1.5 space-y-0.5 font-mono">
         <Row label="Preço" value={`${formatPrice(currentPrice, asset)} pts`} tone="emerald" />
-        <Row label="Contratos" value={`${contracts} ctro${contracts === 1 ? '' : 's'}`} />
-        {isPyramid ? (
-          <Row label="Alvo / Stop" value="Surfe (sem fixo)" />
-        ) : (
-          <>
-            <Row
-              label="Stop"
-              value={`${formatPrice(currentPrice - stopLossPoints, asset)} (−${stopLossPoints}p)`}
-              tone="rose"
-            />
-            <Row
-              label="Alvo"
-              value={`${formatPrice(currentPrice + takeProfitPoints, asset)} (+${takeProfitPoints}p)`}
-              tone="sky"
-            />
-          </>
-        )}
+        <StepperRow
+          label="Contratos"
+          value={contracts}
+          min={1}
+          max={99}
+          step={1}
+          unit="ct"
+          onChange={onContractsChange}
+          hint={`Lote das ordens da boleta e do Robô: ${contracts} contrato(s) · ${pointsToBRL(1, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ponto a favor`}
+        />
+        {/* Stop, Alvo e Parcial editáveis: a boleta é a BASE — Robô, script Python e as
+            estratégias do Estúdio buscam estes valores do config. Na Pirâmide o Stop da mãe é
+            o ponto de partida do gatilho, mas o campo continua editável (vale para as pirâmides
+            e para ordens manuais). */}
+        <StepperRow
+          label="Stop"
+          value={stopLossPoints}
+          min={0}
+          max={1000}
+          step={5}
+          unit="pts"
+          onChange={onStopLossPointsChange}
+          hint={`Stop Loss fixo: ${stopLossPoints} pts atrás da entrada ≈ ${pointsToBRL(stopLossPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de risco por ${contracts} contrato(s). Base das estratégias.`}
+        />
+        <StepperRow
+          label="Alvo"
+          value={takeProfitPoints}
+          min={0}
+          max={2000}
+          unit="pts"
+          onChange={onTakeProfitChange}
+          hint={`TP variável — base das estratégias: Robô, script Python e ordens da boleta buscam este valor. ${takeProfitPoints} pts ≈ ${pointsToBRL(takeProfitPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ${contracts} ctro(s)`}
+        />
+        <StepperRow
+          label="Parcial"
+          value={partialPoints}
+          min={5}
+          max={1000}
+          step={5}
+          unit="pts"
+          onChange={onPartialPointsChange}
+          hint={`Saída parcial (metade do lote) em +${partialPoints} pts — protege o breakeven antes do alvo final. Base das estratégias.`}
+        />
+        <StepperRow
+          label="Break even"
+          value={breakevenOffsetPoints}
+          min={0}
+          max={50}
+          step={1}
+          unit="pts"
+          onChange={onBreakevenChange}
+          hint={`Piso de proteção (taxas B3): ao proteger a posição, o stop garante entrada + ${breakevenOffsetPoints} pts. Vale para o breakeven da parcial, o do TP da pirâmide e o piso do gatilho.`}
+        />
+        <StepperRow
+          label="Trailing"
+          value={trailingDistancePoints}
+          min={0}
+          max={300}
+          unit="pts"
+          onChange={onTrailingChange}
+          hint={`Trailing Stop: depois do gatilho, o stop acompanha o preço sempre ${trailingDistancePoints} pts atrás do extremo (máxima na compra, mínima na venda). Só anda a favor.`}
+        />
         {riskBRL > 0 && (
           <Row
             label="Risco"
@@ -197,15 +410,6 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
             tone="rose"
           />
         )}
-        <Row
-          label="Abertas"
-          value={
-            openOrders.length > 0
-              ? `${openOrders.length} · ${pnl.points > 0 ? '+' : ''}${pnl.points} pts`
-              : 'nenhuma'
-          }
-          tone={openOrders.length === 0 ? 'neutral' : pnl.financial >= 0 ? 'emerald' : 'rose'}
-        />
       </div>
 
       {/* Ações */}
@@ -229,15 +433,81 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           <span>VENDA</span>
         </button>
       </div>
-      {openOrders.length > 0 && onClosePositions && (
-        <div className="px-2 pb-2">
+      {/* Zerar por lado, juntos logo abaixo de COMPRA/VENDA (padrão de boleta: ações primeiro,
+          livro depois). Cada botão fecha só o seu lado do hedge. */}
+      {onClosePositionsSide && (
+        <div className={`px-2 pb-1.5 grid grid-cols-2 gap-1.5 ${hedgeBook ? '' : 'pt-1.5 border-t border-zinc-800/80'}`}>
+          <button
+            onClick={() => onClosePositionsSide('BUY')}
+            disabled={!hedgeBook || hedgeBook.buy.filled === 0}
+            className="h-[24px] rounded text-[9.5px] font-bold bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-35 disabled:hover:bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1"
+            title="Zerar só as COMPRAS — as VENDAS do hedge continuam abertas"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <span>ZERAR C{hedgeBook ? ` (${hedgeBook.buy.contracts}ct)` : ''}</span>
+          </button>
+          <button
+            onClick={() => onClosePositionsSide('SELL')}
+            disabled={!hedgeBook || hedgeBook.sell.filled === 0}
+            className="h-[24px] rounded text-[9.5px] font-bold bg-rose-500/15 hover:bg-rose-500/25 disabled:opacity-35 disabled:hover:bg-rose-500/15 text-rose-300 border border-rose-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1"
+            title="Zerar só as VENDAS — as COMPRAS do hedge continuam abertas"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
+            <span>ZERAR V{hedgeBook ? ` (${hedgeBook.sell.contracts}ct)` : ''}</span>
+          </button>
+        </div>
+      )}
+      {/* =================================================================== */}
+      {/* HEDGE: o livro que migrou das linhas de menu para baixo dos botões.  */}
+      {/* Dois lados (C/V) com contratos, preço médio e flutuante; realizado da */}
+      {/* sessão (ganhos/perdas) e PnL do dia.                                  */}
+      {/* =================================================================== */}
+      {hedgeBook && (
+        <div className="border-t border-zinc-800/80">
+          <div className="px-2 py-1.5 space-y-0.5 font-mono">
+            <div className="flex items-center justify-between leading-tight">
+              <span className="text-[8.5px] font-sans font-bold uppercase tracking-wider text-zinc-500">
+                Hedge
+              </span>
+              <span
+                className="text-[8.5px] font-sans text-zinc-600"
+                title="Contratos em cada lado. Em hedge os dois lados ficam vivos ao mesmo tempo."
+              >
+                {hedgeBook.buy.filled + hedgeBook.sell.filled} aberta(s)
+              </span>
+            </div>
+            <SideRow tag="C" book={hedgeBook.buy} asset={asset} />
+            <SideRow tag="V" book={hedgeBook.sell} asset={asset} />
+          </div>
+          <div className="px-2 py-1.5 space-y-0.5 font-mono border-t border-zinc-800/60">
+            <Row label="Ganhos" value={brl(hedgeBook.realizedProfit)} tone="emerald" />
+            <Row label="Perdas" value={brl(hedgeBook.realizedLoss)} tone="rose" />
+            <Row
+              label="PnL dia"
+              value={brl(hedgeBook.dayPnl)}
+              tone={hedgeBook.dayPnl > 0 ? 'emerald' : hedgeBook.dayPnl < 0 ? 'rose' : 'neutral'}
+            />
+          </div>
+          {/* Giro do dia no rodapé — fecho padrão de order ticket: depois das ações, o resumo.
+              Contratos NEGOCIADOS hoje por lado (abertas + fechadas da sessão), não só o vivo. */}
+          <div className="px-2 pb-2 pt-1.5 border-t border-zinc-800/60 space-y-0.5 font-mono">
+            <Row label="Compra hoje" value={`${hedgeBook.buyContractsToday} ct`} tone="emerald" />
+            <Row label="Venda hoje" value={`${hedgeBook.sellContractsToday} ct`} tone="rose" />
+            <Row label="Total dia" value={`${hedgeBook.contractsTodayTotal} ct`} tone="sky" />
+          </div>
+        </div>
+      )}
+      {/* ZERAR TUDO por último, abaixo de tudo: fecha os dois lados de uma vez. */}
+      {onClosePositions && (
+        <div className={`px-2 pb-2 ${hedgeBook ? '' : 'pt-1.5 border-t border-zinc-800/80'}`}>
           <button
             onClick={onClosePositions}
-            className="w-full h-[26px] rounded text-[11px] font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-            title="Zerar todas as ordens e posições abertas imediatamente"
+            disabled={openOrders.length === 0}
+            className="w-full h-[26px] rounded text-[10px] font-bold bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-35 disabled:hover:bg-amber-500/15 text-amber-300 border border-amber-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1.5"
+            title="Zerar TUDO — fecha COMPRAS e VENDAS de uma vez"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            <span>ZERAR ({openOrders.length})</span>
+            <span>ZERAR TUDO ({openOrders.length})</span>
           </button>
         </div>
       )}

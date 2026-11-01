@@ -187,6 +187,85 @@ faixa inteira do topo (`left-2 right-2`) com botões de 30px de altura — grand
 - Novo prop `strategyMode` em `RenkoFlowChart`, ligado a `config.strategyMode` no `App.tsx`. Texto do Guia
   MT5 (`DocumentationView`), `PROJECT_SUMMARY.md §D` e a árvore de arquivos foram atualizados.
 
+### 8.9 ✅ Livro de hedge dentro da boleta (31/10) — os dados migraram das linhas de menu
+
+**Pedido do operador**: trazer para a boleta todos os dados pertinentes — contratos na compra e na venda, os
+ganhos, as perdas e o PnL do dia — com ZERAR COMPRAS e ZERAR VENDAS separados (estratégia de hedge), e retirar
+das linhas de menu tudo que migrasse para essa nova área abaixo de COMPRA/VENDA.
+
+**O que foi implementado**:
+- `hedgeBook` nasce no `App.tsx` (único dono das ordens) como `useMemo` e viaja App → `RenkoFlowChart` →
+  `BoletaTicket`. Tipos `HedgeSideBook`/`HedgeBook` exportados do próprio `BoletaTicket.tsx`.
+- Por lado (COMPRAS/VENDAS): contratos vivos respeitando saída parcial, preço médio ponderado por contrato,
+  R$ flutuante (`pointsToBRL`) e parcial já realizada. Na linha do lado o tom segue o **resultado** (verde no
+  lucro, vermelho no prejuízo), não o lado — em hedge os dois lados apontam para cores opostas.
+- Ganhos / Perdas / PnL do dia: realizado calculado sobre ordens fechadas da sessão (`exitTimestamp >=
+  sessionStartRef`); PnL dia = realizado + flutuante dos dois lados + parciais.
+- Rodapé de giro do dia: "Compra hoje N ct / Venda hoje N ct / Total dia N ct" — conta contratos que
+  **viraram posição** na sessão (exclui `PENDING_LIMIT`), persiste depois de zerar.
+- **Limpeza das linhas de menu** (pedido explícito "o que tiver de informação nas linhas de menu serão
+  retirados"): removidos o chip de abertas e o bloco `PnL: R$` da tira do topo (App), o memo `openPnL`, o
+  chip de PnL e o chip `N Pos Ativa(s)` da barra do gráfico, e a prop `pnl` + chips da `ChartControlSidebar`.
+  "Aguardando Sinal" só aparece com zero ordens abertas.
+- Boleta recolhida resume o hedge no chip com badges `Cn`/`Vn`.
+
+### 8.10 ✅ A boleta virou a BASE editável das estratégias; hedge manual convive (31/10–01/11)
+
+- **Tudo sempre visível** (pedido do operador): o painel hedge perdeu os portões `hedgeVisible`/`hedgeHasData`
+  — as linhas C/V, ganhos/perdas/PnL e os botões ZERAR existem sempre, desabilitados quando vazios. Um PnL
+  de exatamente R$ 0,00 não pode sumir da tela (achado da verificação: antes, o painel some em sessão plana).
+- **Linhas editáveis na boleta**: Alvo (TP) e Break even escritos direto no config por
+  `handleBoletaConfigPatch(patch)` no App — grava + `EaConfigService.saveConfig` + `lastSavedTimestamp`
+  (`fluxo_renko_ea_config_v3`). Editores concorrentes **eliminados** do AutomationPanel: slider do TP, piso de
+  proteção da pirâmide e offset de breakeven do reteste viraram somente-leitura com o ponteiro "edite na
+  Boleta do gráfico".
+- **Hedge manual real**: removida a inversão automática da entrada manual na Pirâmide (`if (activeOppDir.length
+  > 0) handleClosePositions()` em `handleManualOrder`) — COMPRA e VENDA agora coexistem clicadas pelo operador.
+  O caminho do ROBÔ continua obedecendo `hedgeOppositeAction` (ALLOW_SIMULTANEOUS / CLOSE_OPPOSITE / IGNORE_NEW).
+- **Teste dirigido BE=50** (pedido do operador): aceito no máximo, persistido, hedge bilateral funcionando;
+  semântica confirmada — piso = entrada + 50 pts (≈ R$ 10/ct travados); com trailing de mesma distância, o stop
+  cola no extremo − 50 e nunca fica abaixo do piso.
+
+### 8.11 ✅ Steppers no padrão de mercado + Contratos e Trailing editáveis (01/11)
+
+- Pesquisa de padrão (CQG / Trading Technologies / NN/g): caixa `[− input +]` com unidade ao lado — implementada
+  como `StepperRow` (substituiu o `EditableRow`), matando as setinhas nativas do número com
+  `[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`.
+- Linhas editáveis da base: **Contratos** (1–99, passo 1, "ct"), Alvo (0–2000, passo 5), **Break even** (0–50,
+  passo 1) e **Trailing** (0–300, passo 5, abaixo do break even com unidade em cinza).
+
+### 8.12 ✅ Parcial + Stop editáveis, ZERAR agrupado e o Estúdio lendo a boleta (01/11)
+
+- A boleta fecha os **seis valores-base**: Contratos, **Stop** (0–1000, passo 5 — era linha somente-leitura),
+  Alvo, **Parcial** (5–1000, passo 5 — nova), Break even e Trailing. Ordem das linhas: Contratos, Stop, Alvo,
+  Parcial, Break even, Trailing. Wiring fim a fim: `BoletaTicket` → `RenkoFlowChart` (ponte) → App
+  (`onStopLossPointsChange` / `onPartialPointsChange` via `handleBoletaConfigPatch`).
+- **ZERAR C / ZERAR V lado a lado** (`grid grid-cols-2`) logo abaixo de COMPRA/VENDA; **ZERAR TUDO** (âmbar,
+  largura total) ao final da boleta, abaixo de todo o livro — chama `handleClosePositions()` sem lado e fecha
+  os dois lados de uma vez.
+- **Estúdio de Estratégias lê a boleta** (`StrategyStudio.tsx`): "Nova do config atual" já snapshotava o config
+  vivo; o novo botão **"Puxar da boleta"** (`pullFromBoleta`) copia os seis campos + `enablePartialExit` do
+  `currentConfig` para o rascunho — o fluxo de caça aos melhores parâmetros do EA é: ajustar na boleta →
+  puxar no Estúdio → varrer o resto → salvar/ativar. Textos da tela vazia e do editor atualizados.
+- **Ponte Python**: `close_all_positions(side=None)` no script gerado passa a aceitar `side='BUY'/'SELL'`
+  (zera só o lado; `None`/`'ALL'` zera tudo como antes) e o handler `CLOSE_POSITIONS` lê `data.get("type")` —
+  o `type: 'BUY'|'SELL'|'ALL'` que o front já enviava desde o Ciclo anterior.
+
+### 8.13 🧪 Verificações da boleta-base e do hedge (31/10–01/11, via browser)
+
+- `npx tsc --noEmit` limpo e `npx vite build` OK em todas as rodadas; aba do navegador oculta → verificação por
+  DOM/JS (cliques sintéticos, `nativeInputValueSetter`, leitura de `localStorage`), sem screenshots.
+- Persistência: Stop 100→110 e Parcial 50→55 sobreviveram a `location.reload()` e bateram com
+  `fluxo_renko_ea_config_v3` (`stopLossPoints=110`, `partialPoints=55`).
+- Hedge bilateral com o simulador OPERA: C 2ct + V 1ct vivos juntos → ZERAR TUDO fechou os dois lados, ZERAR C/V
+  voltaram a ficar desabilitados, rodapé do dia manteve a contagem (3/1/4). Console limpo (0 mensagens).
+- Estúdio: rascunho com Stop=999/Parcial=777 → clique em "Puxar da boleta" → reverte para 110/55 da boleta.
+- **Achados honestos**: (1) dois cliques do stepper no MESMO tick do JS aplicam um só passo (em ritmo humano
+  não ocorre; poderíamos converter para updater funcional se incomodar); (2) o alfinete (Pin) não sobrevive a
+  reload — é estado local; (3) em modo Pirâmide o rascunho não renderiza Stop/Alvo/Parcial (comportamento do
+  modo, não defeito) e a linha "Parcial" do rascunho só aparece com "Saída parcial" ligada — por isso o
+  "Puxar da boleta" também copia o flag.
+
 ### Verificações deste ciclo
 
 - `npx tsc --noEmit` limpo e `npx vite build` OK (só o aviso pré-existente de chunk > 500 kB) — também
@@ -687,6 +766,18 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 
 ## 🧭 Pendências e próximos passos conhecidos
 
+- 📍 **PONTO DE RETOMADA — 01/11/2026 (fim do dia produtivo)**: a boleta do gráfico É a base editável das
+  estratégias (seis linhas com stepper `[− input +]`: Contratos, Stop, Alvo, Parcial, Break even, Trailing —
+  tudo persistido em `fluxo_renko_ea_config_v3`), o livro de hedge vive na boleta com ZERAR C/V lado a lado
+  abaixo de COMPRA/VENDA e ZERAR TUDO ao final, e o Estúdio de Estratégias lê a boleta ("Nova do config
+  atual" + botão "Puxar da boleta"). Tudo verificado por tsc + build + browser (seções 8.9–8.13). **Para
+  voltar daqui**: (1) validar na conta demo XP — primeiro resolver o item 🔎 do simulador abaixo, com o
+  operador decidindo cada correção; (2) alinhamentos pendentes da própria boleta-base listados a seguir.
+- 🧪 **Alinhamentos abertos da boleta-base (conversa prioritária com o operador)**: a Pirâmide usa
+  `pyramidTpPoints` (50) e NÃO obedece ao Alvo da boleta; o gatilho do trailing
+  (`trailingActivationPoints`, 60 pts) ainda não é linha editável na boleta; o texto da pirâmide no
+  AutomationPanel ainda diz "inversão zera o resto" (correto só para o robô — a entrada manual agora
+  convive em hedge); `hedgeOppositeAction` do robô continua fechando o lado oposto por sinal.
 - ✅ **Commit `d2f16c2`** — "feat: Boleta — caixa de ordem rápida recolhível, sempre visível (desktop e
    mobile)": 7 arquivos, **364 inserções / 41 remoções**, incluindo o novo `src/components/BoletaTicket.tsx`
    e o registro desta conversa nos três docs (Ciclo 8.8, pendência do simulador e fase REFINO VISUAL).

@@ -41,7 +41,6 @@ interface SectionProps {
 interface ChartControlSidebarProps {
   /* Sinal */
   blockCount: number;
-  pnl: { financial: number; points: number; openCount: number };
   activePosCount: number;
 
   /* Exibição */
@@ -73,6 +72,11 @@ interface ChartControlSidebarProps {
   /* Camadas */
   showOrderLines: boolean;
   onToggleOrderLines: () => void;
+  showSignalArrows: boolean;
+  onToggleSignalArrows: () => void;
+  /** Como ler o resultado das ordens no gráfico: em pontos ou em R$. */
+  orderValueMode: 'points' | 'money';
+  onOrderValueMode: (v: 'points' | 'money') => void;
 
   /* Desenho */
   activeDrawingTool: DrawingTool;
@@ -230,7 +234,6 @@ const Segmented: React.FC<{
 
 export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
   blockCount,
-  pnl,
   activePosCount,
   flowViewMode,
   onFlowViewMode,
@@ -255,6 +258,10 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
   onResetAll,
   showOrderLines,
   onToggleOrderLines,
+  showSignalArrows,
+  onToggleSignalArrows,
+  orderValueMode,
+  onOrderValueMode,
   activeDrawingTool,
   onSelectDrawingTool,
   drawingColor,
@@ -306,38 +313,9 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
               <span className="text-slate-500">Blocos 10R</span>
               <span className="text-emerald-400 font-bold tabular-nums">{blockCount}</span>
             </div>
-            <div
-              className={`flex items-center justify-between px-2 py-1 rounded border font-mono text-[11px] ${
-                pnl.openCount > 0
-                  ? pnl.financial > 0
-                    ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
-                    : pnl.financial < 0
-                    ? 'bg-rose-950/70 border-rose-500/40 text-rose-300'
-                    : 'bg-slate-950/60 border-slate-700 text-slate-300'
-                  : 'bg-slate-950/50 border-slate-800/80 text-slate-400'
-              }`}
-              title="Resultado flutuante acumulado das operações abertas"
-            >
-              <span className="uppercase text-[9px] tracking-wide">PnL</span>
-              <span className="font-bold tabular-nums">
-                {pnl.financial > 0 ? '+' : ''}
-                {pnl.financial.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                {pnl.openCount > 0 && (
-                  <span className="ml-1.5 text-[9.5px] font-semibold">
-                    ({pnl.points > 0 ? '+' : ''}
-                    {pnl.points} pts)
-                  </span>
-                )}
-              </span>
-            </div>
-            {activePosCount > 0 ? (
-              <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-sky-950/70 border border-sky-500/30 text-sky-300 text-[10.5px] font-mono">
-                <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
-                <span>{activePosCount} Pos Ativa(s)</span>
-              </div>
-            ) : (
-              <div className="text-[10px] text-slate-500 font-mono">Aguardando Sinal</div>
-            )}
+            {/* O chip de PnL flutuante saiu daqui: o número vivo mora no painel Hedge da boleta. */}
+            {/* A contagem de posições também migrou para a boleta (C/V por lado); aqui a janela
+                de Dados mostra só a leitura do sinal, e o ZERAR abaixo segue contando posições. */}
           </div>
         </Section>
 
@@ -421,7 +399,7 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
             />
             <CountRow
               label="Tijolos X"
-              hint="Quantidade de tijolos na tela (controle do eixo X). Cada dia guarda ~120-200 blocos: 250 ≈ 1 dia com folga; 600 ≈ 3 dias; 1200-2500 ≈ uma semana de estudo (combine com o zoom X no mínimo). Dica: arraste o gráfico para rolar o histórico; Shift+roda também rola"
+              hint="Quantidade de tijolos na tela (controle do eixo X). Cada dia guarda ~120-200 blocos: 250 ≈ 1 dia com folga; 600 ≈ 3 dias; 1200-2500 ≈ uma semana de estudo (combine com o zoom X no mínimo). Dica: arraste o gráfico para rolar o histórico e mover na vertical; Shift+roda também rola"
               value={visibleCount}
               min={14}
               max={3000}
@@ -471,21 +449,59 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
 
         {/* CAMADAS */}
         <Section title="Camadas" icon={Layers}>
-          <button
-            onClick={onToggleOrderLines}
-            className={`w-full flex items-center justify-between gap-2 h-[28px] px-2 rounded text-[11px] font-semibold transition-colors cursor-pointer border ${
-              showOrderLines
-                ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
-                : 'bg-slate-950/60 text-slate-500 border-slate-800/80 hover:text-slate-200'
-            }`}
-            title="Alternar visibilidade das linhas de ordens (entrada, reteste, SL, TP e parcial)"
-          >
-            <span className="flex items-center gap-1.5">
-              <Layers className="w-3 h-3 text-sky-400" />
-              Linhas de ordem
-            </span>
-            <span className="font-mono">{showOrderLines ? 'On' : 'Off'}</span>
-          </button>
+          <div className="space-y-1.5">
+            <button
+              onClick={onToggleOrderLines}
+              className={`w-full flex items-center justify-between gap-2 h-[28px] px-2 rounded text-[11px] font-semibold transition-colors cursor-pointer border ${
+                showOrderLines
+                  ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                  : 'bg-slate-950/60 text-slate-500 border-slate-800/80 hover:text-slate-200'
+              }`}
+              title="Alternar visibilidade das linhas de ordens (entrada, reteste, SL, TP e parcial)"
+            >
+              <span className="flex items-center gap-1.5">
+                <Layers className="w-3 h-3 text-sky-400" />
+                Linhas de ordem
+              </span>
+              <span className="font-mono">{showOrderLines ? 'On' : 'Off'}</span>
+            </button>
+
+            <button
+              onClick={onToggleSignalArrows}
+              className={`w-full flex items-center justify-between gap-2 h-[28px] px-2 rounded text-[11px] font-semibold transition-colors cursor-pointer border ${
+                showSignalArrows
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                  : 'bg-slate-950/60 text-slate-500 border-slate-800/80 hover:text-slate-200'
+              }`}
+              title="Exibir ou ocultar as setas ▲ de compra e ▼ de venda sobre os tijolos"
+            >
+              <span className="flex items-center gap-1.5">
+                <ArrowUp className="w-3 h-3 text-emerald-400" />
+                <ArrowDown className="w-3 h-3 -ml-2.5 text-rose-400" />
+                Setas de sinal
+              </span>
+              <span className="font-mono">{showSignalArrows ? 'On' : 'Off'}</span>
+            </button>
+
+            <div>
+              <p className="text-[9.5px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
+                Ordem em
+              </p>
+              <Segmented
+                options={[
+                  { value: 'points', label: 'Pontos', title: 'Valor ao vivo da posição em pontos' },
+                  { value: 'money', label: 'R$', title: 'Valor ao vivo da posição convertido em reais' },
+                ]}
+                current={orderValueMode}
+                onSelect={(v) => onOrderValueMode(v as 'points' | 'money')}
+              />
+            </div>
+
+            {/* Legenda das abreviaturas: o operador precisa decodificar a etiqueta curta. */}
+            <p className="text-[9px] leading-[1.35] text-slate-500 font-mono">
+              MÃE ordem · P1 pirâmide · RET reteste · PAR parcial · C/V compra-venda
+            </p>
+          </div>
         </Section>
 
         {/* DESENHO */}

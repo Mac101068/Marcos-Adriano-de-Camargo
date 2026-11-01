@@ -410,12 +410,13 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     │   └── pythonScriptGenerator.ts  # Gera o .py da ponte: AUTH/ARM/tetos + REQUEST_HISTORY (copy_ticks_range, 10 dias, fallback M1)
     └── components/
         ├── Header.tsx                # 3 zonas, **AssetSelector (WIN/WDO/BTC + folha de ensaio)**, selo MT5 (· ARMADO / · SEGURO), badge do EA, PDF
-        ├── StrategyStudio.tsx        # Aba Estúdio: biblioteca de estratégias, editor por blocos, ativar/duplicar/exportar
+        ├── StrategyStudio.tsx        # Aba Estúdio: biblioteca de estratégias, editor por blocos, ativar/duplicar/exportar, "Puxar da boleta"
         ├── RenkoFlowChart.tsx        # ≈3.0k linhas de canvas: séries, 2 divisores arrastáveis, níveis de preço + VWAP, zoom multidia, linhas de ordens, desenho
         ├── ChartControlSidebar.tsx   # Controles de série, escala, preset de janela e reset
         ├── DadosPanelWindow.tsx      # Janela flutuante arrastável que hospeda o painel de dados
         ├── RenkoBoxCard.tsx          # Quadro do box (fixo no canto, HUD mobile e variante `window`)
-        ├── BoletaTicket.tsx          # Boleta de ordem rápida: caixa recolhível, COMPRA/VENDA/ZERAR, sempre visível (desktop e mobile)
+        ├── BoletaTicket.tsx          # Boleta-base: 6 steppers editáveis (C/Stop/Alvo/Parcial/BE/Trailing), livro de hedge,
+        │                             #   ZERAR C/V lado a lado + ZERAR TUDO; caixa recolhível sempre visível
         ├── DrawingOverlay.tsx / DrawingToolbar.tsx # Camada e barra de rabiscos técnicos sobre o gráfico
         ├── TimesAndTrades.tsx        # Fita de negócios ao vivo
         ├── AutomationPanel.tsx       # Ajustes: blocos por estratégia, proteção da mãe, limites da ponte, perfis
@@ -438,6 +439,14 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ## 🆕 9. Resumo dos últimos ciclos
 
 > Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+### Boleta-base + hedge (31/10 → 01/11/2026) — seções 8.9–8.13 do diário
+
+- ✅ **Livro de hedge na boleta** (`hedgeBook` no App → ponte RenkoFlowChart → BoletaTicket): contratos por lado, preço médio, flutuante, Ganhos/Perdas/PnL do dia e giro "Compra hoje/Venda hoje/Total dia". Chips equivalentes **removidos** das linhas de menu (tira do topo, barra do gráfico, lateral).
+- ✅ **Boleta = base editável**: seis steppers `[− input +]` (Contratos, Stop, Alvo, Parcial, Break even, Trailing) persistidos por `handleBoletaConfigPatch`; editores concorrentes eliminados do AutomationPanel (TP/BE viraram somente-leitura com ponteiro).
+- ✅ **Hedge manual**: a entrada manual na Pirâmide não zera mais o oposto; **ZERAR C/ZERAR V** lado a lado abaixo de COMPRA/VENDA e **ZERAR TUDO** ao final; ponte Python aceita `side='BUY'/'SELL'` em `close_all_positions`.
+- ✅ **Estúdio de Estratégias lê a boleta**: botão **"Puxar da boleta"** copia os seis valores-base (+ `enablePartialExit`) para o rascunho; "Nova do config atual" já parte do config vivo.
+- ✅ Verificado por tsc + build + browser: persistência Stop=110/Parcial=55 pós-reload e pós-localStorage; ZERAR TUDO fechou C+V juntos; "Puxar da boleta" reverteu 999/777 para os valores da boleta; console limpo. Achados honestos: stepper coalesce cliques do mesmo tick; Pin não sobrevive a reload; modo Pirâmide não renderiza SL/TP/Parcial no rascunho.
 
 ### Ciclo 8 (31/10/2026) — Estúdio, níveis do pregão, Registro de Ativo (Fases 1–2) e aviso central
 
@@ -496,12 +505,14 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 - Layout de alta resolução formatado com `@media print` para salvar como PDF A4 com diagramas, tabelas de parâmetros, fórmulas do Renko 10R e do Heikin-Ashi tricolor, manual de risco e árvore completa de arquivos.
 - Criação do arquivo `PROJECT_CONSOLIDATION_CHAT_SEED.md` com o prompt pronto para cópia e inicialização em qualquer nova conversa.
 
-### D. Boleta — Caixa de Ordem Rápida Recolhível no Topo do Gráfico (`src/components/BoletaTicket.tsx`)
-- **Aprimoramento**: a boleta deixou de existir em duas cópias que se anulavam (barra grande sobre o gráfico com `lg:hidden` + seção "Ordem rápida" da barra lateral com `hidden lg:flex`, que sumia conforme o zoom da janela) e passou a ser **uma caixa única**, presente no desktop e no mobile.
-- **Recolhimento automático**: abre expandida, recolhe sozinha após ~9s virando um chip discreto (`Boleta · preço · nº de abertas`). A auto-recolha **não** dispara enquanto o mouse está sobre a caixa, e o botão de alfinete fixa a boleta aberta. O estado aberto/fechado fica em `fluxo_boleta_open_v1`.
-- **Dados básicos dentro da caixa**: preço atual (com as casas do ativo), contratos, Stop e Alvo em pontos **e** em preço (no modo Pirâmide mostra `Surfe (sem fixo)` em vez de inventar número), risco em R$ da operação e posições abertas com PnL flutuante em pontos.
-- **Ações**: **COMPRA** / **VENDA** a mercado e **ZERAR (n)** quando existe posição aberta. Selo `MT5` × `SIM` no cabeçalho, para o operador saber se aquele clique vai ou não à corretora.
-- **Posicionamento**: `absolute top-2` com o `right` vindo do prop `rightOffset` — 96px no desktop e 62px abaixo de 640px, calculado pela largura real do canvas, para nunca cobrir a régua de preços do eixo Y (64px desktop / 46px mobile).
+### D. Boleta — Base Editável das Estratégias + Livro de Hedge (`src/components/BoletaTicket.tsx`)
+- **Origem**: a ordem rápida existia em duas cópias que se anulavam (barra `lg:hidden` sobre o gráfico + seção da lateral `hidden lg:flex`) e virou **uma caixa única** sobre o canvas, presente no desktop e no mobile, com recolhimento automático (~9s → chip; timer pausado com mouse em cima ou alfinete fixado; estado em `fluxo_boleta_open_v1`).
+- **A boleta é a BASE das estratégias** — seis linhas editáveis no padrão de mercado `[− input +]` (`StepperRow`, setinhas nativas mortas): **Contratos** (1–99), **Stop** (0–1000, passo 5), **Alvo** (0–2000, passo 5), **Parcial** (5–1000, passo 5), **Break even** (0–50, passo 1) e **Trailing** (0–300, passo 5). Cada tecla persiste via `handleBoletaConfigPatch` no App → `fluxo_renko_ea_config_v3`; Robô, script Python e Estúdio buscam estes valores. Os editores concorrentes do AutomationPanel (slider do TP, pisos de breakeven) viraram somente-leitura com ponteiro "edite na Boleta do gráfico".
+- **Livro de hedge sempre visível** abaixo das ações: por lado `C`/`V` com contratos, preço médio ponderado e R$ flutuante (tom segue o resultado, não o lado) + Ganhos/Perdas/PnL do dia (realizado da sessão + flutuante + parciais) + rodapé de giro "Compra hoje / Venda hoje / Total dia" (contratos que viraram posição, persiste após zerar).
+- **Ações**: **COMPRA** / **VENDA** a mercado; abaixo deles **ZERAR C** e **ZERAR V** lado a lado (`grid-cols-2`, cada um fecha só o seu lado via ponte com `type: 'BUY'|'SELL'`); ao final da caixa, **ZERAR TUDO** (âmbar) fecha os dois lados. Entrada manual na Pirâmide **não zera mais o lado oposto** — hedge manual convive; o robô continua obedecendo `hedgeOppositeAction`. Selo `MT5` × `SIM` no cabeçalho.
+- **Estúdio de Estratégias lê a boleta**: "Nova do config atual" parte do config vivo e o botão **"Puxar da boleta"** copia os seis valores-base (+ `enablePartialExit`) para o rascunho — fluxo de caça aos melhores parâmetros do EA.
+- **Posicionamento**: `absolute` colada na grade de preços (recuo = largura real da régua, 46px mobile / 64px desktop, calculado pelo canvas — nunca breakpoint cego); o vão de 5px (`BOLETA_GAP`) é do desenho do canvas.
+- **Limpeza das linhas de menu**: chips de PnL / abertas / "Pos Ativa(s)" da tira do topo, da barra do gráfico e da lateral foram **removidos** — os dados moram na boleta.
 
 ### E. Estratégia Quantitativa: Pirâmide & Confluência de Fluxo Renko 10R (TP 50p + Surfe até Inversão)
 - **Conceito & Racional Quantitativo**:
@@ -561,15 +572,19 @@ Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto
 ```
 
 ### Pendências conhecidas (para não redescobrir)
+- 📍 **Onde estamos (01/11/2026)**: boleta = base editável das estratégias (6 steppers), livro de hedge com
+  ZERAR C/V + ZERAR TUDO, Estúdio com "Puxar da boleta" — tudo verificado (diário §8.9–8.13). Próximo passo
+  recomendado: **validação na conta demo XP**, resolvendo antes o item 🔎 abaixo; e alinhar a boleta-base
+  (Pirâmide usa `pyramidTpPoints`, não o Alvo da boleta; gatilho do trailing ainda não é linha na boleta).
 - 🔎 **Simulador "sempre rodando": diagnóstico pronto, decisão pendente** (detalhes linha a linha em
   `EVOLUCOES_DETALHADAS.md` → Pendências, 31/10): a guarda do loop funciona (CONNECTED não vaza tick
   sintético), mas `isSimulating` nasce `true` sem persistência, o boot-replay dispara na abertura sem
   olhar a ponte, o mount effect semeia 350 ticks, `generateNextTick()` não tem portão de pregão e —
   buraco real — `socket.onclose` nunca religa o feed (queda da ponte = tela congelada). Corrigir na
   validação da conta demo, com o operador decidindo cada comportamento.
-- 🎨 **Fase REFINO VISUAL iniciada** (31/10): pente-fino no aspecto das telas mantendo as regras fixas
-  (chrome neutro, cor só no acento, aviso central, controle sem breakpoint). Primeiro item: Boleta
-  (`BoletaTicket.tsx`, Ciclo 8.8).
+- 🎨 **Fase REFINO VISUAL em andamento** (desde 31/10): pente-fino no aspecto das telas mantendo as regras fixas
+  (chrome neutro, cor só no acento, aviso central, controle sem breakpoint). Entregues: Boleta com livro de
+  hedge e base editável (`BoletaTicket.tsx`, Ciclo 8.8–8.13).
 - 🧪 **Homologar WDO e BTC**: me traga `pointValue` (R$/ponto), `tickSize`, `decimals`, `primarySymbol` no MT5 da XP, horário de pregão e a profundidade de histórico da conta demo. Trocar `status: 'a_confirmar'` → `'ativo'` no `assetRegistry.ts` destrava o seletor sozinho.
 - 🧪 **Fases seguintes do registro**: F3 = travas de horário por ativo (leilão, ajuste, fix das 13:00 do WDO, gap de fim de semana do BTC); F4 = ponte Python definitiva e dossiê PDF sem o texto fixo "Mini-Índice B3"; F5 = VTC (PTAX + FRP0) morando no WDO.
 - 🧪 **Conferir o histórico real no Windows**: rodar o script novo, pedir 1 dia de replay conectado e ver se o chip sai `HISTÓRICO REAL (MT5)` com volume `TICK` ou `M1_RATE`.

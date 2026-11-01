@@ -913,12 +913,18 @@ class MT5OrderManager:
             return True
         return False
 
-    def close_all_positions(self):
-        """Encerra todas as posições abertas a mercado"""
+    def close_all_positions(self, side=None):
+        """Encerra posições abertas a mercado. side='BUY'/'SELL' zera só aquele lado (hedge);
+        qualquer outro valor (incluindo 'ALL') encerra tudo, como antes."""
         positions = mt5.positions_get(symbol=self.symbol)
         if not positions:
             return True
+        side_type = {"BUY": mt5.ORDER_TYPE_BUY, "SELL": mt5.ORDER_TYPE_SELL}.get(side)
+        closed_n = 0
         for pos in positions:
+            if side_type is not None and pos.type != side_type:
+                continue
+            closed_n += 1
             close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
             tick = mt5.symbol_info_tick(self.symbol)
             price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
@@ -936,7 +942,8 @@ class MT5OrderManager:
                 "type_filling": self.get_filling_mode(),
             }
             mt5.order_send(req)
-        print("🛑 Todas as posições zeradas a mercado.")
+        alvo = f"lado {side}" if side_type is not None else "TODAS as posições"
+        print(f"🛑 {alvo} zeradas a mercado ({closed_n} posição(ões)).")
         return True
 
 
@@ -1077,7 +1084,7 @@ async def ws_handler(websocket):
                 elif action == "ORDER_MODIFY_SL":
                     ORDER_MANAGER.modify_stop_loss(data.get("ticket"), data.get("newSL"))
                 elif action == "CLOSE_POSITIONS":
-                    ORDER_MANAGER.close_all_positions()
+                    ORDER_MANAGER.close_all_positions(data.get("type"))
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:

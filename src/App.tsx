@@ -26,6 +26,7 @@ import {
   type VolumeSource,
 } from './services/marketHistoryService';
 import { computeSessionLevels, computeRunningVwap, PriceLevel, VwapCurve } from './utils/priceLevels';
+import type { HedgeBook, HedgeSideBook } from './components/BoletaTicket';
 import { getBridgeToken } from './utils/bridgeSecurity';
 import { seriesCollectorService } from './services/seriesCollectorService';
 import type { SessionRegimeMeter } from './utils/sessionRegime';
@@ -1905,6 +1906,17 @@ export default function App() {
     }
   }, [config.active, mt5State.status]);
 
+  // A boleta é a BASE das estratégias: editar Alvo/Breakeven escreve no config do EA (persistido),
+  // os mesmos campos que Robô, script Python e gestão de saídas já leem. Os editores que viviam
+  // nos painéis de parâmetros foram eliminados — fonte única de verdade.
+  const handleBoletaConfigPatch = (patch: Partial<AutomationConfig>) => {
+    setConfig((prev) => {
+      const updated = { ...prev, ...patch, lastSavedTimestamp: Date.now() };
+      EaConfigService.saveConfig(updated);
+      return updated;
+    });
+  };
+
   // Envio manual de ordem (boleta rápida da tela) com suporte à Pirâmide & Confluência
   const handleManualOrder = (type: 'BUY' | 'SELL') => {
     const entryPrice = currentPrice;
@@ -1913,12 +1925,10 @@ export default function App() {
     // Se estiver no modo Pirâmide & Confluência
     if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
       const activeSameDir = orders.filter((o) => o.status === 'OPEN' && o.type === type);
-      const activeOppDir = orders.filter((o) => o.status === 'OPEN' && o.type !== type);
 
-      // Inversão se houver posições opostas: encerra tudo
-      if (activeOppDir.length > 0) {
-        handleClosePositions();
-      }
+      // Hedge: a entrada manual NÃO zera mais o lado oposto. Compras e vendas convivem no livro
+      // (cada perna com seu papel mãe/pirâmide); a forma de zerar essas ordens será definida a
+      // seguir — por enquanto os botões por lado da boleta e o ZERAR geral decidem o destino.
 
       const hasMother = activeSameDir.some((o) => o.role === 'MAIN');
       const role: 'MAIN' | 'PYRAMID' = hasMother ? 'PYRAMID' : 'MAIN';
@@ -2138,18 +2148,26 @@ export default function App() {
     });
   }, [currentPrice, config]);
 
-  // Zerar posições abertas
-  const handleClosePositions = () => {
+  // Zerar posições abertas. COM LADO é o início do hedge: 'BUY' zera só compras, 'SELL' só
+  // vendas. SEM LADO zera tudo — é o uso interno de sempre (inversão da estratégia e trava do
+  // simulador), e a ponte MT5 recebe o mesmo comando com type 'ALL' (o script filtra por lado
+  // quando vem BUY/SELL).
+  const handleClosePositions = (side?: 'BUY' | 'SELL') => {
+    const targets = orders.filter((o) => o.status === 'OPEN' && (!side || o.type === side));
+    if (targets.length === 0) return;
     setOrders((prev) =>
       prev.map((o) => {
         if (o.status !== 'OPEN') return o;
+        if (side && o.type !== side) return o;
         const activeCtros = o.remainingContracts || o.contracts;
         const pts = o.type === 'BUY' ? currentPrice - o.entryPrice : o.entryPrice - currentPrice;
         const fin = pointsToBRL(pts, activeCtros, asset) + (o.partialFinancial || 0);
 
         const closeEvt = OrderAuditService.createEvent(
           'MANUAL_CLOSED',
-          'Encerramento Manual Compulsório',
+          side
+            ? `Encerramento Manual ${side === 'BUY' ? 'COMPRAS' : 'VENDAS'}`
+            : 'Encerramento Manual Compulsório',
           `Posição zerada a mercado a ${currentPrice} pts. Resultado obtido: ${pts > 0 ? '+' : ''}${pts} pts (R$ ${fin.toFixed(2)}).`,
           currentPrice,
           activeCtros
@@ -2170,14 +2188,14 @@ export default function App() {
     );
 
     if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS' }));
+      wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', type: side || 'ALL' }));
     }
 
     setLatestToast({
       id: `close-${Date.now()}`,
-      type: 'SELL',
-      title: 'POSIÇÕES ZERADAS',
-      description: 'Todas as operações abertas foram encerradas a mercado e registradas na auditoria.',
+      type: side === 'BUY' ? 'BUY' : 'SELL',
+      title: side ? (side === 'BUY' ? 'COMPRAS ZERADAS' : 'VENDAS ZERADAS') : 'POSIÇÕES ZERADAS',
+      description: `${targets.length} posição(ões) ${side ? (side === 'BUY' ? 'de compra' : 'de venda') : 'aberta(s)'} encerrada(s) a mercado e registrada(s) na auditoria.`,
       timestamp: Date.now(),
     });
   };
@@ -2873,6 +2891,66 @@ export default function App() {
     };
   }, [orders, boxes]);
 
+  // Livro do hedge para a boleta (a fonte única é o App — dono das ordens): contratos e preço
+  // médio por lado, flutuante de cada lado, realizado da sessão (ganhos/perdas) e PnL do dia.
+  // Migração dos chips que viviam nas linhas de menu; os pontos flutuantes seguem a mesma
+  // convenção do antigo chip do gráfico (soma dos pontos por ordem, sem ponderar contratos).
+  const hedgeBook: HedgeBook = React.useMemo(() => {
+    const sideBook = (type: 'BUY' | 'SELL'): HedgeSideBook => {
+      const filled = orders.filter((o) => o.status === 'OPEN' && o.type === type);
+      const pending = orders.filter((o) => o.status === 'PENDING_LIMIT' && o.type === type).length;
+      let ctros = 0;
+      let avgNum = 0;
+      let livePts = 0;
+      let liveBRL = 0;
+      let partialBRL = 0;
+      filled.forEach((o) => {
+        const rc = o.remainingContracts ?? o.contracts ?? 1;
+        ctros += rc;
+        avgNum += o.entryPrice * rc;
+        const pts = type === 'BUY' ? currentPrice - o.entryPrice : o.entryPrice - currentPrice;
+        livePts += pts;
+        liveBRL += pointsToBRL(pts, rc, asset);
+        partialBRL += o.partialFinancial || 0;
+      });
+      return {
+        orders: filled.length + pending,
+        filled: filled.length,
+        pending,
+        contracts: ctros,
+        avgEntry: ctros > 0 ? avgNum / ctros : 0,
+        livePts,
+        liveBRL,
+        partialBRL,
+      };
+    };
+    const closed = orders.filter(
+      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
+    );
+    const realizedProfit = closed.reduce((a, o) => a + Math.max(0, o.financialResult || 0), 0);
+    const realizedLoss = closed.reduce((a, o) => a + Math.min(0, o.financialResult || 0), 0);
+    const buy = sideBook('BUY');
+    const sell = sideBook('SELL');
+    // Giro do dia por lado: contratos NEGOCIADOS nesta sessão (ordens que viraram posição,
+    // abertas ou fechadas); limites ainda paradas não contam como negócio.
+    const traded = orders.filter((o) => o.status !== 'PENDING_LIMIT' && o.timestamp >= sessionStartRef.current);
+    const buyContractsToday = traded.filter((o) => o.type === 'BUY').reduce((a, o) => a + (o.contracts || 1), 0);
+    const sellContractsToday = traded.filter((o) => o.type === 'SELL').reduce((a, o) => a + (o.contracts || 1), 0);
+    // PnL do dia = realizado (fechados desta abertura) + flutuante dos dois lados + parciais já
+    // realizadas dentro de ordens ainda abertas.
+    const dayPnl = realizedProfit + realizedLoss + buy.liveBRL + buy.partialBRL + sell.liveBRL + sell.partialBRL;
+    return {
+      buy,
+      sell,
+      realizedProfit,
+      realizedLoss,
+      dayPnl,
+      buyContractsToday,
+      sellContractsToday,
+      contractsTodayTotal: buyContractsToday + sellContractsToday,
+    };
+  }, [orders, currentPrice, asset]);
+
   /**
    * Envio de ENTRADA à ponte, idempotente por tick: o updater de setOrders pode ser
    * reinvocado pelo React para o mesmo tick, e cada tick só pode gerar uma ordem real.
@@ -2934,12 +3012,13 @@ export default function App() {
     return () => clearInterval(id);
   }, [asset]);
 
-  // Auto-dismiss toast
+  // Auto-dismiss toast: 2,4s. O aviso dura o suficiente para registrar o disparo e sai antes
+  // de virar propaganda na frente do gráfico.
   useEffect(() => {
     if (!latestToast) return;
     const t = setTimeout(() => {
       setLatestToast(null);
-    }, 4500);
+    }, 2400);
     return () => clearTimeout(t);
   }, [latestToast]);
 
@@ -3262,27 +3341,8 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
             <span className="text-slate-600">·</span>
             <span className="font-mono text-slate-400">{replaySeed === null ? 'SEED AUTO' : `#${replaySeed}`}</span>
           </button>
-          {openOrders.length > 0 && (
-            <div className="flex items-center gap-1.5 text-neutral-400 bg-neutral-500/10 px-2 py-0.5 rounded border border-neutral-500/30 text-[10px] sm:text-xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 animate-pulse" />
-              <span>
-                {openOrders.length === 1
-                  ? `${openOrders[0].type} ${openOrders[0].contracts}x @ ${openOrders[0].entryPrice}`
-                  : `${openOrders.length} Pos`}
-              </span>
-            </div>
-          )}
-
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0" title="PnL apenas das ordens fechadas NESTA abertura da página — o replay zera isso de propósito, pois começa um pregão limpo. O histórico completo fica no livro de Auditoria.">
-            <span className="text-slate-400 text-[10px] sm:text-xs">PnL:</span>
-            <span
-              className={`font-bold ${
-                stats.netFinancial >= 0 ? 'text-emerald-400' : 'text-rose-400'
-              }`}
-            >
-              R$ {stats.netFinancial.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </span>
-          </div>
+          {/* Posições abertas e PnL da sessão saíram daqui: migraram para o painel Hedge da boleta,
+              abaixo dos botões COMPRA/VENDA (contratos por lado, flutuante, ganhos, perdas, PnL do dia). */}
         </div>
       </div>
 
@@ -3319,12 +3379,22 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                   currentBox={chartSeries === 'renko' ? currentBox : chartSeries === 'range' ? rangeCurrentBox : timeCurrentBox}
                   currentPrice={currentPrice}
                   openOrders={openOrders}
+                  hedgeBook={hedgeBook}
                   minDeltaThreshold={config.minDeltaThreshold}
                   onManualOrder={handleManualOrder}
                   onClosePositions={handleClosePositions}
+                  onClosePositionsSide={handleClosePositions}
                   contracts={config.contracts}
                   stopLossPoints={config.stopLossPoints}
                   takeProfitPoints={config.takeProfitPoints}
+                  breakevenOffsetPoints={config.breakevenOffsetPoints}
+                  trailingDistancePoints={config.trailingDistancePoints}
+                  onTakeProfitChange={(v) => handleBoletaConfigPatch({ takeProfitPoints: v })}
+                  onStopLossPointsChange={(v) => handleBoletaConfigPatch({ stopLossPoints: v })}
+                  onPartialPointsChange={(v) => handleBoletaConfigPatch({ partialPoints: v })}
+                  onBreakevenChange={(v) => handleBoletaConfigPatch({ breakevenOffsetPoints: v })}
+                  onTrailingChange={(v) => handleBoletaConfigPatch({ trailingDistancePoints: v })}
+                  onContractsChange={(v) => handleBoletaConfigPatch({ contracts: v })}
                   isRealMT5Connected={mt5State.status === 'CONNECTED'}
                   strategyMode={config.strategyMode}
                   enablePartialExit={config.enablePartialExit}
@@ -3752,13 +3822,26 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
         config={config}
       />
 
-      {/* Toast Flutuante de Disparo de Ordem / Conexão — abre no CENTRO da tela. O palco é
-          inset-0 com pointer-events-none (o gráfico continua clicável atrás do aviso); só o cartão
-          recebe eventos. Some sozinho em 4,5s ou no ✕. */}
+      {/* Toast flutuante de Disparo de Ordem / Conexão — centrado no QUADRO DE DESENHO do
+          gráfico (variáveis --fluxo-chart-left/--fluxo-chart-width publicadas pelo canvas como
+          rect.left × lineRight): o MESMO centro do punho do divisor, nunca o da tela (que com a
+          lateral docked deslocaria o aviso) nem o do canvas inteiro (que embute a reserva da
+          boleta e a régua e empurraria o aviso para a faixa da boleta). Base a 14px ACIMA da
+          linha divisória (--fluxo-divider-y), acompanhando o arrasto do divisor; os fallbacks
+          valem só antes do primeiro desenho. Some sozinho em 2,4s ou no ✕. O palco é
+          pointer-events-none (o gráfico continua clicável); só o cartão recebe eventos. */}
       {latestToast && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
-          <div className="flow-toast pointer-events-auto w-full max-w-sm bg-slate-900/95 border border-slate-700 rounded-lg px-3 py-2.5 shadow-2xl shadow-black/50 backdrop-blur-sm">
-            <div className="flex items-start gap-2">
+        <div
+          className="fixed z-50 flex justify-center pointer-events-none"
+          style={{
+            left: 'var(--fluxo-chart-left, 0px)',
+            width: 'var(--fluxo-chart-width, 100vw)',
+            top: 'calc(max(84px, var(--fluxo-divider-y, 46vh)) - 14px)',
+            transform: 'translateY(-100%)',
+          }}
+        >
+          <div className="flow-toast pointer-events-auto w-[min(92vw,320px)] bg-slate-900/95 border border-slate-700 rounded-md px-2.5 py-1.5 shadow-xl shadow-black/50 backdrop-blur-sm">
+            <div className="flex items-start gap-1.5">
               <span
                 className={`shrink-0 mt-[1px] ${
                   latestToast.type === 'BUY'
@@ -3769,19 +3852,19 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                 }`}
               >
                 {latestToast.type === 'BUY' ? (
-                  <ArrowUpRight className="w-3.5 h-3.5" />
+                  <ArrowUpRight className="w-3 h-3" />
                 ) : latestToast.type === 'INFO' ? (
-                  <Activity className="w-3.5 h-3.5" />
+                  <Activity className="w-3 h-3" />
                 ) : (
-                  <ArrowDownRight className="w-3.5 h-3.5" />
+                  <ArrowDownRight className="w-3 h-3" />
                 )}
               </span>
               <div className="flex-1 min-w-0">
-                <span className="block text-[11px] font-semibold text-slate-200 leading-snug font-mono">
+                <span className="block text-[10px] font-semibold text-slate-200 leading-snug font-mono">
                   {latestToast.title}
                 </span>
                 {latestToast.description && (
-                  <span className="block text-[11px] text-slate-400 leading-snug mt-0.5">
+                  <span className="block text-[9.5px] text-slate-400 leading-snug mt-0.5">
                     {latestToast.description}
                   </span>
                 )}
@@ -3790,7 +3873,7 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                 <Clock className="w-2.5 h-2.5" />
                 {mt5State.status === 'CONNECTED' ? 'MT5' : 'SIM'}
               </span>
-              {/* No centro o aviso cobre o gráfico: dar um jeito de fechá-lo na hora é obrigatório */}
+              {/* O aviso mora em cima do gráfico mesmo: fechar na hora tem de ser um toque. */}
               <button
                 onClick={() => setLatestToast(null)}
                 className="shrink-0 -mr-1 -mt-0.5 px-1 text-[11px] leading-none text-slate-500 hover:text-slate-200 cursor-pointer"
