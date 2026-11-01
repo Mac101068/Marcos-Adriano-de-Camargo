@@ -8,6 +8,162 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 9 — 01/11/2026 · Refino visual: boleta em camadas, os dois códigos do ativo e marca d'água
+
+Ciclo inteiramente da fase **REFINO VISUAL**: nenhuma regra de estratégia mudou. A boleta ganhou
+hierarquia (título dourado, engrenagem dos ajustes colada na própria linha e sub-caixa **Parâmetros**
+recolhível), o cabeçalho parou de ler como "nome duplicado" — série contínua e contrato vigente agora
+aparecem como **dois códigos rotulados pelo papel de cada um** —, o gráfico passou a poder **assinar o
+ativo** com uma marca d'água atrás dos tijolos (anexo opcional do operador) e as três faixas empilhadas
+no topo (cabeçalho, tira de métricas, barra do gráfico) foram apertadas em duas rodadas para devolver
+altura ao pregão.
+
+### 9.1 ✅ Boleta dourada, engrenagem na linha da boleta e título do painel menor
+
+**Pedido do operador.** "altere o titulo da boleta para dourado e ao lado do icone notificacoes cole a
+engrenagem localizada no canto inferior direito, diminua a fonte do nome do painel, Flow Quant MT5" e,
+na sequência, "na mesma linha da boleta, tem um sim que pode ser retirado".
+
+**Causa raiz.** O ⚙ vivia solto no canto inferior direito do canvas, dentro da área do gráfico — além de
+competir com os tijolos, contrariava a regra fixa do projeto ("nenhum quadro de informação no canto
+inferior direito").
+
+**O que foi implementado.**
+- `BoletaTicket.tsx`: o título `Boleta` saiu de `text-zinc-500` e passou a **`text-amber-400`**, tanto na
+  caixa expandida quanto no chip recolhido (âmbar = única cor do acento, chrome continua neutro).
+- Novo par de props `chartToolsOpen` / `onToggleChartTools`. **O estado mora no `RenkoFlowChart`** (é ele
+  quem abre o painel de exibição); a boleta só aperta o interruptor. Um dono só — não há como os dois
+  lados da tela dessincronizarem.
+- O botão ⚙ migrou do canto do gráfico para a **linha da boleta**, entre o título e o sininho de fixar.
+  A leitura da linha passou a ser `Boleta · ⚙ · 📌 · ⌄`. O `Settings` foi removido do `RenkoFlowChart`
+  (só o painel continua abrindo no canto inferior direito).
+- **Recolhida, a engrenagem acompanha o chip** (`gearBtn`, 26×26, mesmo chrome translúcido do chip):
+  controle primário do operador não pode ficar preso atrás do recolhimento automático de ~9s.
+- **Selo `SIM`/`MT5` retirado da linha da boleta** por pedido explícito (a faixa ficou apertada com a
+  engrenagem). O estado da ponte continua visível no botão de conexão do cabeçalho e nos `title` dos
+  botões COMPRA/VENDA — o clique nunca fica ambíguo sobre ir ou não à corretora.
+- Título do painel `Flow Quant MT5` reduzido de `text-sm sm:text-base` para **`text-xs sm:text-sm`**.
+- Rodapé de ajuda do gráfico reescrito: "Ajustes no ⚙ da linha da Boleta (o painel abre no canto
+  inferior direito) · arraste o gráfico para mover · réguas dão zoom Y/Fluxo · duplo clique auto-escala".
+
+### 9.2 ✅ Sub-caixa "Parâmetros" dentro da boleta
+
+**Pedido do operador.** "todos os dados iniciais viram uma caixa que podera ser expandida e recolhida,
+igual a boleta; na linha do preco, que ja esta bem visivel na escala, vira o titulo desta caixa, que sera
+`parametros` na cor branca, dentro desta caixa todos os dados antes dos botoes".
+
+**O que foi implementado.**
+- Envoltório `border-b border-zinc-800/80` com botão de cabeçalho em largura total: **`Parâmetros`** em
+  `text-[9px] font-sans font-bold uppercase tracking-wider text-white` + chevron rotativo e
+  `aria-expanded` (leitor de tela também enxerga o estado).
+- Corpo `px-2 pb-1.5 space-y-0.5 font-mono` com os **seis steppers** da base (Contratos, Stop, Alvo,
+  Parcial, Break even, Trailing) + a linha condicional de Risco em R$. Os botões de ação (COMPRA/VENDA,
+  ZERAR C/V, livro de hedge, ZERAR TUDO) ficam **fora** da sub-caixa e continuam visíveis com ela fechada.
+- **A linha `Preço` foi removida** da boleta: o preço já vive na escala do eixo Y e no chip recolhido —
+  duplicá-lo dentro da caixa foi o que virou o próprio título da sub-caixa no pedido.
+- Preferência persistida em **`fluxo_boleta_params_open_v1`**, lida com padrão "aberta" na primeira vez
+  (`raw === null ? true : raw === 'true'`) e escrita dentro de `try/catch`.
+- **Estado local, deliberadamente não controlado**: recolher Parâmetros muda só a **altura** da caixa; a
+  **largura** — e portanto o recuo que o canvas reserva para ela (`BOLETA_GAP`) — não muda, então nada no
+  gráfico precisa saber. É o oposto de `open` (boleta expandida/recolhida), que segue controlado pelo
+  `RenkoFlowChart` justamente porque altera o desenho.
+
+### 9.3 ✅ Série contínua × contrato vigente: os dois códigos desmembrados
+
+**Causa raiz.** O chip do seletor empilhava `asset.id` (`WIN`) sobre `asset.primarySymbol` (`WIN$N`) e a
+aba de baixo mostrava mais `WIN$N` de novo; na tira de status, um `Ativo: WIN$N` solto. A leitura do
+operador foi literalmente "ficou estranho a duplo nome". Não era nome duplicado: são **dois papéis
+diferentes que o WIN tem** — a **série contínua** (`WIN$N`, que emenda vencimentos e é a que presta para
+**teste longo**: replay de dias, coletor de eficiência) e o **contrato vigente** (`WINZ26`, o papel do
+pregão de hoje, que é o que a corretora mostra na conta e o que o gráfico abre quando se opera o real).
+
+**O que foi implementado** — a taxonomia nasceu no **registro**, para que cabeçalho e tira de status
+bebam da mesma fonte (se discordassem, a tela mostraria um símbolo e desenharia outro):
+- `AssetSpec` ganhou `activeContract?: string` e `watermarkCaption: string`, e `primarySymbol` passou a
+  estar **documentado como a série contínua** (padrão do config). WIN = `WINZ26` (vencimento informado pelo
+  operador, o mesmo do `basePrice` 171.500). **WDO e BTC ficaram sem `activeContract` de propósito**:
+  o spec é `a_confirmar` e inventar código de vencimento levaria o operador a assinar um papel que não
+  existe na corretora — a tela diz "venc. a confirmar".
+- `SymbolRole = 'serie' | 'vigente' | 'outro'` + `symbolRole(asset, symbol)` + `SYMBOL_ROLE_LABEL`
+  (`série` / `vigente` / `venc.`). Qualquer código com `$` é lido como série; o resto é vencimento digitado.
+- `assetSymbols(asset, configSymbol)` devolve `{ live, liveRole, series, active, tokens, others }`:
+  `live` é o que a ponte subscreve de verdade (**o config manda**, com fallback na contínua); `tokens`
+  monta a linha completa **sem nunca repetir um símbolo**; se o config estiver num código que não é nem
+  a série nem o vigente, ele entra na frente, marcado como vivo.
+- `Header.tsx`: novo `SymbolChip` (código em mono 9px + o papel em 7px maiúsculo ao lado, palavra
+  escondida abaixo de `sm`) e a ficha do ativo virou **uma linha só**: ícone, `WIN` em 10px, separador,
+  as fichas rotuladas, o aviso âmbar quando falta vencimento e o ponto de status. O `title` multilinha
+  explica os dois papéis e diz qual está aberto. O dropdown ganhou a legenda "Série contínua (`$N`) =
+  testes longos · Vigente = papel do pregão de hoje" e a linha por ativo `WIN$N série · WINZ26 vigente`.
+- `App.tsx`: memo `assetSyms` (única fonte compartilhada com o Header via `liveSymbol`) e o rótulo
+  `Ativo:` virou **`Gráfico:`** com o código vivo + papel + o outro caminho do mesmo ativo
+  (`· WINZ26 vigente`).
+
+### 9.4 ✅ Marca d'água do ativo no painel de preço (anexo opcional)
+
+**Pedido.** "criar uma marca d'agua de cada ativo que possa ser anexada ou nao, vai da preferencia do
+operador" e, na rodada seguinte, "a marca d'agua poderia ser mais visivel".
+
+- Bloco desenhado dentro de `draw()` **logo após o fundo `#09090b` e antes de grade e tijolos**, dentro
+  de `ctx.save(); beginPath(); rect(0, 0, plotRight, pricePaneHeight); clip(); … ctx.restore()`. Duas
+  consequências: a marca fica **atrás de tudo** e **nunca sangra** para a régua de preços nem para o vão
+  que a boleta ocupa.
+- Três linhas: a **sigla do ativo** (`asset.id`, peso 700, corpo proporcional ao painel com piso e teto
+  `max(38, min(140, pricePaneHeight * 0.34, plotRight * 0.2))` — em monitor grande não vira anúncio, em
+  janela miúda não some), o **produto** (`watermarkCaption` em maiúsculas) e os **dois códigos** que
+  definem o gráfico (`WIN$N série · WINZ26 vigente`).
+- **Alfa 0.13 / 0.11 / 0.10** de branco sobre `#09090b` (≈ +31 por canal na sigla; era 0.05/0.045/0.045
+  na primeira rodada): lê de primeira e ainda assim fica atrás dos tijolos. Decisão de projeto registrada
+  abaixo — a marca é **contexto, nunca legenda**.
+- Interruptor no painel da engrenagem (`Marca d'água: WIN anexada` / `desanexada`, chrome neutro),
+  persistido em **`fluxo_renko_asset_watermark_v1`** com padrão ligado (`getItem(KEY) !== '0'`);
+  `assetWatermark` entrou no array de dependências do redesenho, então ligar/desligar repinta na hora.
+- Spec sem vencimento declarado **não assina "vigente"**: a linha diz `vencimento a confirmar` (correção
+  nascida de um assert headless que falhou — ver Verificações).
+
+### 9.5 ✅ As três faixas do topo apertadas (em duas rodadas)
+
+**Descoberta que mudou o alvo.** Na primeira rodada só baixei o padding dos containers e a altura quase
+não mexeu: **quem define a altura do cabeçalho são os botões** dos grupos de menu e das ações, não a
+linha do título. A segunda rodada, então, encolheu os próprios controles.
+
+- `Header`: `py-2 sm:py-3` → **`py-1`**, `gap-2 sm:gap-4` → **`gap-2`**, Zona 1 `gap-1.5 sm:gap-2`;
+  botões MenuGroup + Dados + Box `px-3 py-1.5 text-xs` → **`px-2.5 py-1 text-[11px] leading-4`**;
+  Zona 3 (MT5, Robô, Rodar, PDF) e o badge de assinatura `py-1 text-xs` → **`py-0.5 text-[11px] leading-4`**.
+- Tira de métricas: `gap-3 py-1.5` → **`gap-2.5 py-0.5`**.
+- Barra do próprio gráfico: `h-9` → `h-8` → **`h-7`**, com os selects de série e de Range `h-6` → **`h-[22px]`**.
+- `<main>`: `p-1.5 sm:p-3 lg:pb-3` → **`p-0.5 sm:p-1 lg:pb-1`** (moldura de 2px/4px), mantendo o `pb-16`
+  do mobile, que compensa a bottom nav e não é vão decorativo.
+
+### Verificações deste ciclo
+
+- `npx tsc --noEmit` limpo e `npx vite build` OK em todas as rodadas (✓ 2.17s na da boleta, ✓ 2.36s na
+  rodada final da marca d'água + faixas).
+- **Boleta em camadas (9.1/9.2) conferida no navegador** (aba oculta → DOM/JS, cliques sintéticos,
+  `getBoundingClientRect`, sem screenshot por causa do viewport): **8/8 PASS** — título `Parâmetros` com
+  `rgb(255,255,255)` a 9px/700 e chevron; nenhuma palavra "Preço" dentro da caixa; altura **456px →
+  332px** ao recolher e restaurada depois; os steppers saem do DOM quando fechada (não ficam invisíveis,
+  somem); `fluxo_boleta_params_open_v1 = 'false'` sobreviveu a `location.reload()`; ordem na linha com
+  ⚙ em x=535 → 📌 em 557 → ⌄ em 579, `Boleta` em âmbar e **sem** selo SIM/MT5; os cinco botões de ação
+  fora da sub-caixa e visíveis com ela fechada; chip recolhido mostrando Boleta + 166.410 + V1; console
+  com zero erros. Dois achados de contexto: a linha Risco não apareceu porque o modo ativo era Pirâmide
+  (comportamento de projeto) e a boleta auto-recolheu em ~9s (o alfinete precisou ser fixado para medir).
+- **Símbolos desmembrados (9.3) conferidos headless** com `npx tsx` sobre um script temporário
+  (`scripts/symbolCheck.ts`, 12 asserts, apagado depois): `live`/`series`/`active` do WIN, papéis
+  `série`/`vigente`/`outro` corretos, nenhum símbolo repetido em `tokens`, WDO devolvendo `active = null`
+  e `others` só com a série, e um vencimento digitado à mão entrando na frente marcado como vivo.
+  **Um assert falhou de verdade e virou correção**: a legenda desenhava
+  `WDO$N série · venc. a confirmar vigente`, rotulando de "vigente" um contrato que não existe; a linha
+  do canvas passou a ser condicional (`asset.activeContract ? … : '… vencimento a confirmar'`).
+- ⚠️ **Não conferido ao vivo neste ciclo**: as alturas finais das três faixas do topo e a leitura real da
+  marca d'água no canvas (amostragem de pixels ligada × desligada). A ponte `browser-use` chegou a
+  conectar nesta sessão (`list_pages` e `navigate_page` OK), mas `evaluate_script` e `wait_for` morreram
+  em timeout (`code = 40504`) e, na sequência, todas as chamadas passaram a falhar com erro de parse de
+  argumentos da própria ponte. Fica como primeiro item da conversa nova (o dev server responde HTTP 200
+  na 3002, então dá para conferir na tela a olho).
+
+---
+
 ## 📆 Ciclo 8 — 31/10/2026 · Estúdio de Estratégias, níveis do pregão e o Registro de Ativo (Fases 1 e 2)
 
 O ciclo em que o terminal parou de ser "o WIN". Nasceu o **Estúdio de Estratégias** (biblioteca
@@ -765,6 +921,20 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 10. **Dado sintético é honesto no rótulo (Ciclo 8).** Sem MT5, o replay roda no gerador e o chip diz
     `SINTÉTICO · #seed`; com histórico real, diz `HISTÓRICO REAL (MT5)` e some o seed (determinismo do
     real é o mercado ter acontecido). Volume vindo de barra de M1 também aparece na tela.
+11. **Um único lugar sabe qual símbolo está vivo (Ciclo 9).** `assetSymbols(asset, configSymbol)` no
+    `assetRegistry.ts` é a fonte do cabeçalho **e** da tira de status, e `live` é sempre o que a ponte
+    subscreve (o config manda, com fallback na contínua). Se cada componente montasse sua própria linha,
+    a tela poderia anunciar um código e desenhar outro — o pior tipo de engano num terminal que envia
+    ordem. Símbolo nunca aparece duas vezes na mesma linha, e vencimento não confirmado é dito como
+    "a confirmar" em vez de inventado.
+12. **Marca d'água é contexto, nunca legenda (Ciclo 9).** Ela nasce depois do fundo e antes de grade e
+    tijolos, dentro de um `clip()` do painel de preço, com alfa de ~0.13: fica **atrás** do dado e não
+    sangra para a régua nem para a boleta. Dado gráfico (níveis, ordens, VWAP) continua tendo legenda
+    própria; a assinatura apenas diz de qual ativo é a janela — por isso é anexo opcional do operador.
+13. **A altura de uma faixa vem dos botões, não do container (Ciclo 9).** Enxugar `py-*` do
+    `<header>` quase não devolveu pixels: quem governa a altura são os controles internos (`py-1.5
+    text-xs` nos grupos de menu e nas ações). Apertar três faixas empilhadas exige medir o conteúdo,
+    não o invólucro.
 
 ## 🧭 Pendências e próximos passos conhecidos
 
@@ -775,13 +945,19 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
   existia na máquina. Enviado a `origin/main` em 01/11/2026 depois de `npx tsc --noEmit` limpo, `npx vite
   build` OK, `python3 -m py_compile` no script gerado (1.332 linhas, com `close_all_positions(side)`) e
   verificação por browser (persistência Stop/Parcial, ZERAR TUDO bilateral, "Puxar da boleta", console limpo).
-- 📍 **PONTO DE RETOMADA — 01/11/2026 (fim do dia produtivo)**: a boleta do gráfico É a base editável das
-  estratégias (seis linhas com stepper `[− input +]`: Contratos, Stop, Alvo, Parcial, Break even, Trailing —
-  tudo persistido em `fluxo_renko_ea_config_v3`), o livro de hedge vive na boleta com ZERAR C/V lado a lado
-  abaixo de COMPRA/VENDA e ZERAR TUDO ao final, e o Estúdio de Estratégias lê a boleta ("Nova do config
-  atual" + botão "Puxar da boleta"). Tudo verificado por tsc + build + browser (seções 8.9–8.13). **Para
-  voltar daqui**: (1) validar na conta demo XP — primeiro resolver o item 🔎 do simulador abaixo, com o
-  operador decidindo cada correção; (2) alinhamentos pendentes da própria boleta-base listados a seguir.
+- 📍 **PONTO DE RETOMADA — 01/11/2026 (fim do Ciclo 9, refino visual)**: a boleta está em camadas —
+  título âmbar com ⚙ dos ajustes do gráfico e 📌 de fixar na própria linha (sem selo SIM/MT5), e os seis
+  steppers da base vivem dentro da sub-caixa recolhível **Parâmetros** (`fluxo_boleta_params_open_v1`);
+  a linha `Preço` saiu da boleta. Cabeçalho e tira de status mostram **os dois códigos rotulados**
+  (`WIN$N série` · `WINZ26 vigente`, com o vivo destacado); `Gráfico:` substituiu `Ativo:`. O gráfico
+  assina o ativo com **marca d'água** atrás dos tijolos (liga/desliga na engrenagem,
+  `fluxo_renko_asset_watermark_v1`) e as três faixas do topo foram apertadas (header `py-1` com botões
+  `py-1/py-0.5 text-[11px]`, tira `py-0.5`, barra do gráfico `h-7`, `main p-0.5 sm:p-1`). Verificado por
+  tsc + build + browser (boleta 8/8) + asserts headless dos símbolos (seções 9.1–9.5). **Voltar por**:
+  (1) 🧪 medir ao vivo as alturas das faixas e a leitura da marca d'água (a ponte do browser caiu antes
+  da medição); (2) decidir se a série contínua ou o vigente deve ser o símbolo gravado no config ao
+  trocar de ativo (hoje o padrão continua `WIN$N`); (3) validação na conta demo XP, resolvendo antes o
+  item 🔎 do simulador; (4) alinhamentos da boleta-base listados abaixo.
 - 🧪 **Alinhamentos abertos da boleta-base (conversa prioritária com o operador)**: a Pirâmide usa
   `pyramidTpPoints` (50) e NÃO obedece ao Alvo da boleta; o gatilho do trailing
   (`trailingActivationPoints`, 60 pts) ainda não é linha editável na boleta; o texto da pirâmide no
@@ -809,7 +985,9 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
   desabilitar agressão com mt5Live; portão de pregão no `generateNextTick` (maior mudança).
 - 🎨 **Fase nova anunciada: REFINO VISUAL** (a partir de 31/10) — passar pente-fino no aspecto de todas as
   telas mantendo as regras fixas (chrome neutro, cor só no acento, nada de quadro no canto inferior
-  direito, controle de operador sem breakpoint). Primeiro item já entregue: Boleta (`8.8`).
+  direito, controle de operador sem breakpoint). Entregues: Boleta com livro de hedge e base editável
+  (`8.8`–`8.13`) e o Ciclo 9 inteiro (boleta em camadas, os dois códigos do ativo, marca d'água e as três
+  faixas apertadas).
 - 🧪 **Homologar WDO e BTC** (Ciclo 8): uma linha cada no `assetRegistry.ts` com `pointValue`,
   `tickSize`, `decimals`, `primarySymbol` no MT5 da XP e o horário de pregão — o seletor destrava sozinho.
   Enquanto `status: 'a_confirmar'`, o ativo só entra em **ensaio**.

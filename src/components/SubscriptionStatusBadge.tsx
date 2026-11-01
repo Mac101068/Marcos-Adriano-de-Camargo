@@ -46,7 +46,7 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
         {/* Tarja compacta e proporcional posicionada no canto superior direito */}
         <button
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition-all cursor-pointer whitespace-nowrap shadow-xs ${getStatusStyle()}`}
+          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-[11px] leading-4 transition-all cursor-pointer whitespace-nowrap shadow-xs ${getStatusStyle()}`}
           title="Clique para gerenciar usuário ou ver detalhes da licença"
         >
           {currentUser.role === 'ADMIN' ? (

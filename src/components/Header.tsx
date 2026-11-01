@@ -28,7 +28,7 @@ import {
 import { MT5ConnectionState } from '../types/trading';
 import { UserProfile } from '../types/auth';
 import { SubscriptionStatusBadge } from './SubscriptionStatusBadge';
-import { ALLOW_UNCONFIRMED_PREVIEW, ASSETS, type AssetId, type AssetSpec } from '../assets/assetRegistry';
+import { ALLOW_UNCONFIRMED_PREVIEW, ASSETS, assetSymbols, SYMBOL_ROLE_LABEL, type AssetId, type AssetSpec } from '../assets/assetRegistry';
 
 type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'studio' | 'admin';
 
@@ -50,6 +50,8 @@ interface HeaderProps {
   onSelectAsset: (id: AssetId) => void;
   /** MT5 conectado E o símbolo do script é o do ativo? false = ponto de atenção no seletor. */
   mt5SymbolOk?: boolean;
+  /** Símbolo que a ponte subscreve de verdade (config.symbol): é ele que determina o gráfico aberto. */
+  liveSymbol?: string;
   currentUser: UserProfile;
   onUserChanged: (user: UserProfile) => void;
   onOpenRenewModal: () => void;
@@ -104,7 +106,7 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
     <div ref={rootRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
           groupActive ? 'bg-slate-800/70 text-slate-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
         }`}
       >
@@ -157,7 +159,26 @@ interface AssetSelectorProps {
   assetId: AssetId;
   onSelect: (id: AssetId) => void;
   mt5SymbolOk?: boolean;
+  liveSymbol?: string;
 }
+
+/**
+ * Ficha de um código do ativo no cabeçalho: o símbolo em mono + o PAPEL dele miúdo ao lado.
+ * O código que está alimentando o gráfico agora ganha texto claro e fundo; os outros ficam em
+ * cinza. Assim os dois símbolos deixam de ler como "nome duplicado" e passam a ler como
+ * "este é o da série histórica, este é o vigente, e este é o que está aberto".
+ */
+const SymbolChip: React.FC<{ sym: string; role: string; live: boolean }> = ({ sym, role, live }) => (
+  <span
+    className={`flex items-center gap-0.5 rounded px-1 py-px font-mono leading-none ${
+      live ? 'bg-slate-800 text-slate-100' : 'text-slate-500'
+    }`}
+    title={live ? `Gráfico aberto em ${sym}` : `${sym} — ${role} deste ativo`}
+  >
+    <span className="text-[9px] font-semibold">{sym}</span>
+    <span className="hidden sm:inline text-[7px] uppercase tracking-wider opacity-70">{role}</span>
+  </span>
+);
 
 /**
  * Seletor de ativo (Fase 2). Fica na Zona 1, ao lado do título, e não dentro da barra de menus:
@@ -169,7 +190,7 @@ interface AssetSelectorProps {
  * folha de ensaio, que exige um "Ensaiar" explícito, porque um R$/ponto errado contamina PnL e
  * trava financeira em dinheiro de verdade. Homologar é mudar `status` no registro.
  */
-const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect, mt5SymbolOk }) => {
+const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect, mt5SymbolOk, liveSymbol }) => {
   const [open, setOpen] = useState(false);
   // Spec 'a_confirmar' escolhido aguardando a confirmação explícita do operador.
   const [previewFor, setPreviewFor] = useState<AssetId | null>(null);
@@ -200,6 +221,13 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
   const ids = Object.keys(ASSETS) as AssetId[];
   const previewSpec = previewFor ? ASSETS[previewFor] : null;
 
+  // Fichas de código do ativo aberto: série contínua, vigente e — quando o config estiver num
+  // código que não é nenhum dos dois — esse código na frente, marcado como vivo. A lista vem pronta
+  // do registro, onde o cabeçalho e a tira de status bebem a mesma fonte: se discordassem, a tela
+  // mostraria um símbolo e desenharia outro.
+  const syms = assetSymbols(asset, liveSymbol);
+  const liveUpper = syms.live.toUpperCase();
+
   const pick = (id: AssetId) => {
     if (id === assetId) {
       setOpen(false);
@@ -223,14 +251,31 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
     <div ref={rootRef} className="relative shrink-0">
       <button
         onClick={() => setOpen((v) => !v)}
-        title={`Ativo em operação: ${asset.label} — ${asset.contractNote}`}
-        className="flex items-center gap-1.5 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer"
+        title={
+          `${asset.label} — ${asset.contractNote}
+` +
+          `Série contínua ${syms.series}: emenda os vencimentos, por isso é o código dos TESTES LONGOS (replay de dias, coletor).
+` +
+          (syms.active
+            ? `Contrato vigente ${syms.active}: o papel do pregão de hoje, o que a corretora tem na conta.
+`
+            : `Contrato vigente: ainda não confirmado na corretora para este ativo.
+`) +
+          `Gráfico aberto em ${syms.live} (${SYMBOL_ROLE_LABEL[syms.liveRole]}).`
+        }
+        className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-lg border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer"
       >
-        <Layers className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-        <span className="flex flex-col items-start leading-tight">
-          <span className="text-xs font-semibold text-slate-100">{asset.id}</span>
-          <span className="hidden sm:block text-[9px] font-mono text-slate-500">{asset.primarySymbol}</span>
-        </span>
+        <Layers className="w-3 h-3 text-slate-400 shrink-0" />
+        <span className="text-[10px] font-semibold text-slate-100 leading-none">{asset.id}</span>
+        <span className="hidden sm:block w-px h-2.5 bg-slate-700 shrink-0" />
+        {syms.tokens.map((t) => (
+          <SymbolChip key={t.sym} sym={t.sym} role={SYMBOL_ROLE_LABEL[t.role]} live={t.sym.toUpperCase() === liveUpper} />
+        ))}
+        {!syms.active && (
+          <span className="hidden sm:inline text-[7px] uppercase tracking-wider text-amber-400/80 shrink-0">
+            venc. a confirmar
+          </span>
+        )}
         <span
           className={`w-2 h-2 rounded-full shrink-0 ${
             asset.status === 'a_confirmar' ? 'bg-amber-400' : mt5SymbolOk === false ? 'bg-amber-400' : 'bg-emerald-400'
@@ -242,6 +287,10 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
       {open && (
         <div className="absolute top-full left-0 mt-1.5 z-50 w-[248px] py-1 rounded-lg bg-slate-900 border border-slate-700/80 shadow-2xl shadow-black/50">
           <p className="px-3 py-1 text-[10px] uppercase tracking-wider text-slate-500">Ativo em operação</p>
+          <p className="px-3 pb-1 text-[9px] leading-snug text-slate-600">
+            Série contínua (<span className="font-mono text-slate-500">$N</span>) = testes longos · Vigente = papel do
+            pregão de hoje
+          </p>
           {ids.map((id) => {
             const spec = ASSETS[id];
             const isActive = id === assetId;
@@ -262,9 +311,19 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
                   isActive ? 'bg-slate-800 text-slate-50 font-semibold' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
                 }`}
               >
-                <span className="flex-1">
+                <span className="flex-1 min-w-0">
                   <span className="block">{spec.label}</span>
-                  <span className="block text-[9px] font-mono text-slate-500">{spec.primarySymbol}</span>
+                  <span className="block text-[9px] font-mono text-slate-500">
+                    {spec.primarySymbol} <span className="font-sans text-slate-600">série</span>
+                    {spec.activeContract ? (
+                      <>
+                        {' · '}
+                        {spec.activeContract} <span className="font-sans text-slate-600">vigente</span>
+                      </>
+                    ) : (
+                      <span className="font-sans text-amber-400/70"> · venc. a confirmar</span>
+                    )}
+                  </span>
                 </span>
                 {spec.status === 'a_confirmar' && (
                   <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 text-[9px] font-semibold whitespace-nowrap">
@@ -338,6 +397,7 @@ export const Header: React.FC<HeaderProps> = ({
   assetId,
   onSelectAsset,
   mt5SymbolOk,
+  liveSymbol,
   currentUser,
   onUserChanged,
   onOpenRenewModal,
@@ -372,13 +432,21 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   return (
-    <header className="flex items-center justify-between gap-2 sm:gap-4 px-2.5 sm:px-4 md:px-6 py-2 sm:py-3 bg-slate-950 border-b border-slate-800/80 shrink-0">
-      {/* Zone 1: Brand Title & EA Registered Status */}
-      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-        <span className="text-sm sm:text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
+    <header className="flex items-center justify-between gap-2 px-2.5 sm:px-4 md:px-6 py-1 bg-slate-950 border-b border-slate-800/80 shrink-0">
+      {/* Zone 1: Brand Title & EA Registered Status. Vão apertado e fonte miúda: cabeçalho, tira de
+          métricas e barra do gráfico são três faixas empilhadas — cada pixel vertical aqui é tela de
+          gráfico ganha embaixo. */}
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <span className="text-xs sm:text-sm font-bold tracking-tight text-slate-100 whitespace-nowrap">
           Flow Quant MT5
         </span>
-        <AssetSelector asset={asset} assetId={assetId} onSelect={onSelectAsset} mt5SymbolOk={mt5SymbolOk} />
+        <AssetSelector
+          asset={asset}
+          assetId={assetId}
+          onSelect={onSelectAsset}
+          mt5SymbolOk={mt5SymbolOk}
+          liveSymbol={liveSymbol}
+        />
       </div>
 
       {/* Zone 2: Menu superior agrupado — encostado no título, ocupando a linha livre */}
@@ -391,7 +459,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleDadosPanel}
           title="Abrir/fechar a janela de controles do painel Renko (Sinal, Exibição, Escalas, Desenho, Ordem rápida)"
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
             dadosPanelOpen
               ? 'bg-slate-800/70 text-slate-300 font-semibold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
@@ -406,7 +474,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleBoxWindow}
           title="Abrir/fechar a janela do Box Renko (OHLC, fluxo Heikin-Ashi, CVD e convergência do box ativo)"
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
             boxWindowOpen
               ? 'bg-slate-800/70 text-slate-300 font-semibold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
@@ -423,7 +491,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Botão de Conexão MT5 Live Bridge */}
         <button
           onClick={onToggleMT5Connect}
-          className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
+          className={`hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
             mt5State.status === 'CONNECTED'
               ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
               : mt5State.status === 'CONNECTING'
@@ -464,7 +532,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Toggle do Robô Automático — clean: chrome neutro, cor só no ponto de status */}
         <button
           onClick={() => setRobotActive(!robotActive)}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-all whitespace-nowrap cursor-pointer"
+          className="flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-all whitespace-nowrap cursor-pointer"
           title="Ativar/Pausar Envio Automático de Ordens"
         >
           <span className={`w-2 h-2 rounded-full ${robotActive ? 'bg-emerald-400' : 'bg-rose-400'}`} />
@@ -475,7 +543,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={() => setIsSimulating(!isSimulating)}
           title="Ligar/desligar apenas o feed de ticks ao vivo. O período de histórico roda no replay da tira de status."
-          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 text-xs font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap cursor-pointer"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-0.5 text-[11px] leading-4 font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap cursor-pointer"
         >
           {isSimulating ? (
             <>
@@ -493,7 +561,7 @@ export const Header: React.FC<HeaderProps> = ({
         {onOpenPdfModal && (
           <button
             onClick={onOpenPdfModal}
-            className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+            className="hidden xl:flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
             title="Visualizar e exportar o Dossiê Técnico do Projeto em PDF"
           >
             <FileText className="w-3.5 h-3.5 text-slate-400" />

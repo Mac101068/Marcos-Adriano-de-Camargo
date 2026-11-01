@@ -24,7 +24,8 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
 11. **Auditoria Intraday & Compliance**: trilha de eventos por ordem, filtros, timeline e exportação CSV padrão brasileiro, com **livro separado por mercado** (`..._WIN`, `..._WDO`, `..._BTC`).
 12. **Módulo SaaS & Painel Master do Administrador**: licenciamento por dias, paywall com checkout PIX/Cartão e gestão de clientes (⚠️ ainda maquete em `localStorage`, sem backend).
 13. **Estúdio de Estratégias**: biblioteca versionada de snapshots do `AutomationConfig`, independente dos perfis do Ajustes — ativar uma estratégia é gesto explícito e o Robô continua PAUSADO.
-14. **Registro de Ativo (multi-mercado)**: todos os números que mudam de contrato para contrato (R$/ponto, tick, casas decimais, preço-base, janelas de sessão, escalas de Renko) moram em `src/assets/assetRegistry.ts`. WIN está homologado; **WDO e BTC aparecem no seletor como `A CONFIRMAR`** e só entram em **ensaio** (Robô OFF, ponte em SEGURO). O histórico do replay vem do MT5 quando a ponte está conectada, e do gerador sintético (rotulado) quando não está.
+14. **Registro de Ativo (multi-mercado)**: todos os números que mudam de contrato para contrato (R$/ponto, tick, casas decimais, preço-base, janelas de sessão, escalas de Renko) moram em `src/assets/assetRegistry.ts`, junto da **taxonomia dos códigos** (série contínua `WIN$N` para teste longo × contrato vigente `WINZ26` para o pregão de hoje). WIN está homologado; **WDO e BTC aparecem no seletor como `A CONFIRMAR`** e só entram em **ensaio** (Robô OFF, ponte em SEGURO). O histórico do replay vem do MT5 quando a ponte está conectada, e do gerador sintético (rotulado) quando não está.
+15. **Identidade visual do posto de operação (Ciclo 9)**: a boleta é uma caixa em camadas (título âmbar com o ⚙ dos ajustes do gráfico na própria linha e a sub-caixa recolhível **Parâmetros** com os seis steppers da base), o cabeçalho mostra os **dois códigos do ativo rotulados pelo papel** e o gráfico pode **assinar o ativo** com uma marca d'água atrás dos tijolos — anexo opcional, persistido por preferência do operador.
 
 > A estratégia em si é escrita em **pontos**, não em reais: trocar de ativo não muda regra de entrada, gestão de risco ou layout do painel de parâmetros — muda só a conversão na tela.
 
@@ -335,6 +336,14 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
   sem ele, o terminal resolve pelo prefixo do símbolo — estratégia antiga salva antes da Fase 2 continua
   funcionando. A régua de preço usa o **último preço real visto** (`fluxo_asset_last_price_v1`, válido por
   7 dias) e só cai no `basePrice` do registro quando não há dado fresco.
+- **Os dois códigos do ativo, sempre rotulados (Ciclo 9)**: cada contrato tem uma **série contínua**
+  (`primarySymbol`, `WIN$N` — emenda vencimentos, é a que presta para **teste longo**: replay de dias,
+  coletor) e um **contrato vigente** (`activeContract`, `WINZ26` — o papel do pregão de hoje, o que a
+  corretora mostra na conta). `assetSymbols(asset, configSymbol)` devolve `{ live, liveRole, series,
+  active, tokens, others }`, com `live` = o que a ponte subscreve de verdade (o config manda), e
+  `symbolRole()` classifica cada código em `série` / `vigente` / `venc.`. **Cabeçalho e tira de status
+  lêem do mesmo memo**, então a tela nunca anuncia um símbolo e desenha outro. WDO e BTC **não têm**
+  `activeContract` (vencimento não confirmado ≠ código inventado).
 - **Estúdio de Estratégias** (`fluxo_strategy_library_v1`): biblioteca separada dos perfis abaixo — salvar
   ou editar ali **nunca** mexe no config ativo; ativar é um clique explícito, e o Robô continua PAUSADO.
 - **Persistência Automática na Memória Local (`localStorage`)**:
@@ -364,14 +373,15 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 ```text
 /
-├── index.html                        # Entry point com meta tags mobile (100dvh e anti-zoom)
+├── index.html                        # Entry point com meta tags mobile (100dvh e anti-zoom) e <title> `Flow - Quant MT5 Terminal`
 ├── metadata.json                     # Metadados e permissões do applet
 ├── package.json / bun.lock           # React 19, Recharts 3.x, Tailwind CSS v4, Lucide Icons, jspdf/html2canvas
 ├── vite.config.ts                    # Porta 3002 e --host=0.0.0.0 (para abrir do celular e de outra máquina)
 ├── .env.example                      # GCP_USER_METADATA_URI (apenas do AI Studio; nada de segredo real aqui)
 ├── EVOLUCOES_DETALHADAS.md           # Diário de obra: causa raiz, implementação e verificação de cada ciclo
 ├── PROJECT_SUMMARY.md                # Estado atual consolidado (este arquivo)
-├── PROJECT_CONSOLIDATION_CHAT_SEED.md# Prompt mestre para retomar em bate-papo novo
+├── PROJECT_CONSOLIDATION_CHAT_SEED.md# Ponteiro/índice — o prompt real de continuidade é `CHAT_SEED.md`
+├── CHAT_SEED.md                      # Prompt de retomada para colar inteiro em conversa nova
 ├── scripts/
 │   ├── strategyLab.ts                # Laboratório headless: variações das duas estratégias no mesmo motor do coletor
 │   └── strategy_lab_results.csv      # Veredito por expectativa/fator de lucro/consistência (5 réplicas × 10 dias)
@@ -381,6 +391,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     ├── App.tsx                       # ≈3.8k linhas: ticks, ordens, WebSocket MT5, abas, bottom nav, toast central
     ├── assets/
     │   ├── assetRegistry.ts          # ÚNICA fonte dos números por ativo (WIN ativo; WDO/BTC `a_confirmar`) + helpers puros
+    │   │                             #   e da taxonomia de símbolos: série contínua × contrato vigente (`assetSymbols`)
     │   ├── assetMigration.ts         # Migração do preço-base (flag `fluxo_asset_base_171500_v1`): quita/expira ordem presa no preço antigo
     │   └── assetSelectionMigration.ts # Migração da seleção de ativo (flag `fluxo_asset_selection_v1`): config, biblioteca e livro de auditoria
     ├── types/
@@ -409,14 +420,17 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     │   ├── bridgeSecurity.ts         # Token da ponte (gerar, ler, rotacionar, mascarar) em fluxo_bridge_token_v1
     │   └── pythonScriptGenerator.ts  # Gera o .py da ponte: AUTH/ARM/tetos + REQUEST_HISTORY (copy_ticks_range, 10 dias, fallback M1)
     └── components/
-        ├── Header.tsx                # 3 zonas, **AssetSelector (WIN/WDO/BTC + folha de ensaio)**, selo MT5 (· ARMADO / · SEGURO), badge do EA, PDF
+        ├── Header.tsx                # 3 zonas, **AssetSelector (WIN/WDO/BTC + folha de ensaio + fichas `WIN$N série` /
+        │                             #   `WINZ26 vigente` com o código vivo destacado)**, selo MT5 (· ARMADO / · SEGURO), badge do EA, PDF
         ├── StrategyStudio.tsx        # Aba Estúdio: biblioteca de estratégias, editor por blocos, ativar/duplicar/exportar, "Puxar da boleta"
-        ├── RenkoFlowChart.tsx        # ≈3.0k linhas de canvas: séries, 2 divisores arrastáveis, níveis de preço + VWAP, zoom multidia, linhas de ordens, desenho
+        ├── RenkoFlowChart.tsx        # ≈3.0k linhas de canvas: séries, 2 divisores arrastáveis, níveis de preço + VWAP, zoom multidia,
+        │                             #   linhas de ordens, desenho e **marca d'água do ativo** atrás dos tijolos (opcional, persistida)
         ├── ChartControlSidebar.tsx   # Controles de série, escala, preset de janela e reset
         ├── DadosPanelWindow.tsx      # Janela flutuante arrastável que hospeda o painel de dados
         ├── RenkoBoxCard.tsx          # Quadro do box (fixo no canto, HUD mobile e variante `window`)
-        ├── BoletaTicket.tsx          # Boleta-base: 6 steppers editáveis (C/Stop/Alvo/Parcial/BE/Trailing), livro de hedge,
-        │                             #   ZERAR C/V lado a lado + ZERAR TUDO; caixa recolhível sempre visível
+        ├── BoletaTicket.tsx          # Boleta-base: sub-caixa recolhível **Parâmetros** com os 6 steppers (C/Stop/Alvo/Parcial/BE/Trailing),
+        │                             #   ⚙ dos ajustes do gráfico na linha do título, livro de hedge, ZERAR C/V + ZERAR TUDO;
+        │                             #   caixa recolhível sempre visível (título âmbar, sem selo SIM/MT5)
         ├── DrawingOverlay.tsx / DrawingToolbar.tsx # Camada e barra de rabiscos técnicos sobre o gráfico
         ├── TimesAndTrades.tsx        # Fita de negócios ao vivo
         ├── AutomationPanel.tsx       # Ajustes: blocos por estratégia, proteção da mãe, limites da ponte, perfis
@@ -439,6 +453,33 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ## 🆕 9. Resumo dos últimos ciclos
 
 > Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+### Ciclo 9 (01/11/2026) — refino visual: boleta em camadas, os dois códigos do ativo e marca d'água
+
+- ✅ **Boleta dourada com o ⚙ na própria linha** (`BoletaTicket.tsx`): título `Boleta` em âmbar; a
+  engrenagem de ajustes do gráfico saiu do canto inferior direito do canvas e foi colada entre o título e
+  o sininho de fixar (o **estado continua no `RenkoFlowChart`**, a boleta só repassa o clique); recolhida,
+  a engrenagem acompanha o chip (controle primário não pode sumir atrás da auto-recolha de ~9s); selo
+  `SIM`/`MT5` removido da linha; título `Flow Quant MT5` menor (`text-xs sm:text-sm`).
+- ✅ **Sub-caixa recolhível "Parâmetros"** dentro da boleta: os seis steppers da base (e o Risco) morem
+  atrás de um cabeçalho branco em largura total; a linha `Preço` foi **removida** (já vive na escala do
+  eixo Y e no chip). Estado **local** (só muda altura, não a largura que o canvas reserva) e persistido em
+  `fluxo_boleta_params_open_v1`. Medido no navegador: 456px → 332px.
+- ✅ **Série contínua × contrato vigente desmembrados** (`assetRegistry.ts`): `activeContract` (`WINZ26`) e
+  `watermarkCaption` no spec; `SymbolRole`/`symbolRole`/`SYMBOL_ROLE_LABEL` e `assetSymbols()` como única
+  fonte da linha; `SymbolChip` no Header e `Gráfico:` na tira (antes `Ativo:`) mostram cada código com o
+  seu papel, sem nunca repetir um símbolo. WDO/BTC ficam com "venc. a confirmar" (não se inventa código).
+- ✅ **Marca d'água por ativo no canvas** (`RenkoFlowChart.tsx`): sigla + produto + os dois códigos,
+  desenhada **depois do fundo e antes da grade/tijolos** dentro de um `clip()` do painel de preço (nunca
+  sangra para a régua nem para a boleta), alfa 0.13/0.11/0.10, corpo proporcional com piso e teto. Liga/
+  desliga no painel da engrenagem, persistido em `fluxo_renko_asset_watermark_v1` (padrão ligada).
+- ✅ **Três faixas do topo apertadas em duas rodadas**: header `py-1`/`gap-2` com botões
+  `py-1`/`py-0.5 text-[11px] leading-4` (a altura vem dos **botões**, não do container), tira `py-0.5`,
+  barra do gráfico `h-7` (selects `h-[22px]`), `main p-0.5 sm:p-1 lg:pb-1` mantendo o `pb-16` do mobile.
+- 🧪 **Verificado**: tsc + build limpos; boleta em camadas 8/8 no navegador (cores, ordem ⚙→📌→⌄, altura,
+  persistência pós-reload, console sem erro); símbolos com 12 asserts headless (`npx tsx`), que pegaram um
+  bug real de legenda (`venc. a confirmar vigente`). **Não conferido ao vivo**: alturas finais das faixas e
+  pixels da marca d'água (a ponte do browser caiu nesta sessão).
 
 ### Boleta-base + hedge (31/10 → 01/11/2026) — seções 8.9–8.13 do diário
 
@@ -507,9 +548,17 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 
 ### D. Boleta — Base Editável das Estratégias + Livro de Hedge (`src/components/BoletaTicket.tsx`)
 - **Origem**: a ordem rápida existia em duas cópias que se anulavam (barra `lg:hidden` sobre o gráfico + seção da lateral `hidden lg:flex`) e virou **uma caixa única** sobre o canvas, presente no desktop e no mobile, com recolhimento automático (~9s → chip; timer pausado com mouse em cima ou alfinete fixado; estado em `fluxo_boleta_open_v1`).
+- **Cabeçalho em uma linha** (Ciclo 9): título **`Boleta` em âmbar** + **⚙ dos ajustes do gráfico** (o
+  interruptor migrou do canto inferior direito do canvas para cá; o estado e o painel continuam no
+  `RenkoFlowChart`) + 📌 fixar + ⌄ recolher. O selo `SIM`/`MT5` **saiu** por pedido do operador (o estado
+  da ponte segue no botão de conexão do cabeçalho e nos `title` de COMPRA/VENDA). Com a boleta recolhida a
+  engrenagem vai junto no chip.
+- **Sub-caixa "Parâmetros"** (Ciclo 9): os seis steppers + Risco vivem dentro de uma caixa recolhível com
+  título branco em largura total (`aria-expanded`), persistida em `fluxo_boleta_params_open_v1` e com estado
+  **local** (só muda a altura; a largura — e o recuo do canvas — não mudam). A linha `Preço` foi removida.
 - **A boleta é a BASE das estratégias** — seis linhas editáveis no padrão de mercado `[− input +]` (`StepperRow`, setinhas nativas mortas): **Contratos** (1–99), **Stop** (0–1000, passo 5), **Alvo** (0–2000, passo 5), **Parcial** (5–1000, passo 5), **Break even** (0–50, passo 1) e **Trailing** (0–300, passo 5). Cada tecla persiste via `handleBoletaConfigPatch` no App → `fluxo_renko_ea_config_v3`; Robô, script Python e Estúdio buscam estes valores. Os editores concorrentes do AutomationPanel (slider do TP, pisos de breakeven) viraram somente-leitura com ponteiro "edite na Boleta do gráfico".
 - **Livro de hedge sempre visível** abaixo das ações: por lado `C`/`V` com contratos, preço médio ponderado e R$ flutuante (tom segue o resultado, não o lado) + Ganhos/Perdas/PnL do dia (realizado da sessão + flutuante + parciais) + rodapé de giro "Compra hoje / Venda hoje / Total dia" (contratos que viraram posição, persiste após zerar).
-- **Ações**: **COMPRA** / **VENDA** a mercado; abaixo deles **ZERAR C** e **ZERAR V** lado a lado (`grid-cols-2`, cada um fecha só o seu lado via ponte com `type: 'BUY'|'SELL'`); ao final da caixa, **ZERAR TUDO** (âmbar) fecha os dois lados. Entrada manual na Pirâmide **não zera mais o lado oposto** — hedge manual convive; o robô continua obedecendo `hedgeOppositeAction`. Selo `MT5` × `SIM` no cabeçalho.
+- **Ações**: **COMPRA** / **VENDA** a mercado; abaixo deles **ZERAR C** e **ZERAR V** lado a lado (`grid-cols-2`, cada um fecha só o seu lado via ponte com `type: 'BUY'|'SELL'`); ao final da caixa, **ZERAR TUDO** (âmbar) fecha os dois lados. Entrada manual na Pirâmide **não zera mais o lado oposto** — hedge manual convive; o robô continua obedecendo `hedgeOppositeAction`.
 - **Estúdio de Estratégias lê a boleta**: "Nova do config atual" parte do config vivo e o botão **"Puxar da boleta"** copia os seis valores-base (+ `enablePartialExit`) para o rascunho — fluxo de caça aos melhores parâmetros do EA.
 - **Posicionamento**: `absolute` colada na grade de preços (recuo = largura real da régua, 46px mobile / 64px desktop, calculado pelo canvas — nunca breakpoint cego); o vão de 5px (`BOLETA_GAP`) é do desenho do canvas.
 - **Limpeza das linhas de menu**: chips de PnL / abertas / "Pos Ativa(s)" da tira do topo, da barra do gráfico e da lateral foram **removidos** — os dados moram na boleta.
@@ -540,6 +589,8 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 | `fluxo_renko_flow_mode_v1` | Modo do painel de fluxo (Heikin-Ashi / Delta / Híbrido) |
 | `fluxo_renko_price_levels_v1` | Liga/desliga os níveis do pregão desenhados no gráfico |
 | `fluxo_boleta_open_v1` | Boleta expandida ou recolhida (a caixa abre recolhida depois que você a fecha) |
+| `fluxo_boleta_params_open_v1` | Sub-caixa **Parâmetros** da boleta aberta/recolhida (padrão: aberta) |
+| `fluxo_renko_asset_watermark_v1` | Liga/desliga a **marca d'água do ativo** atrás dos tijolos (padrão: ligada) |
 | `fluxo_bridge_token_v1` | **Token da ponte** — fora do config de propósito, para nunca ser exportado em JSON |
 | `fluxo_renko_intraday_audit_v3` | Livro de auditoria **legado** (chave única, pré-Fase 2) — mantido, não apagado |
 | `fluxo_renko_intraday_audit_v3_WIN` / `_WDO` / `_BTC` | Livro de auditoria **por mercado** (a partir da Fase 2) |
@@ -572,10 +623,15 @@ Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto
 ```
 
 ### Pendências conhecidas (para não redescobrir)
-- 📍 **Onde estamos (01/11/2026)**: boleta = base editável das estratégias (6 steppers), livro de hedge com
-  ZERAR C/V + ZERAR TUDO, Estúdio com "Puxar da boleta" — tudo verificado (diário §8.9–8.13). Próximo passo
-  recomendado: **validação na conta demo XP**, resolvendo antes o item 🔎 abaixo; e alinhar a boleta-base
-  (Pirâmide usa `pyramidTpPoints`, não o Alvo da boleta; gatilho do trailing ainda não é linha na boleta).
+- 📍 **Onde estamos (01/11/2026, fim do Ciclo 9)**: boleta em camadas (título âmbar + ⚙ na linha do título
+  + sub-caixa **Parâmetros** com os seis steppers, sem a linha Preço), cabeçalho/tira mostrando os **dois
+  códigos rotulados** (`WIN$N série · WINZ26 vigente`, com o vivo destacado), gráfico com **marca d'água
+  opcional por ativo** e as três faixas do topo apertadas. Verificado por tsc + build + browser (boleta 8/8)
+  + asserts headless dos símbolos (diário §9.1–9.5). **Voltar por**: (1) medir ao vivo as alturas das faixas
+  e a leitura da marca d'água (a ponte do browser caiu antes); (2) decidir se o config deve gravar a série
+  contínua ou o vigente ao trocar de ativo; (3) validação na conta demo XP (resolver antes o item 🔎);
+  (4) alinhamentos da boleta-base (Pirâmide usa `pyramidTpPoints`, não o Alvo da boleta; gatilho do
+  trailing ainda não é linha na boleta).
 - 🔎 **Simulador "sempre rodando": diagnóstico pronto, decisão pendente** (detalhes linha a linha em
   `EVOLUCOES_DETALHADAS.md` → Pendências, 31/10): a guarda do loop funciona (CONNECTED não vaza tick
   sintético), mas `isSimulating` nasce `true` sem persistência, o boot-replay dispara na abertura sem
@@ -584,7 +640,8 @@ Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto
   validação da conta demo, com o operador decidindo cada comportamento.
 - 🎨 **Fase REFINO VISUAL em andamento** (desde 31/10): pente-fino no aspecto das telas mantendo as regras fixas
   (chrome neutro, cor só no acento, aviso central, controle sem breakpoint). Entregues: Boleta com livro de
-  hedge e base editável (`BoletaTicket.tsx`, Ciclo 8.8–8.13).
+  hedge e base editável (`BoletaTicket.tsx`, Ciclo 8.8–8.13) e o Ciclo 9 (boleta em camadas, os dois códigos
+  do ativo, marca d'água por ativo e as três faixas do topo apertadas).
 - 🧪 **Homologar WDO e BTC**: me traga `pointValue` (R$/ponto), `tickSize`, `decimals`, `primarySymbol` no MT5 da XP, horário de pregão e a profundidade de histórico da conta demo. Trocar `status: 'a_confirmar'` → `'ativo'` no `assetRegistry.ts` destrava o seletor sozinho.
 - 🧪 **Fases seguintes do registro**: F3 = travas de horário por ativo (leilão, ajuste, fix das 13:00 do WDO, gap de fim de semana do BTC); F4 = ponte Python definitiva e dossiê PDF sem o texto fixo "Mini-Índice B3"; F5 = VTC (PTAX + FRP0) morando no WDO.
 - 🧪 **Conferir o histórico real no Windows**: rodar o script novo, pedir 1 dia de replay conectado e ver se o chip sai `HISTÓRICO REAL (MT5)` com volume `TICK` ou `M1_RATE`.

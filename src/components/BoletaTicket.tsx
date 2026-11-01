@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronUp, Pin, PinOff } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronUp, Pin, PinOff, Settings } from 'lucide-react';
 import { TradeOrder } from '../types/trading';
 import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, pointsToBRL } from '../assets/assetRegistry';
 
@@ -14,6 +14,8 @@ import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, pointsToBRL } from '.
 
 // v1: abre expandida na primeira vez; depois obedece a última escolha do operador
 export const STORAGE_KEY_OPEN = 'fluxo_boleta_open_v1';
+// v1: sub-caixa "Parâmetros" da boleta (abre expandida na primeira vez; depois obedece o operador)
+export const STORAGE_KEY_PARAMS_OPEN = 'fluxo_boleta_params_open_v1';
 // Recolhe sozinho depois desse tempo (não fecha enquanto o mouse estiver em cima, nem se fixado)
 const AUTO_COLLAPSE_MS = 9000;
 // Largura fixa da caixa expandida e o vão que o gráfico deixa a ela: quem desenha o canvas
@@ -97,6 +99,12 @@ interface BoletaTicketProps {
    * BOLETA_GAP é do DESENHO (o canvas que recua), não da caixa.
    */
   rightOffset?: number;
+  /**
+   * Engrenagem de ajustes do gráfico, agora colada na linha da boleta (ao lado do sininho de
+   * fixar). O estado mora no gráfico — a boleta só aperta o interruptor.
+   */
+  chartToolsOpen?: boolean;
+  onToggleChartTools?: () => void;
   /** Estado aberto/recolhido vem do gráfico (controlled): ele precisa saber o vão para o canvas. */
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -224,6 +232,8 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
   trailingDistancePoints = 50,
   partialPoints = 50,
   rightOffset = 64,
+  chartToolsOpen = false,
+  onToggleChartTools,
   open,
   onOpenChange,
   onManualOrder,
@@ -238,6 +248,26 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
 }) => {
   const [pinned, setPinned] = useState<boolean>(false);
   const [hovered, setHovered] = useState<boolean>(false);
+
+  // PARÂMETROS: a sub-caixa recolhível dentro da boleta. A preferência é só de altura da caixa
+  // (a largura não muda), então mora aqui dentro — o canvas não precisa saber de nada.
+  const [paramsOpen, setParamsOpen] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_PARAMS_OPEN);
+      return raw === null ? true : raw === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const toggleParams = () => {
+    const next = !paramsOpen;
+    setParamsOpen(next);
+    try {
+      localStorage.setItem(STORAGE_KEY_PARAMS_OPEN, String(next));
+    } catch {
+      // Ignora erro de storage
+    }
+  };
 
   // Recolhimento automático: roda de novo a cada mudança de estado e não interfere com o mouse
   // em cima da caixa, nem quando o operador fixou a boleta aberta.
@@ -257,19 +287,37 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
     !!hedgeBook &&
     hedgeBook.buy.filled + hedgeBook.sell.filled + hedgeBook.buy.pending + hedgeBook.sell.pending > 0;
 
+  // Recolhida, a engrenagem acompanha o chip: sem ela o atalho dos ajustes do gráfico ficaria
+  // preso atrás do recolhimento automático (controle primário tem que estar sempre ao alcance).
+  const gearBtn = (
+    <button
+      onClick={onToggleChartTools}
+      className={`flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md border backdrop-blur-md shadow-xl pointer-events-auto cursor-pointer transition-colors ${
+        chartToolsOpen
+          ? 'bg-sky-500/25 text-sky-200 border-sky-500/50'
+          : 'bg-zinc-950/92 border-zinc-700/80 text-zinc-400 hover:text-white hover:border-zinc-600'
+      }`}
+      title="Ajustes do gráfico: tijolos, zoom, modo de tela, escala do fluxo e legenda"
+      aria-label="Abrir ou fechar os ajustes do gráfico"
+    >
+      <Settings className="w-3.5 h-3.5" />
+    </button>
+  );
+
   // Chip fechado: um toque abre de novo (e a posição oposta do tijolo fica livre)
   if (!open) {
     return (
       <div
-        className="absolute z-30 pointer-events-auto select-none"
+        className="absolute z-30 pointer-events-auto select-none flex items-center justify-end gap-1"
         style={{ right: rightOffset, top: BOLETA_TOP }}
       >
+        {onToggleChartTools && gearBtn}
         <button
           onClick={() => onOpenChange(true)}
           className="flex items-center gap-1.5 px-2 h-[26px] rounded-md bg-zinc-950/92 backdrop-blur-md border border-zinc-700/80 shadow-xl text-[11px] font-mono text-zinc-200 hover:text-white hover:border-zinc-600 cursor-pointer transition-colors"
           title="Abrir a boleta (ordem rápida)"
         >
-          <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-zinc-500">Boleta</span>
+          <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">Boleta</span>
           <span className="font-semibold text-emerald-300 tabular-nums">{formatPrice(currentPrice, asset)}</span>
           {/* Recolhida, a boleta ainda resume o hedge: C/V com contratos de cada lado */}
           {hedgeVisible && (hedgeBook!.buy.contracts > 0 || hedgeBook!.sell.contracts > 0) ? (
@@ -305,22 +353,27 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
       style={{ right: rightOffset, top: BOLETA_TOP, width: BOLETA_WIDTH }}
       className="absolute z-30 rounded-lg bg-zinc-950/94 backdrop-blur-md border border-zinc-700/80 shadow-2xl pointer-events-auto select-none"
     >
-      {/* Cabeçalho: título + estado do feed + fixar + recolher */}
+      {/* Cabeçalho: título + fixar + recolher. O selo SIM/MT5 saiu daqui por pedido do operador
+          (a linha ficou apertada com a engrenagem): o estado da ponte segue visível no botão de
+          conexão do cabeçalho e nos títulos dos botões COMPRA/VENDA desta caixa. */}
       <div className="flex items-center gap-1.5 px-2 h-7 border-b border-zinc-800/80">
-        <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-zinc-500">Boleta</span>
-        <span
-          className={`text-[8.5px] font-sans uppercase tracking-wide px-1 py-0.2 rounded border ${
-            isRealMT5Connected
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-              : 'bg-zinc-900 border-zinc-700/80 text-zinc-400'
-          }`}
-          title={isRealMT5Connected ? 'Ordens saem pela ponte do MT5' : 'Ordens de teste: nada vai à corretora'}
-        >
-          {isRealMT5Connected ? 'MT5' : 'SIM'}
-        </span>
+        <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">Boleta</span>
+        {/* Engrenagem dos ajustes do gráfico: colada na linha da boleta, à esquerda do sininho. */}
+        {onToggleChartTools && (
+          <button
+            onClick={onToggleChartTools}
+            className={`ml-auto p-0.5 cursor-pointer transition-colors ${
+              chartToolsOpen ? 'text-sky-300' : 'text-zinc-500 hover:text-zinc-200'
+            }`}
+            title="Ajustes do gráfico: tijolos, zoom, modo de tela, escala do fluxo e legenda"
+            aria-label="Abrir ou fechar os ajustes do gráfico"
+          >
+            <Settings className="w-3 h-3" />
+          </button>
+        )}
         <button
           onClick={() => setPinned((p) => !p)}
-          className={`ml-auto p-0.5 cursor-pointer transition-colors ${
+          className={`${onToggleChartTools ? '' : 'ml-auto '}p-0.5 cursor-pointer transition-colors ${
             pinned ? 'text-sky-300' : 'text-zinc-500 hover:text-zinc-200'
           }`}
           title={pinned ? 'Desfixar (volta a recolher sozinho)' : 'Fixar aberta (não recolhe sozinha)'}
@@ -338,77 +391,98 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
         </button>
       </div>
 
-      {/* Dados básicos da ordem */}
-      <div className="px-2 py-1.5 space-y-0.5 font-mono">
-        <Row label="Preço" value={`${formatPrice(currentPrice, asset)} pts`} tone="emerald" />
-        <StepperRow
-          label="Contratos"
-          value={contracts}
-          min={1}
-          max={99}
-          step={1}
-          unit="ct"
-          onChange={onContractsChange}
-          hint={`Lote das ordens da boleta e do Robô: ${contracts} contrato(s) · ${pointsToBRL(1, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ponto a favor`}
-        />
-        {/* Stop, Alvo e Parcial editáveis: a boleta é a BASE — Robô, script Python e as
-            estratégias do Estúdio buscam estes valores do config. Na Pirâmide o Stop da mãe é
-            o ponto de partida do gatilho, mas o campo continua editável (vale para as pirâmides
-            e para ordens manuais). */}
-        <StepperRow
-          label="Stop"
-          value={stopLossPoints}
-          min={0}
-          max={1000}
-          step={5}
-          unit="pts"
-          onChange={onStopLossPointsChange}
-          hint={`Stop Loss fixo: ${stopLossPoints} pts atrás da entrada ≈ ${pointsToBRL(stopLossPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de risco por ${contracts} contrato(s). Base das estratégias.`}
-        />
-        <StepperRow
-          label="Alvo"
-          value={takeProfitPoints}
-          min={0}
-          max={2000}
-          unit="pts"
-          onChange={onTakeProfitChange}
-          hint={`TP variável — base das estratégias: Robô, script Python e ordens da boleta buscam este valor. ${takeProfitPoints} pts ≈ ${pointsToBRL(takeProfitPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ${contracts} ctro(s)`}
-        />
-        <StepperRow
-          label="Parcial"
-          value={partialPoints}
-          min={5}
-          max={1000}
-          step={5}
-          unit="pts"
-          onChange={onPartialPointsChange}
-          hint={`Saída parcial (metade do lote) em +${partialPoints} pts — protege o breakeven antes do alvo final. Base das estratégias.`}
-        />
-        <StepperRow
-          label="Break even"
-          value={breakevenOffsetPoints}
-          min={0}
-          max={50}
-          step={1}
-          unit="pts"
-          onChange={onBreakevenChange}
-          hint={`Piso de proteção (taxas B3): ao proteger a posição, o stop garante entrada + ${breakevenOffsetPoints} pts. Vale para o breakeven da parcial, o do TP da pirâmide e o piso do gatilho.`}
-        />
-        <StepperRow
-          label="Trailing"
-          value={trailingDistancePoints}
-          min={0}
-          max={300}
-          unit="pts"
-          onChange={onTrailingChange}
-          hint={`Trailing Stop: depois do gatilho, o stop acompanha o preço sempre ${trailingDistancePoints} pts atrás do extremo (máxima na compra, mínima na venda). Só anda a favor.`}
-        />
-        {riskBRL > 0 && (
-          <Row
-            label="Risco"
-            value={`−${riskBRL.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`}
-            tone="rose"
-          />
+      {/* ========================================================================== */}
+      {/* PARÂMETROS: sub-caixa recolhível da boleta, igual à caixa inteira. A linha  */}
+      {/* do Preço virou o TÍTULO branco — o preço já está bem visível na régua do    */}
+      {/* gráfico. Dentro dela, todos os dados que antecedem os botões de ação.       */}
+      {/* ========================================================================== */}
+      <div className="border-b border-zinc-800/80">
+        <button
+          onClick={toggleParams}
+          className="w-full flex items-center justify-between gap-2 px-2 py-1.5 cursor-pointer transition-colors hover:bg-zinc-900/60"
+          title={paramsOpen ? 'Recolher os parâmetros da boleta' : 'Expandir os parâmetros da boleta'}
+          aria-label={paramsOpen ? 'Recolher parâmetros' : 'Expandir parâmetros'}
+          aria-expanded={paramsOpen}
+        >
+          <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-white">Parâmetros</span>
+          {paramsOpen ? (
+            <ChevronUp className="w-3 h-3 text-zinc-500" />
+          ) : (
+            <ChevronDown className="w-3 h-3 text-zinc-500" />
+          )}
+        </button>
+        {paramsOpen && (
+          <div className="px-2 pb-1.5 space-y-0.5 font-mono">
+            <StepperRow
+              label="Contratos"
+              value={contracts}
+              min={1}
+              max={99}
+              step={1}
+              unit="ct"
+              onChange={onContractsChange}
+              hint={`Lote das ordens da boleta e do Robô: ${contracts} contrato(s) · ${pointsToBRL(1, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ponto a favor`}
+            />
+            {/* Stop, Alvo e Parcial editáveis: a boleta é a BASE — Robô, script Python e as
+                estratégias do Estúdio buscam estes valores do config. Na Pirâmide o Stop da mãe é
+                o ponto de partida do gatilho, mas o campo continua editável (vale para as pirâmides
+                e para ordens manuais). */}
+            <StepperRow
+              label="Stop"
+              value={stopLossPoints}
+              min={0}
+              max={1000}
+              step={5}
+              unit="pts"
+              onChange={onStopLossPointsChange}
+              hint={`Stop Loss fixo: ${stopLossPoints} pts atrás da entrada ≈ ${pointsToBRL(stopLossPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de risco por ${contracts} contrato(s). Base das estratégias.`}
+            />
+            <StepperRow
+              label="Alvo"
+              value={takeProfitPoints}
+              min={0}
+              max={2000}
+              unit="pts"
+              onChange={onTakeProfitChange}
+              hint={`TP variável — base das estratégias: Robô, script Python e ordens da boleta buscam este valor. ${takeProfitPoints} pts ≈ ${pointsToBRL(takeProfitPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ${contracts} ctro(s)`}
+            />
+            <StepperRow
+              label="Parcial"
+              value={partialPoints}
+              min={5}
+              max={1000}
+              step={5}
+              unit="pts"
+              onChange={onPartialPointsChange}
+              hint={`Saída parcial (metade do lote) em +${partialPoints} pts — protege o breakeven antes do alvo final. Base das estratégias.`}
+            />
+            <StepperRow
+              label="Break even"
+              value={breakevenOffsetPoints}
+              min={0}
+              max={50}
+              step={1}
+              unit="pts"
+              onChange={onBreakevenChange}
+              hint={`Piso de proteção (taxas B3): ao proteger a posição, o stop garante entrada + ${breakevenOffsetPoints} pts. Vale para o breakeven da parcial, o do TP da pirâmide e o piso do gatilho.`}
+            />
+            <StepperRow
+              label="Trailing"
+              value={trailingDistancePoints}
+              min={0}
+              max={300}
+              unit="pts"
+              onChange={onTrailingChange}
+              hint={`Trailing Stop: depois do gatilho, o stop acompanha o preço sempre ${trailingDistancePoints} pts atrás do extremo (máxima na compra, mínima na venda). Só anda a favor.`}
+            />
+            {riskBRL > 0 && (
+              <Row
+                label="Risco"
+                value={`−${riskBRL.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`}
+                tone="rose"
+              />
+            )}
+          </div>
         )}
       </div>
 
@@ -418,7 +492,9 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           onClick={() => onManualOrder?.('BUY')}
           disabled={!onManualOrder}
           className="flex-1 h-[30px] rounded bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 text-white text-[11px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer"
-          title={`Enviar COMPRA a mercado (${contracts} ctros a ${formatPrice(currentPrice, asset)} pts)`}
+          title={`Enviar COMPRA a mercado (${contracts} ctros a ${formatPrice(currentPrice, asset)} pts)\n${
+            isRealMT5Connected ? '🔌 Ponte MT5: este clique vai à corretora' : '🧪 Modo SIM: nada vai à corretora'
+          }`}
         >
           <ArrowUp className="w-3 h-3 stroke-[2.5]" />
           <span>COMPRA</span>
@@ -427,7 +503,9 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           onClick={() => onManualOrder?.('SELL')}
           disabled={!onManualOrder}
           className="flex-1 h-[30px] rounded bg-rose-600 hover:bg-rose-500 active:scale-95 disabled:opacity-40 text-white text-[11px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer"
-          title={`Enviar VENDA a mercado (${contracts} ctros a ${formatPrice(currentPrice, asset)} pts)`}
+          title={`Enviar VENDA a mercado (${contracts} ctros a ${formatPrice(currentPrice, asset)} pts)\n${
+            isRealMT5Connected ? '🔌 Ponte MT5: este clique vai à corretora' : '🧪 Modo SIM: nada vai à corretora'
+          }`}
         >
           <ArrowDown className="w-3 h-3 stroke-[2.5]" />
           <span>VENDA</span>

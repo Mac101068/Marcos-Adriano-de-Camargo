@@ -18,7 +18,7 @@ import { ChartControlSidebar } from './ChartControlSidebar';
 import { BoletaTicket, BOLETA_GAP, BOLETA_WIDTH, STORAGE_KEY_OPEN, HedgeBook } from './BoletaTicket';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { RenkoBoxCard } from './RenkoBoxCard';
-import { Sliders, ArrowUp, ArrowDown, Settings } from 'lucide-react';
+import { Sliders, ArrowUp, ArrowDown } from 'lucide-react';
 
 const STORAGE_KEY_SCALES = 'fluxo_renko_chart_scales_v2';
 const STORAGE_KEY_FLOW_MODE = 'fluxo_renko_flow_mode_v1';
@@ -31,6 +31,8 @@ const STORAGE_KEY_SPACING_MODE = 'fluxo_renko_spacing_mode_v2';
 const STORAGE_KEY_VISIBLE_COUNT = 'fluxo_renko_visible_count_v3';
 // Níveis relevantes do pregão (leilão / abertura / VWAP / máx / mín / fechamento e ajuste) ligados por padrão.
 const STORAGE_KEY_PRICE_LEVELS = 'fluxo_renko_price_levels_v1';
+// Marca-d'água do ativo no painel de preço: ligada na primeira vez, depois é gosto do operador.
+const STORAGE_KEY_ASSET_WATERMARK = 'fluxo_renko_asset_watermark_v1';
 // Recuo inicial do gráfico ("Chart Shift" do MetaTrader): distância, em pixels, entre a aresta
 // direita do tijolo mais novo (o em formação) e a borda direita do desenho. 20px é o padrão.
 const STORAGE_KEY_CHART_SHIFT = 'fluxo_renko_chart_shift_v1';
@@ -350,7 +352,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Barra lateral de controles: dockada na esquerda no desktop, drawer em telas pequenas
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
 
-  // Painel de ajustes de exibição do gráfico (aberto pela engrenagem no canto inferior direito).
+  // Painel de ajustes de exibição do gráfico (aberto pela engrenagem na linha da boleta).
   // Concentra tijolos/zoom/modo/escala do fluxo + legenda, tirando a tarima miúda sempre-visível.
   const [chartToolsOpen, setChartToolsOpen] = useState<boolean>(false);
 
@@ -368,6 +370,21 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     });
   };
   const [boxThickness, setBoxThickness] = useState<'thin' | 'ultrathin' | 'medium'>('thin');
+  // Marca-d'água do ativo aberto (sigla + série + vigente) atrás dos tijolos. Anexo opcional:
+  // quem quer a tela limpa desliga, e a escolha sobrevive à recarga.
+  const [assetWatermark, setAssetWatermark] = useState<boolean>(
+    () => localStorage.getItem(STORAGE_KEY_ASSET_WATERMARK) !== '0'
+  );
+  const toggleAssetWatermark = () => {
+    setAssetWatermark((prev) => {
+      try {
+        localStorage.setItem(STORAGE_KEY_ASSET_WATERMARK, prev ? '0' : '1');
+      } catch (e) {
+        // Ignora
+      }
+      return !prev;
+    });
+  };
   // Setas ▲/▼ de sinal: ligado por padrão, mas o operador pode querer só os tijolos crus.
   const [showSignalArrows, setShowSignalArrows] = useState<boolean>(
     () => localStorage.getItem(STORAGE_KEY_SIGNAL_ARROWS) !== '0'
@@ -605,6 +622,50 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // Fundo escuro profissional
     ctx.fillStyle = '#09090b';
     ctx.fillRect(0, 0, width, height);
+
+    // =========================================================================
+    // MARCA D'ÁGUA DO ATIVO — a assinatura do gráfico aberto, desenhada ANTES da
+    // grade e dos tijolos para ficar por baixo de tudo, e recortada na área de
+    // desenho (0..plotRight) para nunca invadir a régua de preços nem a faixa da
+    // boleta. Cada ativo tem a sua: sigla, produto e os dois códigos que definem
+    // o que está aberto (série contínua x contrato vigente). Ligada/desligada na
+    // engrenagem, por gosto do operador.
+    // =========================================================================
+    if (assetWatermark) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, plotRight, pricePaneHeight);
+      ctx.clip();
+      const wmCx = plotRight / 2;
+      const wmCy = pricePaneHeight / 2;
+      // Corpo proporcional ao painel, com piso e teto: em monitor grande a sigla não pode
+      // virar anúncio; em janela miúda não pode sumir.
+      const wmMonogram = Math.max(38, Math.min(140, pricePaneHeight * 0.34, plotRight * 0.2));
+      const wmSub = Math.max(9, Math.min(15, wmMonogram * 0.16));
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // 13% de branco sobre #09090b: ~+31 por canal — marca lida de primeira, mas ainda atrás
+      // dos tijolos (o gráfico manda; a assinatura só diz de que ativo é). Por isso a marca nunca
+      // vira legenda: ela é contexto, não dado.
+      ctx.fillStyle = 'rgba(255,255,255,0.13)';
+      ctx.font = `700 ${wmMonogram}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillText(asset.id, wmCx, wmCy - wmMonogram * 0.2);
+      ctx.fillStyle = 'rgba(255,255,255,0.11)';
+      ctx.font = `600 ${wmSub}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillText(asset.watermarkCaption.toUpperCase(), wmCx, wmCy + wmMonogram * 0.3);
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.font = `${Math.max(8, wmSub - 1)}px "JetBrains Mono", monospace`;
+      // Spec sem vencimento declarado não pode assinar "vigente" atrás de um código que não existe:
+      // a linha diz o que sabe e marca o resto como a confirmar.
+      ctx.fillText(
+        asset.activeContract
+          ? `${asset.primarySymbol} série · ${asset.activeContract} vigente`
+          : `${asset.primarySymbol} série · vencimento a confirmar`,
+        wmCx,
+        wmCy + wmMonogram * 0.3 + wmSub * 1.6
+      );
+      ctx.restore();
+    }
 
     // Divisor interativo de painel (arrastável) — mesmo acabamento do divisor do histograma
     const mainDividerActive =
@@ -2286,6 +2347,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     chartShift,
     showSignalArrows,
     orderValueMode,
+    assetWatermark,
   ]);
 
   // =========================================================================
@@ -2928,7 +2990,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* ========================================================================= */}
       {/* TIRA DE STATUS COMPACTA: sem botões (todos vivem na barra lateral)         */}
       {/* ========================================================================= */}
-      <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 h-9 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
+      <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
         <div className="flex items-center gap-2 min-w-0">
           {/* Abre a barra lateral de controles em telas pequenas */}
           <button
@@ -2946,7 +3008,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             <select
               value={chartSeries}
               onChange={(e) => onSeriesChange?.(e.target.value as ChartSeries)}
-              className="h-6 rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
+              className="h-[22px] rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
               title="Tipo de gráfico: Pontos (Renko) ou Range (variação de preço)"
             >
               <option value="renko">Pontos</option>
@@ -2961,7 +3023,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               <select
                 value={rangePoints}
                 onChange={(e) => onRangePointsChange?.(Number(e.target.value))}
-                className="h-6 rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
+                className="h-[22px] rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
                 title="Escala do Range em pontos (variação High-Low por barra)"
               >
                 {[10, 25, 50, 75, 100, 150].map((p) => (
@@ -3113,6 +3175,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             onManualOrder={onManualOrder}
             onClosePositionsSide={onClosePositionsSide}
             onClosePositions={() => onClosePositions?.()}
+            chartToolsOpen={chartToolsOpen}
+            onToggleChartTools={() => setChartToolsOpen((o) => !o)}
           />
         )}
 
@@ -3121,8 +3185,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         {/* ========================================================================= */}
 
         {/* ========================================================================= */}
-        {/* ENGRENAGEM DE AJUSTES: atalho no canto inferior direito que abre o painel  */}
-        {/* de exibição (tijolos/zoom/modo/escala do fluxo + legenda). Limpa a tela.     */}
+        {/* Engrenagem DE AJUSTES: o interruptor vive na linha da boleta; o painel abre aqui.   */}
+        {/* Painel de exibição (tijolos/zoom/modo/escala do fluxo + legenda). Limpa a tela.  */}
         {/* ========================================================================= */}
         {chartToolsOpen && (
           <div className="absolute bottom-11 right-2 z-30 w-[252px] rounded-lg bg-zinc-900/96 backdrop-blur-md border border-zinc-700/80 p-2.5 shadow-2xl pointer-events-auto select-none space-y-2.5">
@@ -3239,6 +3303,20 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               Escala do fluxo: {Math.round(scaleFlow * 100)}% · resetar
             </button>
 
+            {/* Marca-d'água do ativo: anexo opcional. A assinatura (sigla + série + vigente) mora
+                atrás dos tijolos; quem quer a tela limpa desanexa e a escolha fica guardada. */}
+            <button
+              onClick={toggleAssetWatermark}
+              className={`w-full h-7 rounded text-[10px] font-semibold border cursor-pointer transition-colors ${
+                assetWatermark
+                  ? 'bg-zinc-800 text-zinc-100 border-zinc-600'
+                  : 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:text-zinc-300'
+              }`}
+              title="Marca d'água do ativo aberto, desenhada atrás dos tijolos no painel de preço: sigla, produto e os dois códigos que definem o gráfico (série contínua e contrato vigente). Desligue para ficar só o gráfico cru."
+            >
+              Marca d'água: {assetWatermark ? `${asset.id} anexada` : 'desanexada'}
+            </button>
+
             {/* Legenda (antes no rodapé, agora dentro do painel) */}
             <div className="border-t border-zinc-800 pt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[9.5px] text-zinc-400">
               <div className="flex items-center gap-1">
@@ -3259,17 +3337,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             </div>
           </div>
         )}
-        <button
-          onClick={() => setChartToolsOpen((o) => !o)}
-          className={`absolute bottom-8 sm:bottom-2 right-[9px] sm:right-[18px] z-30 flex h-7 w-7 items-center justify-center rounded-md border backdrop-blur-sm shadow-lg pointer-events-auto cursor-pointer transition-colors ${
-            chartToolsOpen
-              ? 'bg-sky-500/25 text-sky-200 border-sky-500/50'
-              : 'bg-zinc-900/85 text-zinc-300 border-zinc-700/70 hover:text-white'
-          }`}
-          title="Ajustes do gráfico: tijolos, zoom, modo de tela, escala do fluxo e legenda"
-        >
-          <Settings className="w-4 h-4" />
-        </button>
+        {/* Engrenagem morava aqui, solta no canto inferior direito. O interruptor migrou para a
+            linha da boleta (ao lado do sininho de fixar) — o painel abaixo continua o mesmo, só
+            muda quem abre a porta. */}
 
         {/* ========================================================================= */}
         {/* BOX RENKO: HUD compacto em telas pequenas                                 */}
@@ -3308,7 +3378,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* ========================================================================= */}
       <div className="flex items-center justify-end px-3 sm:px-4 py-0.5 bg-zinc-950 border-t border-zinc-900 text-[9px] sm:text-[10px] text-zinc-600 font-mono shrink-0">
         <span className="truncate">
-          ⚙ Ajustes no canto inferior direito · arraste o gráfico para mover · réguas dão zoom Y/Fluxo · duplo clique auto-escala
+          Ajustes no ⚙ da linha da Boleta (o painel abre no canto inferior direito) · arraste o gráfico para mover · réguas dão zoom Y/Fluxo · duplo clique auto-escala
         </span>
       </div>
     </div>

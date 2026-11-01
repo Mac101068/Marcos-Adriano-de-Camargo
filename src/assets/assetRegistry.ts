@@ -39,8 +39,19 @@ export interface AssetSessionSpec {
 export interface AssetSpec {
   id: AssetId;
   label: string;
-  /** Código do contrato que o seletor grava no config e a ponte do MT5 usa (WIN$N, WDO$N...). */
+  /**
+   * SÉRIE CONTÍNUA do MT5 ('WIN$N', 'WDO$N'): emenda vencimentos, então é o código que serve
+   * para TESTE LONGO (replay de dias, coletor de eficiência). É também o padrão do config.
+   */
   primarySymbol: string;
+  /**
+   * CONTRATO VIGENTE — o papel específico do pregão de hoje ('WINZ26'). É o que a corretora
+   * mostra na conta e o que o gráfico abre quando você opera o real. Rolou o vencimento? Troca
+   * aqui (ou digita o novo na tela de Parâmetros). `undefined` = vencimento ainda não confirmado.
+   */
+  activeContract?: string;
+  /** Texto miúdo da marca-d'água do gráfico (nome curto do produto, sem duplicar a sigla). */
+  watermarkCaption: string;
   /** Prefixos de código B3/MT5 do ativo: casa 'WIN$N', 'WINZ26', 'WDO$N', 'WBRA10'... */
   prefixes: string[];
   /** R$ por ponto, por contrato. WIN = 0,20 | WDO = 0,10. */
@@ -70,6 +81,9 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
     id: 'WIN',
     label: 'Mini Índice (WIN)',
     primarySymbol: 'WIN$N',
+    // Vencimento informado pelo operador (o mesmo do basePrice abaixo). Dez/2026.
+    activeContract: 'WINZ26',
+    watermarkCaption: 'Mini Índice · B3',
     prefixes: ['WIN'],
     pointValue: 0.2,
     tickSize: 5,
@@ -93,6 +107,9 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
     id: 'WDO',
     label: 'Mini Dólar (WDO)',
     primarySymbol: 'WDO$N',
+    // Sem vencimento declarado: o spec é 'a_confirmar' e inventar código de vencimento aqui
+    // levaria o operador a assinar um gráfico que não existe na corretora.
+    watermarkCaption: 'Mini Dólar · B3',
     prefixes: ['WDO', 'DOL'],
     pointValue: 0.1,
     tickSize: 0.5,
@@ -117,6 +134,7 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
     // 'BIT$N' é o código que o seletor grava HOJE; o exato do produto B3 (BIT x WBRA) ainda
     // será confirmado na corretora junto com o resto do spec.
     primarySymbol: 'BIT$N',
+    watermarkCaption: 'Bitcoin B3',
     prefixes: ['BTC', 'BIT', 'WBRA'],
     // Placeholder declarado (não é chute "oficial": nenhum código consome este ativo na Fase 1).
     // O contrato WBRA é fracionário e o ponto em R$ varia com a especificação da B3/corretora.
@@ -169,6 +187,69 @@ export function resolveAsset(symbol?: string | null, assetId?: AssetId | null): 
     }
   }
   return ASSETS[DEFAULT_ASSET_ID];
+}
+
+/**
+ * PAPEL DE UM SÍMBOLO — a tela precisa dizer QUAL dos dois códigos é cada um, porque eles são
+ * equivalentes (mesmo ativo, mesmos R$/ponto) mas servem a coisas diferentes:
+ * - 'serie': contínua ('WIN$N') — emenda vencimentos, é a que presta para teste longo;
+ * - 'vigente': o contrato do pregão de hoje ('WINZ26') — o que a corretora tem na conta;
+ * - 'outro': um vencimento digitado à mão que não é o declarado no registro.
+ */
+export type SymbolRole = 'serie' | 'vigente' | 'outro';
+
+export function symbolRole(asset: AssetSpec, symbol?: string | null): SymbolRole {
+  const raw = (symbol || '').toUpperCase().trim();
+  if (!raw || raw === asset.primarySymbol.toUpperCase()) return 'serie';
+  if (asset.activeContract && raw === asset.activeContract.toUpperCase()) return 'vigente';
+  return raw.includes('$') ? 'serie' : 'outro';
+}
+
+export const SYMBOL_ROLE_LABEL: Record<SymbolRole, string> = {
+  serie: 'série',
+  vigente: 'vigente',
+  outro: 'venc.',
+};
+
+/**
+ * Os dois códigos que determinam o gráfico aberto, sempre lado a lado e sempre rotulados.
+ * `live` é o que a ponte subscreve de verdade (o config manda, com fallback na contínua);
+ * `series` e `active` são os papéis declarados no registro — `active` pode estar vazio num
+ * spec ainda não homologado, e aí a tela diz "a confirmar" em vez de inventar vencimento.
+ * `tokens` é a lista completa (a série, o vigente e — quando o config estiver num código que
+ * não é nenhum dos dois — esse código na frente); `others` é a mesma lista sem o vivo, para
+ * onde só interessa o outro caminho. Um símbolo nunca aparece duas vezes na mesma linha.
+ */
+export interface SymbolToken {
+  sym: string;
+  role: SymbolRole;
+}
+
+export function assetSymbols(asset: AssetSpec, configSymbol?: string | null): {
+  live: string;
+  liveRole: SymbolRole;
+  series: string;
+  active: string | null;
+  tokens: SymbolToken[];
+  others: SymbolToken[];
+} {
+  const live = (configSymbol || '').trim() || asset.primarySymbol;
+  const liveUpper = live.toUpperCase();
+  const tokens: SymbolToken[] = [
+    { sym: asset.primarySymbol, role: 'serie' },
+    ...(asset.activeContract ? [{ sym: asset.activeContract, role: 'vigente' as SymbolRole }] : []),
+  ];
+  if (!tokens.some((t) => t.sym.toUpperCase() === liveUpper)) {
+    tokens.unshift({ sym: live, role: symbolRole(asset, live) });
+  }
+  return {
+    live,
+    liveRole: symbolRole(asset, live),
+    series: asset.primarySymbol,
+    active: asset.activeContract ?? null,
+    tokens,
+    others: tokens.filter((t) => t.sym.toUpperCase() !== liveUpper),
+  };
 }
 
 /** Pontos → R$ da posição. É o que substitui o `pts * 0.2 * contratos` espalhado pelo app. */

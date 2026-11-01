@@ -15,6 +15,8 @@ import {
   isStaleOrderPrice,
   referencePrice,
   rememberLastPrice,
+  assetSymbols,
+  SYMBOL_ROLE_LABEL,
   type AssetId,
   type AssetSpec,
 } from './assets/assetRegistry';
@@ -142,6 +144,13 @@ export default function App() {
    * no app escreve `* 0.2` ou `128500`.
    */
   const asset = React.useMemo(() => resolveAsset(config.symbol, config.assetId), [config.symbol, config.assetId]);
+  /**
+   * Os dois códigos que determinam o gráfico aberto, sempre rotulados pelo papel: a SÉRIE contínua
+   * ('WIN$N', emenda vencimentos — é a que presta para teste longo) e o VIGENTE ('WINZ26', o papel
+   * do pregão de hoje). `live` é o que a ponte subscreve de verdade. Cabeçalho e tira de status lêem
+   * deste memo, então os dois lados da tela nunca podem discordar.
+   */
+  const assetSyms = React.useMemo(() => assetSymbols(asset, config.symbol), [asset, config.symbol]);
   const [isSimulating, setIsSimulating] = useState<boolean>(true);
   const [simulationSpeed, setSimulationSpeed] = useState<number>(() => {
     const saved = Number(localStorage.getItem('fluxo_sim_speed_v1'));
@@ -3090,11 +3099,12 @@ export default function App() {
         assetId={asset.id}
         onSelectAsset={handleSelectAsset}
         mt5SymbolOk={mt5SymbolOk}
+        liveSymbol={assetSyms.live}
       />
 
       {/* Tira de Métricas e Status Rápido — a esquerda rola sozinha e o PnL fica SEMPRE à vista
           (antes, com o replay na linha, o conteúdo estourava a largura e o PnL sumia da tela) */}
-      <div className="flex items-center gap-3 px-3 sm:px-6 py-1.5 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono">
+      <div className="flex items-center gap-2.5 px-3 sm:px-6 py-0.5 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono">
         <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1 overflow-x-auto no-scrollbar">
           {/* ── REPLAY DO SIMULADOR (discreto, na cor apenas a setinha) ──
               Roda o histórico desde a PRIMEIRA barra (mínimo 1 dia) desenhando o período
@@ -3200,8 +3210,29 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <span className="text-slate-400">Ativo:</span>
-            <span className="text-slate-100 font-bold">{config.symbol || asset.primarySymbol}</span>
+            {/* Os dois códigos do gráfico aberto, cada um com o seu papel — antes um "Ativo:" solto
+                deixava a dúvida se o que estava na tela era a série contínua ou o contrato vigente. */}
+            <span className="text-slate-400">Gráfico:</span>
+            <span className="text-slate-100 font-bold">{assetSyms.live}</span>
+            <span className="text-[9px] uppercase tracking-wider text-slate-600">
+              {SYMBOL_ROLE_LABEL[assetSyms.liveRole]}
+            </span>
+            {/* O outro caminho do MESMO ativo, sem repetir o que já está aberto: é ele que se troca
+                para rodar teste longo na contínua ou para operar o papel vigente da conta. */}
+            <span
+              className="text-slate-500 hidden sm:inline"
+              title={
+                `Série contínua ${assetSyms.series}: emenda vencimentos — os testes longos rodam nela.\n` +
+                (assetSyms.active
+                  ? `Contrato vigente ${assetSyms.active}: o papel do pregão de hoje, na conta.
+`
+                  : 'Vencimento vigente ainda a confirmar neste ativo.\n') +
+                `Aberto agora: ${assetSyms.live} (${SYMBOL_ROLE_LABEL[assetSyms.liveRole]}).`
+              }
+            >
+              {assetSyms.others.map((t) => `· ${t.sym} ${SYMBOL_ROLE_LABEL[t.role]}`).join(' ')}
+              {!assetSyms.active && !assetSyms.others.length && '· venc. a confirmar'}
+            </span>
             <span className="text-emerald-400 font-semibold">{currentPrice.toLocaleString('pt-BR')} pts</span>
             {/* Spec não homologado: o aviso fica na tira o tempo todo, não só no dropdown, porque um
                 R$/ponto errado contamina PnL e a trava financeira em dinheiro real. */}
@@ -3346,8 +3377,9 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
         </div>
       </div>
 
-      {/* Conteúdo Principal com compensação inferior no celular */}
-      <main className="flex-1 min-h-0 p-1.5 sm:p-3 pb-16 lg:pb-3 bg-slate-950 overflow-hidden">
+      {/* Conteúdo Principal com compensação inferior no celular. Moldura de 2px/4px: as três
+          faixas do topo já comem altura e o gráfico precisa respirar na vertical. */}
+      <main className="flex-1 min-h-0 p-0.5 sm:p-1 pb-16 lg:pb-1 bg-slate-950 overflow-hidden">
         {!AuthService.isSubscriptionActive(currentUser) && currentUser.role !== 'ADMIN' ? (
           <div className="h-full w-full overflow-y-auto">
             <SubscriptionPaywall
