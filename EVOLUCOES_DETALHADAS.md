@@ -177,6 +177,8 @@ faixa inteira do topo (`left-2 right-2`) com botões de 30px de altura — grand
   (reaproveitando o `openPnL` que o gráfico já calculava para a barra de status).
 - **Modo Pirâmide não inventa número**: com `strategyMode === 'PYRAMID_FLOW_CONFLUENCE'` a linha vira
   `Surfe (sem fixo)` e o risco em R$ some, porque a Ordem Mãe real tem `stopLoss = 0` / `takeProfit = 0`.
+  (Estado em 31/10; a partir de 8.10/8.12 as linhas do Stop e do Alvo viraram steppers editáveis também na
+  Pirâmide — vale para pirâmides, ordens manuais e para o script.)
 - **Selo `MT5` × `SIM`** no cabeçalho, para o clique nunca ser ambíguo sobre ir ou não à corretora.
 - **Posição**: `absolute top-2` com `right` vindo do prop `rightOffset` — 96px no desktop, 62px abaixo de
   640px — porque a régua de preços do eixo Y tem 64px (desktop) / 46px (mobile) e a boleta nunca pode
@@ -766,6 +768,13 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 
 ## 🧭 Pendências e próximos passos conhecidos
 
+- ✅ **Commit `89a5bb1`** — "feat: boleta-base editavel + livro de hedge + Estudio lendo a boleta (Ciclo
+  8.9–8.13)": 11 arquivos, **1.657 inserções / 798 remoções** — código (App, BoletaTicket, RenkoFlowChart,
+  ChartControlSidebar, AutomationPanel, StrategyStudio, pythonScriptGenerator) mais a documentação desta
+  consolidação, e `CHAT_SEED.md` (o prompt real de continuidade) entrou no versionamento — até então só
+  existia na máquina. Enviado a `origin/main` em 01/11/2026 depois de `npx tsc --noEmit` limpo, `npx vite
+  build` OK, `python3 -m py_compile` no script gerado (1.332 linhas, com `close_all_positions(side)`) e
+  verificação por browser (persistência Stop/Parcial, ZERAR TUDO bilateral, "Puxar da boleta", console limpo).
 - 📍 **PONTO DE RETOMADA — 01/11/2026 (fim do dia produtivo)**: a boleta do gráfico É a base editável das
   estratégias (seis linhas com stepper `[− input +]`: Contratos, Stop, Alvo, Parcial, Break even, Trailing —
   tudo persistido em `fluxo_renko_ea_config_v3`), o livro de hedge vive na boleta com ZERAR C/V lado a lado
