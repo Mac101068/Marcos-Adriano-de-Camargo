@@ -234,7 +234,8 @@ npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migraç
   tira de status mostrando **os dois códigos rotulados** (`WIN$N série` · `WINZ26 vigente`, vivo destacado;
   `Gráfico:` no lugar de `Ativo:`), **marca d'água** por ativo atrás dos tijolos e as três faixas do topo
   apertadas. Verificado por tsc + build + browser (boleta 8/8) + 12 asserts headless dos símbolos
-  (diário §9.1–9.5). **Voltar por**: (1) 🧪 medir ao vivo as alturas das faixas e a leitura da marca d'água
+  (diário §9.1–9.5; tudo no commit `29bfab7`, 10 arquivos / 780 inserções). **Voltar por**:
+  (1) 🧪 medir ao vivo as alturas das faixas e a leitura da marca d'água
   (a ponte do browser caiu antes dessa medição); (2) decidir se o config deve gravar a série contínua ou o
   vigente ao trocar de ativo (padrão atual: `WIN$N`); (3) alinhamentos da boleta-base — Pirâmide usa
   `pyramidTpPoints` e não obedece ao Alvo da boleta, gatilho do trailing (`trailingActivationPoints`) ainda

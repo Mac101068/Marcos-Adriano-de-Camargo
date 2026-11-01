@@ -945,6 +945,13 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
   existia na máquina. Enviado a `origin/main` em 01/11/2026 depois de `npx tsc --noEmit` limpo, `npx vite
   build` OK, `python3 -m py_compile` no script gerado (1.332 linhas, com `close_all_positions(side)`) e
   verificação por browser (persistência Stop/Parcial, ZERAR TUDO bilateral, "Puxar da boleta", console limpo).
+- ✅ **Commit `29bfab7`** — "feat: refino visual do Ciclo 9 — boleta em camadas, os dois códigos do ativo
+  e marca d'água": 10 arquivos, **780 inserções / 185 remoções** — código (`index.html`, `App.tsx`,
+  `assetRegistry.ts`, `BoletaTicket.tsx`, `Header.tsx`, `RenkoFlowChart.tsx`, `SubscriptionStatusBadge.tsx`)
+  mais a consolidação dos três docs (`EVOLUCOES_DETALHADAS.md`, `PROJECT_SUMMARY.md`, `CHAT_SEED.md`).
+  Enviado a `origin/main` em 01/11/2026 depois de `npx tsc --noEmit` limpo e `npx vite build` ✓ 3.13s, com a
+  boleta conferida no navegador (8/8) e os símbolos conferidos headless (12 asserts, `npx tsx`). Ficou
+  pendente a medição ao vivo das faixas e dos pixels da marca d'água (ponte do browser caída na sessão).
 - 📍 **PONTO DE RETOMADA — 01/11/2026 (fim do Ciclo 9, refino visual)**: a boleta está em camadas —
   título âmbar com ⚙ dos ajustes do gráfico e 📌 de fixar na própria linha (sem selo SIM/MT5), e os seis
   steppers da base vivem dentro da sub-caixa recolhível **Parâmetros** (`fluxo_boleta_params_open_v1`);
