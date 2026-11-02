@@ -3,16 +3,18 @@
 Você está assumindo o projeto **Fluxo & Renko 10R - MT5 Quant Terminal**: aplicação web de trading
 quantitativo que hoje roda no Mini-Índice B3 (`WIN$`) e está preparada para multi-mercado (WDO e BTC
 já têm linha no registro, mas seguem **`a_confirmar`**), enviando ordens automatizadas ao MetaTrader 5
-por uma ponte WebSocket em Python. **Fase atual: Ciclo 10 consolidado — Robô 2 na sombra (segundo
-robô em papel com escala própria 15R/20R/25R) entregue e validada por espelho headless, mais o
-pente-fino da escala (rótulos "10R" lidos do box) e o contrato vigente no gráfico; próximo marco é a
-validação na conta demo da XP** (a ponte ainda nunca rodou contra a corretora de verdade).
+por uma ponte WebSocket em Python. **Fase atual: Ciclo 12 consolidado — o terminal agora acorda
+parado e vazio (regra do operador), o limiar de sinal é calculado do próprio pregão (P60), o relógio
+do pregão só bloqueia ordens reais e replay (simulador ao vivo roda 24h), o balão ⚠ explica qualquer
+inação sem piscar, os navegadores interno/externo se sincronizam por um JSON e estratégia removida
+limpa as referências órfãs dos dois robôs** (a ponte ainda nunca rodou contra a corretora de verdade
+— validação na demo XP segue o próximo marco).
 
 ## 0. QUEM É O USUÁRIO E COMO TRABALHAR
 - Brasileiro, iniciante em programação. **Toda a UI, comentários e documentação em português.**
 - Duas máquinas: **Mac** (aqui, onde o código é editado) e **Windows** (MT5 + conta demo XP, onde roda
   o script Python da ponte). Testa também no **celular Android via LAN**.
-- Servidor: `npm run dev` na **porta 3002** com `--host=0.0.0.0` (para abrir de outros aparelhos).
+- Servidor: `npm run dev` na **porta 3000** com `--host=0.0.0.0` (para abrir de outros aparelhos).
 - Regras fixas:
   1. Rodar `npx tsc --noEmit` ao final de cada entrega (e `npx vite build` quando mexer no gráfico/canvas).
   2. **Simulação, Coletor, Replay e Robôs Sombra jamais podem tocar a corretora real.**
@@ -31,11 +33,30 @@ validação na conta demo da XP** (a ponte ainda nunca rodou contra a corretora 
   9. **Marca d'água é contexto, não dado** (Ciclo 9): desenhada depois do fundo e antes da grade/tijolos,
      dentro do `clip()` do painel de preço (não pode sangrar para a régua nem para o vão da boleta), e é
      anexo opcional do operador. Dados do gráfico continuam tendo legenda própria.
+  10. **O terminal acorda PARADO e VAZIO** (Ciclo 12): nada pode se auto-iniciar no mount — nem feed
+     sintético, nem replay, nem "semeadura" de ticks no gráfico. Mercado só anda por comando manual
+     (▶ SIM, seta do replay, conectar MT5, bot demo) — e **ligar o Robô (On) conta como comando e liga
+     o feed SIM**. Ao mexer em effects de mount, auditar se algo dispara sozinho.
+  11. **Relógio do pregão só bloqueia ordens REAIS e replay** (Ciclo 12): janela 08:55–17:30 e zeragem
+     17:30 valem para MT5 conectado e para a sessão simulada do replay; o **simulador ao vivo roda 24h**
+     sem portão de horário. A chave única é `setEnforceTimeGates` (`sessionRules.ts`), virada pelo App
+     em `[isReplaying, mt5State.status]`; coletor/sombra herdam pelas mesmas funções puras — nunca criar
+     um segundo caminho de checagem de horário.
+  12. **Limiar de sinal é CALCULADO, não físico** (Ciclo 12): com adaptativo ligado, o corte é o
+     percentil **P60 dos |Δ| do próprio lado** nos últimos boxes (`SessionRegimeMeter.getPercentileLimit`);
+     `minDeltaThreshold` é só aquecimento/fallback. Qualquer regra nova de limiar deve nascer da
+     estatística da sessão, e o motivo impresso no trade diz de onde o número veio.
+  13. **A tela nunca pode mentir sobre por que não operou** (Ciclo 12): todo bloqueio/espera vira frase
+     honesta no balão ⚠ (`gateReasons`), com números quando existirem e **anti-pisca** (laudo de sinal
+     só em jejum ≥5 dos últimos 6 boxes). Estratégia removida limpa referências órfãs (Robô 1 por nome,
+     Robô 2 por id) e o modal de exclusão diz quem está rodando aquilo. Sincronismo entre navegadores é
+     o pacote `fluxo_terminal_sync` do Estúdio (upsert por id, config aplicado com `active: false`).
 
 ## 1. PILARES DA ESTRATÉGIA
 1. **Renko 10R = 50 pontos** por box; reversão exige 2 boxes (100 pts); corpo 100% sólido
    (`#10b981` / `#ef4444`), pavios centralizados; aproximação temporal progressiva dos boxes.
-2. **Fluxo tick-a-tick**: delta por box, CVD, filtro `minDeltaThreshold` (ex.: 250 contratos).
+2. **Fluxo tick-a-tick**: delta por box, CVD, e filtro de Δ **calculado do pregão** — P60 dos |Δ| do
+   próprio lado nos últimos boxes (Ciclo 12); `minDeltaThreshold` (ex.: 100–250 contratos) só aquecimento/fallback.
 3. **Duas estratégias selecionáveis** — os valores-gestão (Contratos, Stop, Alvo, Parcial, Break even,
    Trailing) são editados **na boleta do gráfico**, que é a base; o Estúdio lê esses valores ("Puxar da
    boleta"):
@@ -147,6 +168,14 @@ validação na conta demo da XP** (a ponte ainda nunca rodou contra a corretora 
   `HISTORY_DONE{reqId,count,volumeSource,days}` ou `HISTORY_ERROR{reqId,reason}`. `copy_ticks_range` dentro
   de `asyncio.to_thread` com **teto de 10 dias**; se ≥80% dos ticks vierem com `volume = 0`, o script
   distribui o `tick_volume` da barra **M1** (sem volume, CVD/delta/convergência morrem em silêncio).
+- **Identidade por robô (Fase 2, Ciclo 11)** — não regredir: toda `ORDER_SEND` carimba `magic`
+  (Robô 1 = `config.magicNumber`, fallback 101010 · Boleta manual = `MANUAL_ORDER_MAGIC` 999999 — tudo
+  em `src/types/trading.ts`); as saídas do robô enviam `robotMagic` e a ponte filtra por `pos.magic`;
+  o **ZERAR C/V/TUDO da boleta NUNCA filtra** (botão de emergência fecha tudo); `ACCOUNT_INFO` reporta
+  `robotMagic`/`manualMagic`/`pointValue` e o app avisa "MAGIC DIVERGENTE (APP × SCRIPT)". Retrocompatível
+  nos dois sentidos (app velho × script novo e vice-versa). A sombra (Robô 2) **não tem magic de propósito**.
+  Armadilha: o script gerado é um template literal JS — **backticks no texto gerado quebram o `tsc`**;
+  use aspas simples.
 - Token: `src/utils/bridgeSecurity.ts`, 28 caracteres via `crypto.getRandomValues`, chave
   **`fluxo_bridge_token_v1`** — **deliberadamente fora do `AutomationConfig`** para preset/import JSON
   nunca sobrescreverem nem exportarem o segredo. UI no card "Segurança da Ponte" (aba Guia) com mostrar,
@@ -210,6 +239,7 @@ src/
 scripts/strategyLab.ts           # laboratório headless das duas estratégias (+ CSV de veredito)
 scripts/renkoBoxScaleAssert.ts   # assert: escala do box × rótulo anunciado (nunca "10R" soldado)
 scripts/chartContractAssert.ts   # assert: migração contínua → vigente (inclusive os casos "não reescreve")
+scripts/robotMagicAssert.ts      # assert: placas de magic (app + script gerado) e R$/ponto por ativo
 ```
 
 Chaves de `localStorage`: `fluxo_renko_ea_config_v3` (com `assetId` e `shadowRobot`), `fluxo_renko_ea_profiles_v3`,
@@ -235,8 +265,9 @@ flags de migração `fluxo_asset_base_171500_v1`, `fluxo_asset_selection_v1`, `f
 ## 4. DOCUMENTAÇÃO
 - `PROJECT_SUMMARY.md` — estado atual consolidado (regras, arquitetura, árvore de arquivos).
 - `EVOLUCOES_DETALHADAS.md` — diário de obra por ciclo, com causa raiz, implementação e verificação
-  (último ciclo: **10 — §10.1–10.6**, Robô 2 na sombra com escala própria + pente-fino da escala +
-  contrato vigente no gráfico; antes dele **9 — §9.1–9.5**, boleta em camadas e marca d'água).
+  (último ciclo: **11 — §11.1–11.5**, Fase 2 do multi-robô: placa de magic por robô + filtro na ponte +
+  R$/ponto por ativo; antes dele **10 — §10.1–10.6**, Robô 2 na sombra com escala própria + pente-fino
+  da escala + contrato vigente no gráfico, e **9 — §9.1–9.5**, boleta em camadas e marca d'água).
 - `PROJECT_CONSOLIDATION_CHAT_SEED.md` — ponteiro/índice; **este arquivo (`CHAT_SEED.md`) é o prompt**.
 - `CHAT_SEED_CICLO_10.md` — seed do Ciclo 10: résumé da evolução e **tarefas da próxima conversa**
   (colar sozinho ou depois deste).
@@ -245,13 +276,42 @@ flags de migração `fluxo_asset_base_171500_v1`, `fluxo_asset_selection_v1`, `f
 ```bash
 npx tsc --noEmit          # tem que sair limpo em toda entrega
 npx vite build            # quando mexer em canvas/estilos
-npm run dev               # porta 3002, --host=0.0.0.0
+npm run dev               # porta 3000, --host=0.0.0.0
 npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migrações, motores): o script
                           # temporário roda contra os módulos reais e é apagado depois da entrega
 ```
 
 ## 6. PENDÊNCIAS ABERTAS
-- 📍 **PONTO DE RETOMADA (fim do Ciclo 10, 02/11/2026)**: existe o **Robô 2 (sombra)** — segundo robô
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 12, 02/11/2026)**: **terminal confiável por construção** —
+  acorda parado e vazio (boot de 350 ticks e replay automático deletados; On do Robô liga o feed SIM),
+  limiar **P60 calculado do pregão** (`getPercentileLimit` em `sessionRegime.ts`, ligado no
+  `convergenceEvaluator.ts` com `SESSION_PERCENTILE=0.6`), **interruptor de regime** `setEnforceTimeGates`
+  (`sessionRules.ts`): simulador ao vivo roda 24h, janela/zeragem só para MT5 conectado e replay
+  (coletor/sombra herdam), balão ⚠ com laudo honesto anti-pisca (`MERCADO PARADO`, `SINAL FRACO HÁ N
+  BOXES`, `SÉRIE SEM ROBÔ`, `RETESTE ESPERANDO CVD`, netting/teto hedge), **sincronismo entre
+  navegadores** (`fluxo_terminal_sync` no Estúdio: Exportar/Importar tudo, upsert por id, config
+  aplicado com `active: false`) e **varredura de órfãos** (sombra desliga com estratégia removida,
+  `profileName` limpo, modal de exclusão verdadeiro, `(removida)` em âmbar no painel). Verificado:
+  tsc + build + 3 asserts + bancadas headless (regimes de horário; P60=130 em sessão Δs 10→200).
+  **Voltar por**: (1) 🧪 conferir em tela — boleta enchendo com P60, balão estático, sincronismo
+  interno↔externo com um arquivo, modal honesto; (2) se o operador pedir: percentil ajustável nos
+  Ajustes (P50–P80, campo `adaptiveDeltaPercentile`); (3) conferências herdadas dos Ciclos 10/11
+  (replay espelhado, F5 da sombra com principal OFF, overflow do chip, toast de divergência de magic);
+  (4) validação na demo XP; (5) repiquete contínua × vigente no config; (6) homologar WDO/BTC.
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 11, 02/11/2026 — superado pelo ponto acima, mantido como histórico)**: **Fase 2 do multi-robô entregue** — cada ordem
+  carrega placa de magic (Robô 1 = `config.magicNumber` · Boleta manual = 999999, placas em
+  `src/types/trading.ts`), as saídas automáticas da ponte filtram por `pos.magic`, o ZERAR da boleta
+  segue fechando tudo (emergência), `ACCOUNT_INFO` reporta placa e R$/ponto com toast de divergência
+  APP × SCRIPT, e a contabilidade em R$/ponto respeita o ativo (ponte `ASSET_POINT_VALUE`,
+  `PaperStrategyBot.setAsset()`, coletor e sombra). Corrigido de brinde o `contracts=CONTRACTS`
+  (NameError histórico do script gerado → `MAIN_CONTRACTS`). Verificado: tsc limpo, build OK (2,80 s),
+  `npx tsx` nos três asserts (`robotMagicAssert` novo, `renkoBoxScaleAssert`, `chartContractAssert`),
+  `python3 -m py_compile` nos .py gerados WIN e WDO (diário §11.1–11.5). **Voltar por**:
+  (1) 🧪 quatro conferências no navegador — as três herdadas do Ciclo 10 (replay espelhado, F5 da sombra
+  com principal OFF, overflow do chip) + o toast de divergência de magic; (2) commit do ciclo, quando
+  o operador pedir; (3) validação na demo XP — a ponte agora isola robô × manual por magic; (4) conferir
+  a migração do vigente no navegador; (5) repiquete: contínua × vigente no config ao trocar de ativo.
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 10, 02/11/2026 — superado pelo ponto acima, mantido como histórico)**: existe o **Robô 2 (sombra)** — segundo robô
   em papel com estratégia da biblioteca, escala própria (15R/20R/25R), motor/CVD/regime exclusivos,
   livro/curva/CSV próprios (`shadowRobotService` + chip `+ Sombra` na tira + janela flutuante + seção
   no Comparativo + bloco em Parâmetros + botão no menu mobile). Roda ao vivo, no replay e com o
@@ -261,9 +321,10 @@ npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migraç
   espelho sombra×coletor idêntico (271 boxes / 269 trades), persistência F5, normalize sanitizando
   lixo, WIN→WDO rederivando o box, tsc + build limpos (diário §10.1–10.6). **Voltar por**:
   (1) 🧪 as três conferências no navegador que ficaram pendentes (espelhamento visual do replay, F5
-  com o principal OFF, overflow do chip no celular); (2) **Fase 2 do multi-robô real** — `magicNumber`
-  por robô + filtro na ponte/auditoria (sem isso, sombra jamais vira ordem real no mesmo símbolo);
-  (3) `POINT_VALUE_BRL` por ativo no script gerado (hoje soldado em R$0,20 — só WIN); (4) conferir a
+  com o principal OFF, overflow do chip no celular — seguem pendentes, somou-se o toast de magic);
+  (2) ✅ **entregue no Ciclo 11** — Fase 2 do multi-robô, `magicNumber` por robô + filtro na
+  ponte/auditoria; (3) ✅ **entregue no Ciclo 11** — `POINT_VALUE_BRL` por ativo no script gerado e nos
+  robôs de papel; (4) conferir a
   migração do vigente no navegador (ainda não vista em tela); (5) validação na demo XP (abaixo).
 - 📍 **PONTO DE RETOMADA (fim do Ciclo 9, 01/11/2026 — superado pelo ponto acima, mantido como histórico)**: boleta em camadas (título âmbar + ⚙ dos ajustes
   do gráfico na linha do título + 📌 + ⌄, sem selo SIM/MT5 e sem linha `Preço`; sub-caixa recolhível

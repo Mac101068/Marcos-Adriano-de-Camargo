@@ -665,9 +665,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // MARCA D'ÁGUA DO ATIVO — a assinatura do gráfico aberto, desenhada ANTES da
     // grade e dos tijolos para ficar por baixo de tudo, e recortada na área de
     // desenho (0..plotRight) para nunca invadir a régua de preços nem a faixa da
-    // boleta. Cada ativo tem a sua: sigla, produto e os dois códigos que definem
-    // o que está aberto (série contínua x contrato vigente). Ligada/desligada na
-    // engrenagem, por gosto do operador.
+    // boleta. Um código só no corpo: o contrato que o gráfico realmente abre
+    // (vigente do pregão; contínua quando não há vencimento confirmado).
+    // Ligada/desligada na engrenagem, por gosto do operador.
     // =========================================================================
     if (assetWatermark) {
       ctx.save();
@@ -676,9 +676,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.clip();
       const wmCx = plotRight / 2;
       const wmCy = pricePaneHeight / 2;
+      const wmText = chartSymbolFor(asset).toUpperCase();
       // Corpo proporcional ao painel, com piso e teto: em monitor grande a sigla não pode
-      // virar anúncio; em janela miúda não pode sumir.
-      const wmMonogram = Math.max(38, Math.min(140, pricePaneHeight * 0.34, plotRight * 0.2));
+      // virar anúncio; em janela miúda não pode sumir. O teto horizontal agora é dividido
+      // pelo comprimento do código (WINZ26 tem o dobro de letras de WIN) para a marca ocupar
+      // a mesma mancha visual de antes.
+      const wmMonogram = Math.max(30, Math.min(140, pricePaneHeight * 0.34, (plotRight * 0.5) / (wmText.length * 0.62)));
       const wmSub = Math.max(9, Math.min(15, wmMonogram * 0.16));
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -687,20 +690,18 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       // vira legenda: ela é contexto, não dado.
       ctx.fillStyle = 'rgba(255,255,255,0.13)';
       ctx.font = `700 ${wmMonogram}px "Plus Jakarta Sans", sans-serif`;
-      ctx.fillText(asset.id, wmCx, wmCy - wmMonogram * 0.2);
+      ctx.fillText(wmText, wmCx, wmCy - wmMonogram * 0.2);
       ctx.fillStyle = 'rgba(255,255,255,0.11)';
       ctx.font = `600 ${wmSub}px "Plus Jakarta Sans", sans-serif`;
       ctx.fillText(asset.watermarkCaption.toUpperCase(), wmCx, wmCy + wmMonogram * 0.3);
-      ctx.fillStyle = 'rgba(255,255,255,0.1)';
-      ctx.font = `${Math.max(8, wmSub - 1)}px "JetBrains Mono", monospace`;
-      // Spec sem vencimento declarado não pode assinar "vigente" atrás de um código que não existe:
-      // a linha diz o papel que o registro realmente confirma. Um código só: listar a série
-      // contínua aqui era texto de teste no meio da tela do operador.
-      ctx.fillText(
-        `${chartSymbolFor(asset)} · ${asset.activeContract ? 'vigente' : 'vencimento a confirmar'}`,
-        wmCx,
-        wmCy + wmMonogram * 0.3 + wmSub * 1.6
-      );
+      // Spec sem vencimento declarado avisa atrás dos tijolos (não pode assinar em silêncio um
+      // código que a corretora ainda não confirmou). Com vigente, o código do corpo já basta —
+      // a linha miúda de papel ("VIGENTE") saiu por pedido do operador.
+      if (!asset.activeContract) {
+        ctx.fillStyle = 'rgba(255,255,255,0.1)';
+        ctx.font = `${Math.max(8, wmSub - 1)}px "JetBrains Mono", monospace`;
+        ctx.fillText('VENCIMENTO A CONFIRMAR', wmCx, wmCy + wmMonogram * 0.3 + wmSub * 1.6);
+      }
       ctx.restore();
     }
 

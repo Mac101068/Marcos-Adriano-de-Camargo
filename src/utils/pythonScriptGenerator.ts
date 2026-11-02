@@ -51,6 +51,12 @@ ARQUITETURA (2 máquinas na mesma rede Wi-Fi):
      - Tetos de risco: ${config.mt5MaxContractsPerOrder || 2} contrato(s) por ordem e
        ${config.mt5MaxOrdersPerMinute || 12} ordem(s) de entrada por minuto.
      - Toda tentativa recusada aparece no console com o IP de origem.
+  4b. IDENTIDADE POR ROBÔ (magic): cada entrada carimba o magic de quem mandou — Robô 1 com
+     o magic do Ajustes (${config.magicNumber || 102030}), Boleta manual com \${MANUAL_ORDER_MAGIC}.
+     As saídas automáticas do robô (inversão de fluxo, zeragem de horário) só tocam posições
+     com o magic DO ROBÔ; suas ordens manuais ficam intactas. O "ZERAR TUDO" da boleta continua
+     zerando TUDO na conta (inclusive outro robô que um dia rodar nesta ponte): é o botao de
+     emergencia do operador.
   5. HISTÓRICO REAL: o app pode pedir {"action": "REQUEST_HISTORY", "reqId", "symbol", "days"}
      (teto de 10 dias corridos por pedido) e recebe os ticks de mt5.copy_ticks_range em chunks
      HISTORY_CHUNK + HISTORY_DONE. A chamada bloqueante vai para uma thread, então o feed ao vivo
@@ -132,6 +138,9 @@ MAX_DAILY_TRADES = ${config.maxDailyTrades || 10}
 
 # IDENTIFICAÇÃO DO EA DETERMINADA PELO OPERADOR
 MAGIC_NUMBER = ${config.magicNumber || 102030}
+# Magic das ordens da BOLETA MANUAL (robô nenhum pode mexer nelas; o app carrega o mesmo número
+# em types/trading.ts — MANUAL_ORDER_MAGIC). Mantenha igual dos dois lados.
+MANUAL_ORDER_MAGIC = 999999
 ORDER_COMMENT = "${config.orderComment || 'Renko10R_Flow'}"
 
 # JANELA DE HORÁRIOS CONFIGURADA PELO OPERADOR (DAY TRADE B3)
@@ -621,8 +630,9 @@ class MT5OrderManager:
         })
         return True, res.order, limit_price
 
-    def place_websocket_limit_order(self, signal, limit_price, comment="", volume=None, sl_points=0, tp_points=0):
-        """Posiciona uma LIMITADA solicitada pelo Terminal Web no preço informado"""
+    def place_websocket_limit_order(self, signal, limit_price, comment="", volume=None, sl_points=0, tp_points=0, magic=None):
+        """Posiciona uma LIMITADA solicitada pelo Terminal Web no preço informado.
+        'magic' é a placa de quem mandou (Robô 1 ou Boleta manual); sem ela, vale a do robô."""
         can_trade, _ = self.check_schedule()
         if not can_trade or limit_price <= 0:
             return False, 0
@@ -649,7 +659,7 @@ class MT5OrderManager:
             "sl": sl_price,
             "tp": tp_price,
             "deviation": 20,
-            "magic": self.magic_number,
+            "magic": int(magic) if magic else self.magic_number,
             "comment": f"{ORDER_COMMENT} {comment}"[:31],
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": self.get_filling_mode(),
@@ -686,7 +696,8 @@ class MT5OrderManager:
         if not MAIN_BREAKEVEN_ON_PYR_TP or not self.pyramid_tickets:
             return
         positions = mt5.positions_get(symbol=self.symbol)
-        open_tickets = set(p.ticket for p in positions) if positions else set()
+        # só posições DESTE robô — pirâmide de outro magic fechada não protege a mãe daqui
+        open_tickets = set(p.ticket for p in (positions or []) if p.magic == self.magic_number)
         for ticket in list(self.pyramid_tickets.keys()):
             if ticket in open_tickets:
                 continue
@@ -710,8 +721,9 @@ class MT5OrderManager:
         for r in to_remove:
             self.pending_orders.remove(r)
 
-    def execute_market_order(self, order_type, comment="", volume=None, sl_points=None, tp_points=None):
-        """Execução direta a mercado com suporte a TP/SL customizados (ex: Pirâmide ou Ordem Mãe)"""
+    def execute_market_order(self, order_type, comment="", volume=None, sl_points=None, tp_points=None, magic=None):
+        """Execução direta a mercado com suporte a TP/SL customizados (ex: Pirâmide ou Ordem Mãe).
+        'magic' identifica o robô que carimbou a ordem (multi-robô); sem ele, a placa do robô."""
         can_trade, _ = self.check_schedule()
         if not can_trade:
             return False, 0
@@ -750,7 +762,7 @@ class MT5OrderManager:
             "sl": sl_price,
             "tp": tp_price,
             "deviation": 20,
-            "magic": self.magic_number,
+            "magic": int(magic) if magic else self.magic_number,
             "comment": order_tag,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": self.get_filling_mode(),
@@ -766,12 +778,13 @@ class MT5OrderManager:
     def execute_pyramid_confluence(self, signal, box):
         """
         Executa a Estratégia de Pirâmide com Confluência ${boxLabel}:
-        - Na virada de fluxo: zera todas as posições opostas e abre ORDEM MÃE (surfe sem TP fixo).
+        - Na virada de fluxo: zera as posições DESTE ROBÔ (mesmo magic) e abre ORDEM MÃE (surfe sem TP fixo).
         - Em cada box consecutivo da mesma cor: abre PIRÂMIDE com TP de +50 pontos.
         - Stop Loss: Sem stops em pontos, tudo é encerrado na inversão do mercado.
+        Multi-robô: a inversão NÃO encosta em posição de outro magic (boleta manual ou outro EA).
         """
         positions = mt5.positions_get(symbol=self.symbol)
-        active_positions = list(positions) if positions else []
+        active_positions = [p for p in (positions or []) if p.magic == self.magic_number]
 
         current_dir = signal # "BUY" ou "SELL"
         has_opposite = False
@@ -782,9 +795,9 @@ class MT5OrderManager:
                 has_opposite = True
                 break
 
-        # 1. Se virou o mercado/fluxo, encerra imediatamente todas as posições abertas
+        # 1. Se virou o mercado/fluxo, encerra as posições ABERTAS POR ESTE ROBÔ (magic próprio)
         if has_opposite:
-            print(f"\\n🔄 [INVERSÃO DE FLUXO DETECTADA] Zerando todas as posições abertas para virar para {current_dir}!")
+            print(f"\\n🔄 [INVERSÃO DE FLUXO DETECTADA] Zerando as posições do robô (magic {self.magic_number}) para virar para {current_dir}!")
             self.close_all_positions()
             time.sleep(0.05)
             active_positions = []
@@ -854,8 +867,9 @@ class MT5OrderManager:
                 self.pyramid_tickets[ticket] = current_dir
             return success, ticket, "PYRAMID"
 
-    def close_partial_position(self, ticket, partial_volume, new_sl=None):
-        """Executa saída parcial de volume de uma posição Hedge específica"""
+    def close_partial_position(self, ticket, partial_volume, new_sl=None, magic=None):
+        """Executa saída parcial de volume de uma posição Hedge específica (ticket manda; o
+        'magic' carimbado é o de quem pediu, para a trilha de auditoria bater com a MT5"""
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
             # Tenta buscar por símbolo se ticket não for direto
@@ -877,7 +891,7 @@ class MT5OrderManager:
             "type": close_type,
             "price": price,
             "deviation": 20,
-            "magic": self.magic_number,
+            "magic": int(magic) if magic else self.magic_number,
             "comment": f"Parcial #{pos.ticket}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": self.get_filling_mode(),
@@ -893,8 +907,8 @@ class MT5OrderManager:
             print(f"[ERRO PARCIAL] RetCode={res.retcode}, Desc={res.comment}")
             return False
 
-    def modify_stop_loss(self, ticket, new_sl):
-        """Move o Stop Loss (Breakeven ou Trailing Stop) de uma posição"""
+    def modify_stop_loss(self, ticket, new_sl, magic=None):
+        """Move o Stop Loss (Breakeven ou Trailing Stop) de uma posição (magic = quem pediu)"""
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
             positions = mt5.positions_get(symbol=self.symbol)
@@ -908,7 +922,7 @@ class MT5OrderManager:
             "symbol": self.symbol,
             "sl": float(new_sl),
             "tp": float(pos.tp),
-            "magic": self.magic_number
+            "magic": int(magic) if magic else self.magic_number
         }
         res = mt5.order_send(request)
         if res.retcode == mt5.TRADE_RETCODE_DONE:
@@ -916,21 +930,32 @@ class MT5OrderManager:
             return True
         return False
 
-    def close_all_positions(self, side=None):
+    def close_all_positions(self, side=None, magic="robot"):
         """Encerra posições abertas a mercado. side='BUY'/'SELL' zera só aquele lado (hedge);
-        qualquer outro valor (incluindo 'ALL') encerra tudo, como antes."""
+        qualquer outro valor (incluindo 'ALL') encerra tudo, como antes.
+        magic='robot' (padrão dos caminhos AUTOMÁTICOS) restringe às posições carimbadas por
+        este robô — inversão de fluxo e zeragem de horário NUNCA tocam boleta manual nem outro
+        EA; magic=None é o 'ZERAR TUDO' explícito do operador e fecha tudo no símbolo."""
         positions = mt5.positions_get(symbol=self.symbol)
         if not positions:
             return True
         side_type = {"BUY": mt5.ORDER_TYPE_BUY, "SELL": mt5.ORDER_TYPE_SELL}.get(side)
+        magic_filter = self.magic_number if magic == "robot" else (int(magic) if magic not in (None, "ALL", "all") else None)
         closed_n = 0
+        pnl_brl = 0.0
         for pos in positions:
             if side_type is not None and pos.type != side_type:
+                continue
+            if magic_filter is not None and pos.magic != magic_filter:
                 continue
             closed_n += 1
             close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
             tick = mt5.symbol_info_tick(self.symbol)
             price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
+            # PnL aproximado desta posição em R$ pelo valor do ponto DO ATIVO (registro de ativos:
+            # WIN R$0,20/pt, WDO R$0,10/pt, BTC R$1,00/pt — nada soldado no mini-índice)
+            dir_sign = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else -1.0
+            pnl_brl += (price - pos.price_open) * dir_sign * ASSET_POINT_VALUE * pos.volume
             req = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "position": pos.ticket,
@@ -939,14 +964,15 @@ class MT5OrderManager:
                 "type": close_type,
                 "price": price,
                 "deviation": 20,
-                "magic": self.magic_number,
+                "magic": magic_filter if magic_filter is not None else self.magic_number,
                 "comment": "Zerar Terminal Web",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.get_filling_mode(),
             }
             mt5.order_send(req)
-        alvo = f"lado {side}" if side_type is not None else "TODAS as posições"
-        print(f"🛑 {alvo} zeradas a mercado ({closed_n} posição(ões)).")
+        alvo = f"lado {side}" if side_type is not None else "posições"
+        donos = f"magic {magic_filter}" if magic_filter is not None else "TODOS os magics"
+        print(f"🛑 {alvo} zeradas a mercado ({closed_n} posição(ões), {donos}) | PnL aproximado: R$ {pnl_brl:.2f} ({ASSET_POINT_VALUE} R$/pt).")
         return True
 
 
@@ -975,6 +1001,9 @@ async def send_account_info(websocket):
             "armed": state["armed"],
             "symbol": SYMBOL,
             "decimals": ASSET_DECIMALS,
+            "pointValue": ASSET_POINT_VALUE,
+            "robotMagic": MAGIC_NUMBER,
+            "manualMagic": MANUAL_ORDER_MAGIC,
             "maxContractsPerOrder": MAX_CONTRACTS_PER_ORDER,
             "maxOrdersPerMinute": MAX_ORDERS_PER_MINUTE
         }
@@ -1065,6 +1094,9 @@ async def ws_handler(websocket):
                     })
                     continue
                 if action == "ORDER_SEND":
+                    # 'magic' do payload = placa de quem mandou (Robô 1 ou Boleta manual). Sem o
+                    # campo (app velho falando com script novo), cai no magic do robô — comportamento antigo.
+                    order_magic = data.get("magic") or None
                     if data.get("isLimit"):
                         ORDER_MANAGER.place_websocket_limit_order(
                             data.get("type", "BUY"),
@@ -1072,7 +1104,8 @@ async def ws_handler(websocket):
                             data.get("comment", "WEB_LIMIT"),
                             data.get("contracts", 1),
                             data.get("sl", 0) or 0,
-                            data.get("tp", 0) or 0
+                            data.get("tp", 0) or 0,
+                            magic=order_magic
                         )
                     else:
                         ORDER_MANAGER.execute_market_order(
@@ -1080,14 +1113,27 @@ async def ws_handler(websocket):
                             comment=data.get("comment", "WEB_ORDER"),
                             volume=data.get("contracts", 1),
                             sl_points=data.get("sl", 0) or 0,
-                            tp_points=data.get("tp", 0) or 0
+                            tp_points=data.get("tp", 0) or 0,
+                            magic=order_magic
                         )
                 elif action == "ORDER_PARTIAL_CLOSE":
-                    ORDER_MANAGER.close_partial_position(data.get("ticket"), data.get("partialVolume"), data.get("newSL"))
+                    ORDER_MANAGER.close_partial_position(
+                        data.get("ticket"), data.get("partialVolume"), data.get("newSL"),
+                        magic=data.get("robotMagic") or None
+                    )
                 elif action == "ORDER_MODIFY_SL":
-                    ORDER_MANAGER.modify_stop_loss(data.get("ticket"), data.get("newSL"))
+                    ORDER_MANAGER.modify_stop_loss(
+                        data.get("ticket"), data.get("newSL"),
+                        magic=data.get("robotMagic") or None
+                    )
                 elif action == "CLOSE_POSITIONS":
-                    ORDER_MANAGER.close_all_positions(data.get("type"))
+                    # CLOSE_POSITIONS do robô (inversão/trava) traz robotMagic e fecha SÓ o que
+                    # o robô abriu; ZERAR C/V/TUDO da boleta não traz magic e zera tudo mesmo —
+                    # o botão de emergência do operador nunca fica filtrado.
+                    ORDER_MANAGER.close_all_positions(
+                        data.get("type"),
+                        magic=data.get("robotMagic") if data.get("robotMagic") else None
+                    )
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
@@ -1333,7 +1379,7 @@ async def main():
         sys.exit(1)
 
     RENKO_ENGINE = RenkoFlowEngine(box_points=BOX_POINTS)
-    ORDER_MANAGER = MT5OrderManager(symbol=SYMBOL, contracts=CONTRACTS, magic_number=MAGIC_NUMBER)
+    ORDER_MANAGER = MT5OrderManager(symbol=SYMBOL, contracts=MAIN_CONTRACTS, magic_number=MAGIC_NUMBER)
 
     server = await websockets.serve(ws_handler, WS_HOST, WS_PORT)
     print(f" Servidor WebSocket ativo em toda a rede local na porta {WS_PORT} — no app (outro PC da rede) use MT5 Host = IP desta maquina (veja ipconfig)")

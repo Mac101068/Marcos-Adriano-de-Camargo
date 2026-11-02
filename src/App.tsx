@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
-import { Tick, RenkoBox, TradeOrder, AutomationConfig, TerminalStats, MT5ConnectionState } from './types/trading';
+import { Tick, RenkoBox, TradeOrder, AutomationConfig, TerminalStats, MT5ConnectionState, MANUAL_ORDER_MAGIC, mainRobotMagic } from './types/trading';
 import { RenkoFlowEngine } from './utils/renkoCalculator';
 import { RangeBarEngine, TimeBarEngine, ChartSeries } from './utils/barEngines';
 import { evaluateBoxConvergence, ConvergenceResult } from './utils/convergenceEvaluator';
 import { isWithinTradingWindow, sessionFinancialLock, FinancialLock } from './utils/tradingGates';
-import { isSessionCloseLock, sessionCloseLockLabel, parseHHMM } from './utils/sessionRules';
+import { isSessionCloseLock, sessionCloseLockLabel, parseHHMM, setEnforceTimeGates } from './utils/sessionRules';
 import { migrateLegacyTradingWindow } from './utils/tradingWindowMigration';
 import {
   ASSETS,
@@ -57,9 +57,10 @@ import { ProjectDossierPdfModal } from './components/ProjectDossierPdfModal';
 import { SeriesComparisonView } from './components/SeriesComparisonView';
 import { TechnicalEvaluationView } from './components/TechnicalEvaluationView';
 import { StrategyStudio } from './components/StrategyStudio';
-import { StrategyLibraryService } from './services/strategyLibraryService';
+import { AlertChip } from './components/AlertChip';
+import { StrategyLibraryService, mergeConfig } from './services/strategyLibraryService';
 import { SavedStrategy } from './types/strategy';
-import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Square, Clock, Sparkles, RefreshCw } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, ShieldAlert, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Square, Clock, Sparkles, RefreshCw } from 'lucide-react';
 
 type ActiveTickResult = {
   newBoxClosed: boolean;
@@ -171,7 +172,11 @@ export default function App() {
    * config estiver apontando para outro vencimento — um teste longo na contínua, por exemplo.
    */
   const assetSyms = React.useMemo(() => assetSymbols(asset, config.symbol), [asset, config.symbol]);
-  const [isSimulating, setIsSimulating] = useState<boolean>(true);
+  // REGRA DO OPERADOR (Ciclo 12): o terminal SEMPRE acorda PARADO. Nada de feed automático na
+  // inicialização — o mercado só anda por comando manual: o ▶ SIM do cabeçalho (feed ao vivo
+  // simulado), a setinha de replay (história rodando em corrida) ou o botão On do Robô. Motivo:
+  // o "auto" e o "manual" rodavam de jeitos diferentes e a tela do boot mentia história.
+  const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [simulationSpeed, setSimulationSpeed] = useState<number>(() => {
     const saved = Number(localStorage.getItem('fluxo_sim_speed_v1'));
     return saved >= 1 ? Math.min(10, Math.round(saved)) : 1;
@@ -357,7 +362,39 @@ export default function App() {
   // Biblioteca de estratégias (Estúdio). A caixinha da tira de status lê esta lista;
   // ativar uma estratégia aplica o snapshot e força o Robô PAUSADO por segurança.
   const [strategyLibrary, setStrategyLibrary] = useState<SavedStrategy[]>(() => StrategyLibraryService.list());
-  const refreshStrategyLibrary = () => setStrategyLibrary(StrategyLibraryService.list());
+  const refreshStrategyLibrary = () => {
+    const list = StrategyLibraryService.list();
+    setStrategyLibrary(list);
+    // Varredura de conflito (Ciclo 12): apagar/renamear uma estratégia em uso não pode deixar
+    // referência órfã pelo terminal — era assim que o "Reteste apagado" ficava fixado no Robô 2
+    // e o Robô 1 apontava para um perfil fantasma. Toda mudança de biblioteca passa por aqui.
+    const shadowSel = config.shadowRobot?.strategyId ?? null;
+    const shadowStale = !!shadowSel && !list.some((s) => s.id === shadowSel);
+    const mainStale = !!config.profileName && !list.some((s) => s.name === config.profileName);
+    if (!shadowStale && !mainStale) return;
+    const updated: AutomationConfig = {
+      ...config,
+      ...(shadowStale && config.shadowRobot
+        ? { shadowRobot: { ...config.shadowRobot, strategyId: null, enabled: false } }
+        : {}),
+      ...(mainStale ? { profileName: '' } : {}),
+      lastSavedTimestamp: Date.now(),
+    };
+    EaConfigService.saveConfig(updated);
+    setConfig(updated);
+    setLatestToast({
+      id: `toast-${Date.now()}`,
+      type: 'INFO',
+      title: 'Estratégia em uso saiu da biblioteca — referências limpas',
+      description: [
+        mainStale ? `Robô 1: o perfil "${config.profileName}" não existe mais; o config atual continua valendo, solto da biblioteca.` : null,
+        shadowStale ? 'Robô 2: ficou sem estratégia e foi desligado — reescolha na janela dele.' : null,
+      ]
+        .filter(Boolean)
+        .join(' '),
+      timestamp: Date.now(),
+    });
+  };
   const handleActivateStrategy = (strategy: SavedStrategy) => {
     const updated: AutomationConfig = {
       ...strategy.config,
@@ -367,11 +404,41 @@ export default function App() {
     };
     EaConfigService.saveConfig(updated);
     setConfig(updated);
+    // Trocar de estratégia com posições no livro é mudança de regras no meio do jogo: as
+    // abertas continuam gerenciadas só por TP/stop/zeragem manual (a virada de fluxo é da
+    // Pirâmide; o Reteste novo não liquida herança de ninguém). O operador precisa saber.
+    const openNow = orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length;
     setLatestToast({
       id: `toast-${Date.now()}`,
       type: 'INFO',
       title: `Estratégia "${strategy.name}" ativada`,
-      description: 'Robô mantido PAUSADO por segurança — ligue no On quando quiser operar.',
+      description:
+        'Robô mantido PAUSADO por segurança — ligue no On quando quiser operar.' +
+        (openNow > 0
+          ? ` Atenção: ${openNow} ordem(ns) do ajuste anterior seguem no livro — saem por TP/stop ou no ZERAR da boleta.`
+          : ''),
+      timestamp: Date.now(),
+    });
+  };
+  // Sincronização de terminal (Ciclo 12): o "Importar tudo" do Estúdio devolve o config ativo
+  // que veio do OUTRO navegador (interno e externo têm localStorage próprio). Ele entra pelo
+  // mesmo funil de segurança da ativação de estratégia: saneado pelo mergeConfig, persistido
+  // e com o Robô PAUSADO — sincronizar dados nunca liga mercado nem ordem sozinho.
+  const handleApplySyncedConfig = (cfg: AutomationConfig) => {
+    const updated: AutomationConfig = { ...mergeConfig(cfg), active: false, lastSavedTimestamp: Date.now() };
+    EaConfigService.saveConfig(updated);
+    setConfig(updated);
+    refreshStrategyLibrary();
+    const openNow = orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length;
+    setLatestToast({
+      id: `toast-${Date.now()}`,
+      type: 'INFO',
+      title: 'Terminal sincronizado',
+      description:
+        `Config ativo restaurado do pacote (Robô PAUSADO por segurança — ligue no On quando quiser operar).` +
+        (openNow > 0
+          ? ` Atenção: ${openNow} ordem(ns) deste navegador seguem no livro — saem por TP/stop ou no ZERAR da boleta.`
+          : ''),
       timestamp: Date.now(),
     });
   };
@@ -763,15 +830,15 @@ export default function App() {
   const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   const simulatorRef = useRef<B3MarketSimulator>(new B3MarketSimulator(referencePrice(asset), asset));
 
-  // Inicializa dados históricos iniciais para que o terminal comece populado
+  // Inicialização: âncora de preço nos motores, TELA PARADA e VAZIA (Ciclo 12).
+  // Antes este efeito sintetizava 350 ticks de boot para "popular" o gráfico — história falsa,
+  // sorteada de novo a cada F5, que se passava pelo pregão de ontem. O histórico de ontem NÃO
+  // mora no navegador (o que persiste são ordens/auditoria/estatísticas do coletor): para ver
+  // a série de ontem ou mais, o operador dá o comando — ▶ SIM (feed vivo), setinha (replay) ou
+  // histórico real pela ponte MT5. O gráfico acorda com "Aguardando ticks…".
   useEffect(() => {
-    const engine = engineRef.current;
-    const sim = simulatorRef.current;
-    // Partida na régua do ativo (último preço real fresco ou o basePrice do registro)
     const reference = referencePrice(asset);
-    engine.initialize(reference);
-
-    const initialTicks: Tick[] = [];
+    engineRef.current.initialize(reference);
     rangeEngineRef.current.setRangePoints(rangePoints);
     rangeEngineRef.current.initialize(reference);
     timeEngineRef.current.setIntervalMs(timeframeSec * 1000);
@@ -783,26 +850,6 @@ export default function App() {
       const sEng = ensureShadowEngine();
       if (sEng) sEng.initialize(reference);
     }
-    // Simula 350 ticks para gerar os primeiros ~20 boxes
-    for (let i = 0; i < 350; i++) {
-      const t = sim.generateNextTick();
-      initialTicks.unshift(t);
-      engine.processTick(t, config);
-      rangeEngineRef.current.processTick(t);
-      timeEngineRef.current.processTick(t);
-    }
-
-    setTicks(initialTicks.slice(0, 100));
-    setBoxes([...engine.getBoxes()]);
-    setCurrentBox(engine.getCurrentBox());
-    setCurrentPrice(sim.getPrice());
-    setCvd(engine.getCvd());
-    setRangeBoxes([...rangeEngineRef.current.getBoxes()]);
-    setRangeCurrentBox(rangeEngineRef.current.getCurrentBox());
-    setTimeBoxes([...timeEngineRef.current.getBoxes()]);
-    setTimeCurrentBox(timeEngineRef.current.getCurrentBox());
-    // initialTicks está do mais recente para o mais antigo; o replay precisa da ordem cronológica
-    allTicksRef.current = [...initialTicks].reverse();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -918,8 +965,8 @@ export default function App() {
   // Função para processar a execução de um tick
   const handleIncomingTick = useCallback(
     (tick: Tick) => {
-      // Tick vindo do MT5 (corretora): marca o coletor como "dia real." Assim o replay
-      // automático de abertura nunca apaga uma coleta verdadeira já registrada hoje
+      // Tick vindo do MT5 (corretora): marca o coletor como "dia real." Assim um replay
+      // manual rodado depois jamais apaga uma coleta verdadeira já registrada hoje
       if (mt5State.status === 'CONNECTED') seriesCollectorService.markRealData();
       // Régua do ativo (Fase 2): o basePrice fixo do registro envelhece, então o último preço REAL
       // visto é persistido (escrita amortecida a cada ~30s por aba) para eixo Y, partida do
@@ -931,10 +978,11 @@ export default function App() {
           rememberLastPrice(asset.id, tick.price);
         }
       }
-      // Trava de fim de pregão (hora `tradingCloseAllTime` da estratégia, padrão 17:30): no
-      // simulador o robô quita tudo e para de abrir operações. Com o MT5 conectado a trava é
-      // ignorada pelo app — liquidar posição real exigiria ordem na corretora (quem faz isso lá é
-      // a ponte Python, que obedece a mesma hora do CLOSE_ALL_TIME gerado).
+      // Trava de fim de pregão (hora `tradingCloseAllTime` da estratégia, padrão 17:30): vale
+      // SÓ no replay — a sessão simulada encerra como o pregão de verdade. No simulador ao vivo
+      // ela não existe (interruptor de regime do Ciclo 12: "simulador tem que rodar" 24h). Com
+      // o MT5 conectado a trava é ignorada pelo app — liquidar posição real exigiria ordem na
+      // corretora (quem faz isso lá é a ponte Python, que obedece a mesma hora do CLOSE_ALL_TIME gerado).
       const closeLockLabel = sessionCloseLockLabel(config.tradingCloseAllTime);
       const sessionLock = mt5State.status !== 'CONNECTED' && isSessionCloseLock(tick.timestamp, config.tradingCloseAllTime);
       const engine = engineRef.current;
@@ -1094,7 +1142,7 @@ export default function App() {
                 });
 
                 if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                  wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS' }));
+                  wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
                 }
               }
 
@@ -1119,7 +1167,7 @@ export default function App() {
                   const hadOpen = updatedPrev.some((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT');
                   updatedPrev = liquidateForFinancialLock(updatedPrev, tick.price, finLock);
                   if (hadOpen && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                    wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS' }));
+                    wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
                   }
                 }
                 announceFinancialLock(finLock);
@@ -1171,7 +1219,7 @@ export default function App() {
                     takeProfit: 0,
                     status: useLimitEntry ? 'PENDING_LIMIT' : 'OPEN',
                     source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA',
-                    magicNumber: config.magicNumber,
+                    magicNumber: mainRobotMagic(config),
                     triggerReason: `Entrada Principal ${signalType === 'BUY' ? 'Compra' : 'Venda'} (${robotTag} — Surfe até Virada do Fluxo)`,
                     isRealMT5: mt5State.status === 'CONNECTED',
                     auditTrail: [mainEvt],
@@ -1197,6 +1245,7 @@ export default function App() {
                     limitPrice: useLimitEntry ? pyrLimitPrice : undefined,
                     contracts: config.contracts,
                     comment: `PIRAMIDE_MAIN_${signalType}_${mt5TagShort}`,
+                    magic: mainRobotMagic(config),
                   });
                 } else {
                   // Ordem da Pirâmide (Subadd com TP de 50 pontos)
@@ -1239,7 +1288,7 @@ export default function App() {
                     takeProfit: targetTp,
                     status: useLimitEntry ? 'PENDING_LIMIT' : 'OPEN',
                     source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA',
-                    magicNumber: config.magicNumber,
+                    magicNumber: mainRobotMagic(config),
                     triggerReason: `Pirâmide #${pyramidLevel} ${signalType === 'BUY' ? 'Compra' : 'Venda'} ${robotTag} (+${tpPoints}p TP)`,
                     isRealMT5: mt5State.status === 'CONNECTED',
                     auditTrail: [pyrEvt],
@@ -1267,6 +1316,7 @@ export default function App() {
                     tp: tpPoints,
                     sl: pyrSlPoints,
                     comment: `PIRAMIDE_SUB_${pyramidLevel}_${mt5TagShort}`,
+                    magic: mainRobotMagic(config),
                   });
                 }
 
@@ -1337,6 +1387,7 @@ export default function App() {
                   sl: config.stopLossPoints,
                   tp: config.takeProfitPoints,
                   comment: isPullbackMode ? `Reteste ${signalType} ${mt5TagShort}` : `${mt5TagShort} ${signalType}`,
+                  magic: mainRobotMagic(config),
                 });
               };
 
@@ -1352,7 +1403,7 @@ export default function App() {
                   if (config.closeAllOnFinancialLock) {
                     const hadOpen = prev.some((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT');
                     if (hadOpen && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                      wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS' }));
+                      wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
                     }
                     announceFinancialLock(finLockPullback);
                     return liquidateForFinancialLock(prev, tick.price, finLockPullback);
@@ -1420,7 +1471,7 @@ export default function App() {
                       : `${result.signalReason} [MERCADO]`,
                     isRealMT5: mt5State.status === 'CONNECTED',
                     source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA',
-                    magicNumber: config.magicNumber,
+                    magicNumber: mainRobotMagic(config),
                     auditTrail: [initialAuditEvt],
                   };
 
@@ -1458,7 +1509,7 @@ export default function App() {
                       : `${result.signalReason}`,
                     isRealMT5: mt5State.status === 'CONNECTED',
                     source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA',
-                    magicNumber: config.magicNumber,
+                    magicNumber: mainRobotMagic(config),
                     auditTrail: [initialAuditEvt],
                   };
 
@@ -1667,6 +1718,7 @@ export default function App() {
                       ticket: ord.ticket,
                       partialVolume: partialCtros,
                       newSL: config.moveStopToBreakevenOnPartial ? newSL : undefined,
+                      robotMagic: mainRobotMagic(config),
                     })
                   );
                 }
@@ -1887,7 +1939,7 @@ export default function App() {
 
             if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
               wsRef.current.send(
-                JSON.stringify({ action: 'ORDER_MODIFY_SL', ticket: ord.ticket, newSL: beSL })
+                JSON.stringify({ action: 'ORDER_MODIFY_SL', ticket: ord.ticket, newSL: beSL, robotMagic: mainRobotMagic(config) })
               );
             }
 
@@ -1924,7 +1976,8 @@ export default function App() {
         wsRef.current.close();
       }
       setMt5State({ status: 'DISCONNECTED' });
-      setIsSimulating(true);
+      // Ciclo 12: desconectar NÃO religa o SIM sozinho — o feed é comando do operador (▶ no
+      // cabeçalho). A tela fica parada no último preço, sem mercado fantasma por trás.
       return;
     }
 
@@ -1982,7 +2035,7 @@ export default function App() {
               });
               if (wsRef.current) wsRef.current.close();
               setMt5State({ status: 'DISCONNECTED' });
-              setIsSimulating(true);
+              // Ponte recusada = tela para, não mercado fantasma automático (Ciclo 12).
               return;
             }
             setLatestToast({
@@ -2015,9 +2068,25 @@ export default function App() {
               // Qual contrato o script .py está transmitindo agora: se for outro do que este
               // navegador tem selecionado, o seletor avisa (o histórico real viria do mercado errado)
               scriptSymbol: payload.data?.symbol ?? prev.scriptSymbol,
+              // Placa do robô embutida no script: se divergir do Ajustes, o filtro por magic da
+              // ponte fecharia posições de outra corrida — aviso central (regra: nada silencioso)
+              scriptRobotMagic: payload.data?.robotMagic ?? prev.scriptRobotMagic,
+              scriptPointValue: payload.data?.pointValue ?? prev.scriptPointValue,
               bridgeArmed: payload.data.armed ?? prev.bridgeArmed,
               ...(!authResultSeen ? { bridgeAuthOk: true, bridgeLegacy: true } : {}),
             }));
+            if (
+              typeof payload.data?.robotMagic === 'number' &&
+              payload.data.robotMagic !== mainRobotMagic(config)
+            ) {
+              setLatestToast({
+                id: `mt5-magic-${Date.now()}`,
+                type: 'INFO',
+                title: '⚠️ MAGIC DIVERGENTE (APP × SCRIPT)',
+                description: `O script no Windows carrega o magic ${payload.data.robotMagic}, mas o Ajustes deste navegador define ${mainRobotMagic(config)}. Baixe o script de novo para as duas placas baterem — é o filtro que isola o robô da boleta manual.`,
+                timestamp: Date.now(),
+              });
+            }
           } else if (payload.type === 'ARM_RESULT') {
             const armed = Boolean(payload.data?.armed);
             setMt5State((prev) => ({ ...prev, bridgeArmed: armed }));
@@ -2074,7 +2143,7 @@ export default function App() {
           description: `Execute o script 'python bot_mt5_convergencia_10r.py' no seu PC para habilitar o servidor local em ${wsUrl}.`,
           timestamp: Date.now(),
         });
-        setIsSimulating(true);
+        // Sem ponte, sem feed automático (Ciclo 12): quem quiser tela viva aperta ▶ SIM.
       };
 
       socket.onclose = () => {
@@ -2084,7 +2153,7 @@ export default function App() {
       };
     } catch {
       setMt5State({ status: 'ERROR', lastError: 'Falha ao instanciar WebSocket.' });
-      setIsSimulating(true);
+      // idem Ciclo 12: erro de boot da ponte não liga o SIM por conta própria
     }
   }, [config.mt5Host, config.mt5Port, config.active, mt5State.status, handleIncomingTick]);
 
@@ -2128,22 +2197,28 @@ export default function App() {
       const pyrCount = activeSameDir.filter((o) => o.role === 'PYRAMID').length;
       const pyrLevel = pyrCount + 1;
       const contracts = role === 'MAIN' ? config.contracts || 1 : config.pyramidContracts || 1;
-      const tp =
-        role === 'PYRAMID'
-          ? type === 'BUY'
-            ? entryPrice + (config.pyramidTpPoints || 50)
-            : entryPrice - (config.pyramidTpPoints || 50)
+      // A boleta é a BASE: ordem MANUAL disparada aqui obedece o Alvo/Stop escritos na própria
+      // boleta (antes o código zerava os dois na Pirâmide — a ordem era enviada e NUNCA
+      // executava por preço). Alvo 0 na mãe = surfe até a reversão, design do modo 10R; na
+      // pirâmide, Alvo 0 cai no alvo da estratégia (pyramidTpPoints) para não virar ordem sem destino.
+      const tpPts =
+        config.takeProfitPoints > 0
+          ? config.takeProfitPoints
+          : role === 'PYRAMID'
+          ? config.pyramidTpPoints || 50
           : 0;
-      const sl = 0;
+      const tp = tpPts > 0 ? (type === 'BUY' ? entryPrice + tpPts : entryPrice - tpPts) : 0;
+      const slPts = config.stopLossPoints > 0 ? config.stopLossPoints : 0;
+      const sl = slPts > 0 ? (type === 'BUY' ? entryPrice - slPts : entryPrice + slPts) : 0;
 
       const orderTitle =
         role === 'MAIN'
-          ? `Ordem Mãe de ${type === 'BUY' ? 'COMPRA' : 'VENDA'} (Surfe)`
-          : `Pirâmide #${pyrLevel} de ${type === 'BUY' ? 'COMPRA' : 'VENDA'} (+50p Alvo)`;
+          ? `Ordem Mãe de ${type === 'BUY' ? 'COMPRA' : 'VENDA'} (${tp > 0 ? `Alvo +${tpPts}p` : 'Surfe'})`
+          : `Pirâmide #${pyrLevel} de ${type === 'BUY' ? 'COMPRA' : 'VENDA'} (Alvo +${tpPts}p)`;
       const orderDetails =
-        role === 'MAIN'
-          ? `Ordem mãe aberta em ${entryPrice} pts (${contracts}ct). Sem TP fixo (surfe até reversão) e sem SL fixo (stop na virada do fluxo).`
-          : `Pirâmide #${pyrLevel} aberta em ${entryPrice} pts (${contracts}ct) com Alvo Take Profit de +50 pts (${tp} pts).`;
+        `Entrada manual a ${entryPrice} pts (${contracts}ct). ` +
+        (tp > 0 ? `Alvo TP: ${tp} pts. ` : 'Sem TP fixo (surfe até a reversão). ') +
+        (sl > 0 ? `Stop: ${sl} pts.` : 'Sem stop fixo (saída na virada do fluxo).');
 
       const manEvt = OrderAuditService.createEvent(
         'ORDER_DISPATCHED',
@@ -2167,11 +2242,15 @@ export default function App() {
         takeProfit: tp,
         status: 'OPEN',
         source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'MANUAL',
-        magicNumber: config.magicNumber || 101010,
+        // Boleta manual carrega o magic MANUAL: a ponte isola essas posições das saídas
+        // automáticas do robô (inversão/zeragem de horário nunca encostam nelas).
+        magicNumber: MANUAL_ORDER_MAGIC,
         triggerReason:
           role === 'MAIN'
-            ? 'Boleta Rápida · Ordem Mãe de Surfe'
-            : `Boleta Rápida · Pirâmide #${pyrLevel} (Alvo +50p)`,
+            ? tp > 0
+              ? `Boleta Rápida · Mãe com Alvo +${tpPts}p`
+              : 'Boleta Rápida · Ordem Mãe de Surfe'
+            : `Boleta Rápida · Pirâmide #${pyrLevel} (Alvo +${tpPts}p)`,
         isRealMT5: mt5State.status === 'CONNECTED',
         auditTrail: [manEvt],
       };
@@ -2188,8 +2267,8 @@ export default function App() {
         chartOnly: true,
         description:
           role === 'MAIN'
-            ? `Entrada: ${entryPrice.toLocaleString('pt-BR')} pts · Surfe até reversão`
-            : `Entrada: ${entryPrice.toLocaleString('pt-BR')} pts · Alvo TP: ${tp.toLocaleString('pt-BR')} pts (+50p)`,
+            ? `Entrada: ${entryPrice.toLocaleString('pt-BR')} pts · ${tp > 0 ? `Alvo TP: ${tp.toLocaleString('pt-BR')} pts (+${tpPts}p)` : 'Surfe até reversão'}${sl > 0 ? ` · Stop: ${sl.toLocaleString('pt-BR')} pts` : ''}`
+            : `Entrada: ${entryPrice.toLocaleString('pt-BR')} pts · Alvo TP: ${tp.toLocaleString('pt-BR')} pts (+${tpPts}p)${sl > 0 ? ` · Stop: ${sl.toLocaleString('pt-BR')} pts` : ''}`,
         timestamp: Date.now(),
       });
 
@@ -2199,9 +2278,12 @@ export default function App() {
             action: 'ORDER_SEND',
             type,
             contracts,
-            sl: 0,
-            tp: tp > 0 ? (config.pyramidTpPoints || 50) : 0,
+            // Distâncias em PONTOS como na boleta do modo Reteste: a ponte converte em preços
+            // absolutos sobre a execução real (sl/tp 0 = ordem "limpa" na corretora).
+            sl: slPts,
+            tp: tpPts,
             comment: role === 'MAIN' ? 'MAE_SURFE' : `PIR_${pyrLevel}`,
+            magic: MANUAL_ORDER_MAGIC,
           })
         );
       }
@@ -2231,7 +2313,7 @@ export default function App() {
       takeProfit: tp,
       status: 'OPEN',
       source: mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'MANUAL',
-      magicNumber: 999999,
+      magicNumber: MANUAL_ORDER_MAGIC,
       triggerReason: `Disparo Manual via Terminal (${config.contracts} ctros)`,
       isRealMT5: mt5State.status === 'CONNECTED',
       auditTrail: [manEvt],
@@ -2258,6 +2340,7 @@ export default function App() {
           sl: config.stopLossPoints,
           tp: config.takeProfitPoints,
           comment: 'Manual Web Terminal',
+          magic: MANUAL_ORDER_MAGIC,
         })
       );
     }
@@ -2284,7 +2367,7 @@ export default function App() {
       takeProfit: 0,
       status: 'OPEN',
       source: 'ROBOT_EA',
-      magicNumber: config.magicNumber || 101010,
+      magicNumber: mainRobotMagic(config),
       triggerReason: 'Virada de Fluxo Heikin-Ashi (Verde) · Ordem Mãe de Surfe',
       auditTrail: [
         OrderAuditService.createEvent(
@@ -2312,7 +2395,7 @@ export default function App() {
       takeProfit: pyr1Price + (config.pyramidTpPoints || 50),
       status: 'OPEN',
       source: 'ROBOT_EA',
-      magicNumber: config.magicNumber || 101010,
+      magicNumber: mainRobotMagic(config),
       triggerReason: `Fechamento Box ${renkoScaleLabel(config.boxPoints, asset)} Verde · Pirâmide #1 (Alvo: +${config.pyramidTpPoints || 50}p)`,
       auditTrail: [
         OrderAuditService.createEvent(
@@ -2433,6 +2516,15 @@ export default function App() {
 
     return () => clearInterval(timer);
   }, [isSimulating, isReplaying, simulationSpeed, mt5State.status, handleIncomingTick]);
+
+  // INTERRUPTOR DE REGIME dos portões de horário (Ciclo 12 — regra do operador): o relógio do
+  // pregão (janela 08:55–17:30 + zeragem das 17:30) só vale nos dois mundos que imitam a B3 de
+  // verdade — MT5 conectado (ordens REAIS) e replay (SESSÃO SIMULADA com hora de barra). No
+  // simulador ao vivo o portão fica escancarado 24h: teste às 18:22 não pode virar "FORA DA
+  // JANELA". Robôs sombra e coletor herdam a chave (mesmas funções puras).
+  useEffect(() => {
+    setEnforceTimeGates(isReplaying || mt5State.status === 'CONNECTED');
+  }, [isReplaying, mt5State.status]);
 
   // Troca manual da série do gráfico: o robô passa a operar nela (Opção A).
   // Posições abertas NÃO são liquidadas automaticamente — apenas avisamos o operador.
@@ -2838,28 +2930,12 @@ export default function App() {
   // Se a página fechar/HMR desmontar o App no meio do replay, encerra o timer restante
   useEffect(() => () => { replayAbortRef.current?.(); }, []);
 
-  // ABRIU A PLATAFORMA → dispara o simulador sozinho com o replay (mínimo 1 dia), desenhando
-  // o período desde a primeira barra e zerando as ordens do pregão anterior. A única coisa que
-  // pula a corrida automática é o coletor já ter DADO REAL do MT5 neste dia — aí ninguém apaga
-  // uma coleta verdadeira; o ▶ da tira de status continua disponível para rodar manualmente.
-  const bootReplayDoneRef = useRef<boolean>(false);
-  useEffect(() => {
-    if (bootReplayDoneRef.current) return;
-    bootReplayDoneRef.current = true;
-    if (seriesCollectorService.hasRealData()) {
-      setLatestToast({
-        id: `boot-replay-skipped-${Date.now()}`,
-        type: 'INFO',
-        title: 'REPLAY AUTOMÁTICO PULADO: DADO REAL DE HOJE',
-        description: 'O coletor já registrou ticks do MT5 neste dia, então a plataforma não zerou nada. Para rodar um dia sintético mesmo assim, use a setinha da tira de status (isso zera ordens e coletor).',
-        timestamp: Date.now(),
-      });
-      return;
-    }
-    const timer = setTimeout(() => handleReplayHistory(replayDays), 400);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // SEM REPLAY AUTOMÁTICO NO BOOT (Ciclo 12 — regra do operador). Existia aqui um efeito que,
+  // ao abrir a plataforma, disparava o replay sozinho: desenhava o pregão com timestamps de
+  // HORA DE SESSÃO (à vezes à frente do relógio real), ZERAVA as ordens do livro e, enquanto
+  // rodava (`isReplaying`), bloqueava o ▶ SIM — era o "auto roda de um jeito, manual de outro".
+  // Agora o boot é parado e vazio por design: história na tela só por comando manual
+  // (setinha da tira de status), mercado vivo só pelo ▶ SIM ou pela ponte MT5.
 
   // AVISO DA CONVERSÃO DA TRAVA DE HORÁRIO: a migração roda no initializer do `config` (antes de
   // qualquer efeito) e devolve o que ela tocou. Só aparece na primeira abertura depois dessa regra
@@ -3309,6 +3385,67 @@ export default function App() {
     if (isSessionCloseLock(marketClockTs, config.tradingCloseAllTime)) {
       gateReasons.push(`TRAVA DE PREGÃO às ${closeLockLabel}: nenhum sinal novo e tudo o que estiver aberto é liquidado · hora do pregão: ${marketClockHM}`);
     }
+    // Robô ativo sem feed = robô olhando tela congelada. O balão agora nomeia esse estado
+    // (acontece quando o operador pausa o ▶ SIM com o Robô ligado — o On religa sozinho).
+    if (config.active && !isSimulating && !isReplaying) {
+      gateReasons.push('MERCADO PARADO: o Robô está ligado, mas sem ticks nada anda — aperte ▶ SIM no topo.');
+    }
+    // Laudo do sinal (Ciclo 12): Robô ligado + feed andando + dentro da janela, e AINDA ASSIM
+    // nenhuma ordem sai? Na prática quase sempre é o DELTA do último box não passando do limiar
+    // (fixo ou adaptativo) — ou a série ativa, que é Tempo e o Robô não opera Tempo. O balão
+    // mostra os números da última barra fechada em vez de deixar o operador no escuro.
+    if (
+      config.active &&
+      (isSimulating || isReplaying) &&
+      !finLockNow &&
+      !isSessionCloseLock(marketClockTs, config.tradingCloseAllTime) &&
+      isWithinTradingWindow(marketClockTs, config)
+    ) {
+      if (chartSeries === 'tempo') {
+        gateReasons.push('SÉRIE SEM ROBÔ: o gráfico está em Tempo, e as entradas disparam só nas séries Renko ou Range — troque no seletor acima do gráfico.');
+      } else {
+        const activeEng = chartSeries === 'renko' ? engineRef.current : rangeEngineRef.current;
+        const bs = activeEng.getBoxes();
+        const lastClosed = bs[bs.length - 2]; // o último elemento é o box EM FORMAÇÃO
+        // Só dá o laudo quando o Robô está PASSANDO FOME: nenhum dos últimos 6 boxes fechados
+        // sinalizou. Um box fraco isolado não liga o alerta (era isso que fazia o triângulo
+        // piscar a cada tijolo).
+        const recentClosed = bs.slice(Math.max(0, bs.length - 7), Math.max(0, bs.length - 1));
+        const starving = recentClosed.length >= 5 && recentClosed.every((b) => !b.isConvergence);
+        if (starving && lastClosed && lastClosed.direction) {
+          const adaptive = config.adaptiveThresholdEnabled === true;
+          const side: 'BUY' | 'SELL' = lastClosed.direction === 'UP' ? 'BUY' : 'SELL';
+          const limit = adaptive
+            ? activeEng.getRegimeMeter().getPercentileLimit(side, 0.6, config.minDeltaThreshold)
+            : config.minDeltaThreshold;
+          const weak = lastClosed.direction === 'UP' ? lastClosed.delta < limit : lastClosed.delta > -limit;
+          if (weak) {
+            gateReasons.push(
+              `SINAL FRACO HÁ ${recentClosed.length} BOXES: último ${lastClosed.direction === 'UP' ? 'verde' : 'vermelho'} fechou com Δ ${lastClosed.delta} ctros e o limiar é ${
+                adaptive ? `calculado do próprio pregão (P60): ${limit} ctros` : `físico: ${limit} ctros`
+              } — o Robô só entra com agressão acima do limiar. Baixe o Δ mínimo em Ajustes ou desligue o filtro adaptativo.`
+            );
+          } else if (config.strategyMode !== 'PYRAMID_FLOW_CONFLUENCE' && config.requireCvdNewExtreme) {
+            gateReasons.push('RETESTE ESPERANDO CVD: os boxes passam no Δ calculado, mas o Reteste também exige o CVD fazendo máxima/mínima dos 3 boxes anteriores — é a espera do reteste, não um defeito.');
+          }
+        }
+      }
+    }
+    // "Por que minha estratégia não dispara?" também mora no LIVRO: o caminho do Reteste em
+    // modo NETTING só abre posição com o livro vazio, e o HEDGE tem teto de simultâneas — os
+    // dois bloqueavam em silêncio absoluto. O balão do alerta agora diz o motivo e o que fazer.
+    if (config.active) {
+      const openNow = orders.filter((o) => o.status === 'OPEN').length;
+      if (
+        config.strategyMode !== 'PYRAMID_FLOW_CONFLUENCE' &&
+        config.accountMode === 'NETTING' &&
+        openNow > 0
+      ) {
+        gateReasons.push(`Modo NETTING: o Robô Reteste só abre posição com o livro vazio — zere a(s) ${openNow} aberta(s) no ZERAR da boleta.`);
+      } else if (config.accountMode === 'HEDGE' && openNow >= config.maxSimultaneousPositions) {
+        gateReasons.push(`Teto de posições simultâneas batido (${openNow}/${config.maxSimultaneousPositions}): o Robô não abre entrada nova — zere na boleta para liberar.`);
+      }
+    }
   }
   const blocksEntries = !config.active || finLockNow !== null || gateReasons.length > 0;
 
@@ -3350,6 +3487,11 @@ export default function App() {
             EaConfigService.saveConfig(updated);
             return updated;
           });
+          // Ligar o Robô é um comando manual do operador — e sem ticks ele ficaria "ativo"
+          // olhando tela congelada (a regra de boot parado abriu esse buraco): em simulação,
+          // On também põe o mercado para andar no ▶ SIM. Desligar o Robô NÃO pausa o feed —
+          // quem quiser tela viva sem estratégia é só deixar o Robô Off.
+          if (active && mt5State.status !== 'CONNECTED' && !isReplaying) setIsSimulating(true);
         }}
         lastPrice={currentPrice}
         openOrdersCount={openOrders.length}
@@ -3480,16 +3622,10 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
             {/* O código do contrato aberto saiu desta linha: ele já está no seletor de ativo do
                 cabeçalho, e o mesmo símbolo escrito duas vezes na mesma tela era a duplicidade. */}
             <span className="text-emerald-400 font-semibold">{currentPrice.toLocaleString('pt-BR')} pts</span>
-            {/* Spec não homologado: o aviso fica na tira o tempo todo, não só no dropdown, porque um
+            {/* Spec não homologado mora no grupo DIREITO da tira, junto dos outros alertas: o grupo
+                esquerdo rola com overflow-x-auto e recortaria o balão do AlertChip (armadilha já
+                conhecida dos dropdowns da tira). O aviso continua na tela o tempo todo, porque um
                 R$/ponto errado contamina PnL e a trava financeira em dinheiro real. */}
-            {asset.status === 'a_confirmar' && (
-              <span
-                className="px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-400 font-bold uppercase tracking-wider"
-                title={`SPEC NÃO HOMOLOGADO — ${asset.contractNote}. O Robô fica travado em OFF enquanto o ativo estiver neste estado; homologar é mudar o status no registro de ativos.`}
-              >
-                spec não homologado
-              </span>
-            )}
           </div>
           {/* O CVD saiu da tira: ele já mora no card do Box Renko (e na linha do próprio gráfico) —
               na tela do pregão a mesma medida escrita em dois lugares só convida a discordarem. */}
@@ -3504,26 +3640,33 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
           {/* "Modo: SIMULADA" saiu daqui: a linha Origem abaixo já diz MT5 Real ou Simulação B3 —
               duas fichas dizendo a mesma coisa na mesma linha eram redundância pura. */}
           {/* Estratégia ativa — caixinha de seleção da biblioteca do Estúdio. Trocar aqui
-              aplica o snapshot e força o Robô PAUSADO; o link dos ajustes continua no cadeado. */}
-          <div className="hidden lg:flex items-center gap-1.5 px-1.5 py-0 rounded bg-slate-900 border border-slate-800 text-[11px] shrink-0"
+              aplica o snapshot e força o Robô PAUSADO; o link dos ajustes continua no cadeado.
+              SEMPRE visível (era `hidden lg:flex` e sumia do operador em telas menores): a
+              caixinha é o acesso do operador a TODAS as estratégias configuradas no Estúdio. */}
+          <div className="flex items-center gap-1.5 px-1.5 py-0 rounded bg-slate-900 border border-slate-800 text-[11px] shrink-0"
             title="Selecione uma estratégia salva para aplicar no terminal (o Robô é pausado por segurança). Para programar novas, abra o Estúdio."
           >
-            <span className="text-slate-400">Estratégia:</span>
+            <span className="hidden sm:inline text-slate-400">Estratégia:</span>
             <select
               value={StrategyLibraryService.findByProfileName(config.profileName)?.id ?? ''}
               onChange={(e) => {
-                const target = strategyLibrary.find((s) => s.id === e.target.value);
-                if (target) {
-                  handleActivateStrategy(target);
-                  refreshStrategyLibrary();
-                }
+                // Lê a biblioteca FRIA do storage: o estado `strategyLibrary` pode estar atrasado
+                // (salva em outra aba), e a caixinha nunca pode deixar de listar uma estratégia
+                // que existe na biblioteca.
+                const list = StrategyLibraryService.list();
+                setStrategyLibrary(list);
+                const target = list.find((s) => s.id === e.target.value);
+                if (target) handleActivateStrategy(target);
               }}
-              className="bg-transparent font-mono text-slate-200 font-medium focus:outline-none cursor-pointer max-w-[180px]"
+              className="bg-transparent font-mono text-slate-200 font-medium focus:outline-none cursor-pointer max-w-[130px] sm:max-w-[180px]"
             >
               {config.profileName && !StrategyLibraryService.findByProfileName(config.profileName) && (
                 <option value="" className="bg-slate-900">{config.profileName} (config manual)</option>
               )}
               {!config.profileName && <option value="" className="bg-slate-900">— selecione —</option>}
+              {strategyLibrary.length === 0 && (
+                <option value="" className="bg-slate-900">nenhuma salva — use o Estúdio</option>
+              )}
               {strategyLibrary.map((s) => (
                 <option key={s.id} value={s.id} className="bg-slate-900">{s.name}</option>
               ))}
@@ -3537,30 +3680,6 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
             </button>
             <span className={`w-1.5 h-1.5 rounded-full ${config.active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} title={config.active ? 'Robô ligado' : 'Robô pausado'} />
           </div>
-          {/* Por que nenhuma ordem sai? Espelho ao vivo dos portões de entrada (Robô / trava financeira / janela de entradas / trava de pregão) */}
-          {blocksEntries && (
-            <div className={`flex items-center gap-1.5 px-2 py-0 rounded border text-[10px] font-semibold shrink-0 max-w-[340px] ${
-              finLockNow && config.active
-                ? 'bg-rose-500/10 border-rose-500/40 text-rose-300'
-                : 'bg-amber-500/10 border-amber-500/40 text-amber-300'
-            }`}
-              title={[
-                ...(!config.active ? ['O Robô está pausado — ligue no botão On/Off no topo direito. Ativar uma estratégia pausa o Robô de propósito.'] : []),
-                ...(finLockNow ? [finLockNow.reason, config.closeAllOnFinancialLock ? 'Posições abertas foram zeradas a mercado (trava com zeragem ligada na estratégia).' : 'Posições abertas seguem gerenciadas até a saída natural (TP, trailing, virada de fluxo).'] : []),
-                ...gateReasons,
-                ...(isReplaying && !replayOperates ? ['O replay está no modo SILENCIOSO: ligue o chip OPERA ao lado da setinha para ele disparar ordens na tela.'] : []),
-              ].join(' ')}
-            >
-              <AlertTriangle className="w-3 h-3 shrink-0" />
-              <span className="truncate">
-                {!config.active
-                  ? 'Robô pausado: nenhuma ordem sai'
-                  : finLockNow
-                  ? `Trava financeira: ${finLockNow.short}`
-                  : gateReasons[0]}
-              </span>
-            </div>
-          )}
         </div>
 
         <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
@@ -3597,6 +3716,31 @@ ${
               </span>
               {!lastReplay.operated && <span className="text-amber-400/80">silencioso</span>}
             </div>
+          )}
+          {/* Os dois alertas vivem no fim da tira, na coluna do selo Adm — caixas alinhadas à
+              direita e balões que abrem no hover/toque (AlertChip), porque o `title` nativo não
+              entregava a mensagem. Ordem: spec não homologado, depois portões de entrada. */}
+          {asset.status === 'a_confirmar' && (
+            <AlertChip
+              tone="amber"
+              align="right"
+              icon={<ShieldAlert className="w-3.5 h-3.5" />}
+              message={`SPEC NÃO HOMOLOGADO — ${asset.contractNote}\nO Robô fica travado em OFF enquanto o ativo estiver neste estado; homologar é mudar o status no registro de ativos.`}
+            />
+          )}
+          {/* Por que nenhuma ordem sai? Espelho ao vivo dos portões de entrada (Robô / trava financeira / janela de entradas / trava de pregão). */}
+          {blocksEntries && (
+            <AlertChip
+              tone={finLockNow && config.active ? 'rose' : 'amber'}
+              align="right"
+              icon={<AlertTriangle className="w-3.5 h-3.5" />}
+              message={[
+                ...(!config.active ? ['Robô pausado: nenhuma ordem sai — ligue no botão On/Off no topo direito. Ativar uma estratégia pausa o Robô de propósito.'] : []),
+                ...(finLockNow ? [finLockNow.reason, config.closeAllOnFinancialLock ? 'Posições abertas foram zeradas a mercado (trava com zeragem ligada na estratégia).' : 'Posições abertas seguem gerenciadas até a saída natural (TP, trailing, virada de fluxo).'] : []),
+                ...gateReasons,
+                ...(isReplaying && !replayOperates ? ['O replay está no modo SILENCIOSO: ligue o chip OPERA ao lado da setinha para ele disparar ordens na tela.'] : []),
+              ].join('\n')}
+            />
           )}
           {/* Posições abertas e PnL da sessão saíram daqui: migraram para o painel Hedge da boleta,
               abaixo dos botões COMPRA/VENDA (contratos por lado, flutuante, ganhos, perdas, PnL do dia). */}
@@ -3837,7 +3981,9 @@ ${
                 <StrategyStudio
                   currentConfig={config}
                   activeProfileName={config.profileName}
+                  shadowStrategyId={config.shadowRobot?.strategyId ?? null}
                   onLibraryChanged={refreshStrategyLibrary}
+                  onApplyConfig={handleApplySyncedConfig}
                   onActivate={(s) => {
                     handleActivateStrategy(s);
                     refreshStrategyLibrary();

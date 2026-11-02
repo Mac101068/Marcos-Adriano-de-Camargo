@@ -11,7 +11,9 @@ import { StrategyLibraryService } from '../services/strategyLibraryService';
  *
  * É leitura + escolha: as métricas vêm do `shadowRobotService` e as escolhas viram um patch do
  * `config.shadowRobot`, que o App persiste. O painel NÃO tem qualquer caminho para ordem real —
- * ligar/desligar aqui liga/desliga um robô de papel.
+ * ligar/desligar aqui liga/desliga um robô de papel. A ponte já separa robôs por magic
+ * (Fase 2 multi-robô), mas a sombra segue sem placa própria DE PROPÓSITO: virar real é decisão
+ * explícita do operador, não um refactor.
  */
 
 interface ShadowRobotPanelProps {
@@ -43,6 +45,11 @@ export const ShadowRobotPanel: React.FC<ShadowRobotPanelProps> = ({ onPatchConfi
   const snap = cacheRef.current.snap;
   const strategies = StrategyLibraryService.list();
   const { run, stats } = snap;
+  // Conflito estruturado (Ciclo 12): estratégia apagada da biblioteca enquanto a sombra ainda
+  // aponta para ela. Em vez de nome "fixado" e select mudo, o painel assume o estado órfão:
+  // linha Estratégia marca "(removida)", a caixinha mostra a opção fantasma e Ligar não reusa
+  // id quebrado — cai na última salva válida.
+  const staleStrategyId = !!run.strategyId && !strategies.some((s) => s.id === run.strategyId);
   const patch = (p: Partial<ShadowRobotConfig>) => {
     if (!onPatchConfig) return;
     const current: ShadowRobotConfig = {
@@ -69,7 +76,11 @@ export const ShadowRobotPanel: React.FC<ShadowRobotPanelProps> = ({ onPatchConfi
         <p className="text-[10px] text-amber-400/90 leading-snug mb-1.5">{run.warning}</p>
       )}
 
-      <Line label="Estratégia" value={run.strategyName || '—'} />
+      <Line
+        label="Estratégia"
+        value={staleStrategyId ? `${run.strategyName || 'sem nome'} (removida)` : run.strategyName || '—'}
+        accent={staleStrategyId ? 'text-amber-400' : undefined}
+      />
       <Line label="Agora (c/ aberto)" value={fmtBRL(stats.liveEquity)} accent={pnlColor(stats.liveEquity)} />
       <Line label="Resultado realizado" value={fmtBRL(stats.totalFinancial)} accent={pnlColor(stats.totalFinancial)} />
       <Line
@@ -105,9 +116,10 @@ export const ShadowRobotPanel: React.FC<ShadowRobotPanelProps> = ({ onPatchConfi
               patch({ enabled: false });
               return;
             }
-            // Ligar sem estratégia escolhida: usa a última salva da biblioteca
+            // Ligar sem estratégia escolhida: usa a última salva da biblioteca. Id órfão
+            // (estratégia apagada) NUNCA é reusado — senão o "Ligar" renasce morto.
             const lastSaved = [...strategies].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-            patch({ enabled: true, strategyId: run.strategyId || lastSaved?.id || null });
+            patch({ enabled: true, strategyId: (run.strategyId && !staleStrategyId ? run.strategyId : null) || lastSaved?.id || null });
           }}
           className={`w-full flex items-center justify-center gap-1.5 h-7 rounded border text-[11px] font-bold transition-colors cursor-pointer ${
             run.enabled
@@ -129,12 +141,18 @@ export const ShadowRobotPanel: React.FC<ShadowRobotPanelProps> = ({ onPatchConfi
           <span className="text-[10px] uppercase tracking-wider text-slate-500">Estratégia da biblioteca</span>
           <select
             value={run.strategyId || ''}
-            disabled={!onPatchConfig || strategies.length === 0}
+            disabled={!onPatchConfig}
             onChange={(e) => patch({ strategyId: e.target.value || null, enabled: true })}
             className="w-full h-7 mt-0.5 rounded bg-slate-950 border border-slate-700 text-slate-100 text-[11px] px-1.5 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
             title="O Robô 2 roda o snapshot salvo desta estratégia, só que na escala escolhida aqui"
           >
             <option value="">— escolher —</option>
+            {/* Estado órfão honesto: a estratégia apontada não está mais na biblioteca */}
+            {staleStrategyId && run.strategyId && (
+              <option value={run.strategyId} disabled>
+                {run.strategyName || 'sem nome'} (removida da biblioteca)
+              </option>
+            )}
             {strategies.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}

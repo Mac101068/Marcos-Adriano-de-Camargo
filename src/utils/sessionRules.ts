@@ -14,6 +14,29 @@
 /** Fallback quando a estratégia não informa a hora de zeragem: trava das 17:30. */
 export const SESSION_CLOSE_LOCK_DEFAULT_TIME = '17:30';
 
+/**
+ * INTERRUPTOR DE REGIME (Ciclo 12 — regra do operador: "esta janela só pode bloquear ordens
+ * REAIS; simulador tem que rodar"). O relógio do pregão (janela de entradas + trava de
+ * zeragem) só fecha a porta em dois mundos:
+ *   - MT5 CONECTADO  → ordens REAIS obedecem a janela, igual ao script .py gerado;
+ *   - REPLAY         → é uma SESSÃO SIMULADA com hora de barra (08:55–17:45); a janela e a
+ *     zeragem das 17:30 fazem parte do pregão reproduzido.
+ * No SIMULADOR AO VIVO (relógio de parede) o portão fica ABERTO 24h: nada de "FORA DA
+ * JANELA" às 18:22 travando teste. O App vira esta chave a cada mudança de regime
+ * (setEnforceTimeGates); as funções puras daqui e do tradingGates a consultam — e o
+ * paperStrategyBot (coletor/sombra), que chama as mesmas funções, herda o comportamento
+ * sem precisar saber em que mundo está.
+ */
+let enforceTimeGates = true;
+
+export function setEnforceTimeGates(on: boolean) {
+  enforceTimeGates = on;
+}
+
+export function areTimeGatesEnforced(): boolean {
+  return enforceTimeGates;
+}
+
 /** Quanto tempo a trava fica no ar depois da hora de zeragem (liquidação + cancelamento de limitadas). */
 export const SESSION_CLOSE_LIQUIDATION_WINDOW_MIN = 35;
 
@@ -45,6 +68,8 @@ export function sessionCloseLockLabel(closeAllTime?: string): string {
 
 /** O timestamp cai dentro da janela de fechamento obrigatório do pregão? */
 export function isSessionCloseLock(timestamp: number, closeAllTime?: string): boolean {
+  // Simulador ao vivo: a zeragem compulsória não existe (interruptor de regime, Ciclo 12)
+  if (!enforceTimeGates) return false;
   if (!Number.isFinite(timestamp) || timestamp <= 0) return false;
   const d = new Date(timestamp);
   const minutes = d.getHours() * 60 + d.getMinutes();

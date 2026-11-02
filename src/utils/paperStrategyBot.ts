@@ -1,7 +1,7 @@
 import { RenkoBox, AutomationConfig } from '../types/trading';
 import { isSessionCloseLock } from './sessionRules';
 import { isWithinTradingWindow } from './tradingGates';
-import { ASSETS, DEFAULT_ASSET_ID } from '../assets/assetRegistry';
+import { ASSETS, DEFAULT_ASSET_ID, resolveAsset, type AssetId } from '../assets/assetRegistry';
 
 /**
  * Robô Sombra (Paper Strategy Bot)
@@ -21,8 +21,9 @@ import { ASSETS, DEFAULT_ASSET_ID } from '../assets/assetRegistry';
  */
 
 /**
- * Valor do ponto usado pelo Robô Sombra. NÃO é mais um número solto: vem do registro de ativos
- * (default WIN). Fase 2 passa a receber o spec da estratégia simulada em vez deste default.
+ * Valor do ponto usado por Robôs Sombra SEM ativo declarado (default WIN). Não é número
+ * solto: vem do registro de ativos. Cada bot carrega seu próprio `assetId` (setAsset),
+ * resolvido pelo config que alimenta a série — WDO e BTC param de ser lidos como R$0,20.
  */
 export const POINT_VALUE_BRL = ASSETS[DEFAULT_ASSET_ID].pointValue; // R$ 0,20 por ponto por contrato (WIN)
 
@@ -127,6 +128,9 @@ const nextId = () => `paper_${Date.now().toString(36)}_${++uid}`;
 
 export class PaperStrategyBot {
   readonly series: BotKey;
+  // Ativo da contabilidade: R$/ponto vem do registro por `assetId`, nunca soldado no WIN.
+  private assetId: AssetId = DEFAULT_ASSET_ID;
+  private pointValueBrl: number = POINT_VALUE_BRL;
   private closedTrades: PaperTrade[] = [];
   private equity = 0;
   private equityCurve: EquityPoint[] = [];
@@ -145,8 +149,28 @@ export class PaperStrategyBot {
   private largestWin = 0;
   private largestLoss = 0;
 
-  constructor(series: BotKey) {
+  constructor(series: BotKey, assetId?: AssetId) {
     this.series = series;
+    if (assetId && ASSETS[assetId]) {
+      this.assetId = assetId;
+      this.pointValueBrl = ASSETS[assetId].pointValue;
+    }
+  }
+
+  /**
+   * Aponta o contrato que a contabilidade representa (Coletor e Robô 2 chamam a cada barra
+   * com o ativo do config efetivo). Trocar ativo REDERIVA o R$/ponto de contas novas; os
+   * trades já liquidados ficam como foram calculados — quem muda de mercado no meio do dia
+   * reinicia o livro (regra da sombra), então nunca há R$ misturado na mesma curva.
+   */
+  setAsset(assetId: AssetId) {
+    if (!ASSETS[assetId] || this.assetId === assetId) return;
+    this.assetId = assetId;
+    this.pointValueBrl = ASSETS[assetId].pointValue;
+  }
+
+  getAssetId(): AssetId {
+    return this.assetId;
   }
 
   /** Atualiza o preço vivo para calcular o resultado não realizado (chamado a cada tick). */
@@ -164,7 +188,7 @@ export class PaperStrategyBot {
       if (ct <= 0) continue; // nada aberto nesta posição (parcial consumiu tudo)
       const dirSign = t.direction === 'BUY' ? 1 : -1;
       const pts = (this.livePrice - t.entryPrice) * dirSign;
-      sum += pts * POINT_VALUE_BRL * ct;
+      sum += pts * this.pointValueBrl * ct;
     }
     return sum;
   }
@@ -271,7 +295,7 @@ export class PaperStrategyBot {
     trade.exitTime = exitTime;
     trade.exitReason = reason;
     trade.points = points;
-    trade.financial = points * POINT_VALUE_BRL * trade.contracts;
+    trade.financial = points * this.pointValueBrl * trade.contracts;
     this.equity += trade.financial;
     this.closedTrades.push(trade);
     this.equityCurve.push({ t: exitTime, v: Number(this.equity.toFixed(2)) });

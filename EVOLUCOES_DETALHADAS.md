@@ -8,6 +8,179 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 12 — 02/11/2026 · O terminal acorda parado, o limiar nasce do pregão e o relógio só vale para ordens reais
+
+Ciclo da **confiança do operador na tela**: vários episódios de "robô ligado e nada acontece" sem
+qualquer explicação. A auditoria revelou que o problema não era um só — eram três camadas
+(boot que se auto-inaugurava, limiar físico que engolia o simulador e portão de horário que
+bloqueava teste fora do pregão). O ciclo também entrega o pacote de sincronismo entre os dois
+navegadores e a varredura de referências órfãs de estratégia.
+
+### 12.1 ✅ Regra do operador: o terminal SEMPRE acorda parado e vazio (`App.tsx`)
+
+Causa raiz: dois auto-runners de mount violavam a regra "só inicia com comando manual":
+(a) o boot effect semeava **350 ticks sintéticos** (falsa "história", sorteada de novo a cada F5)
+e `isSimulating` nascia `true`; (b) um segundo effect disparava **replay automático 400 ms após o
+mount** — carimbava timestamps de sessão à frente do relógio de parede, zerava a boleta e deixava
+o ▶ SIM aparentemente morto (`isReplaying` true) enquanto só a sombra operava. Nenhum dado de
+gráfico persiste entre sessões (só ordens/auditoria/coletor/lastPrice/config/biblioteca) — o
+"histórico do dia anterior" que a tela mostrava era invenção do boot, não memória.
+Entregue: `isSimulating` nasce `false`; o boot effect só inicializa os motores no preço de
+referência; os quatro caminhos de falha do MT5 que ligavam o SIM sozinhos foram limpos (só o bot
+demo da Pirâmide ainda liga); o replay de abertura foi deletado com lápide no lugar. Brinde
+necessário: **ligar o Robô (On) também liga o feed SIM** — "robô ON + mercado parado" era o novo
+estado morto silencioso, agora impossível; e o balão `MERCADO PARADO` avisa se o robô estiver ON
+sem feed (regra auditada em TODOS os effects de mount — memória de pitfall registrada).
+
+### 12.2 ✅ Interruptor de regime dos portões de horário (`sessionRules.ts` + `tradingGates.ts` + `App.tsx`)
+
+Regra do operador: *"esta janela só pode bloquear ordens reais; simulador tem que rodar"*. O
+relógio do pregão (janela 08:55–17:30 + zeragem das 17:30) agora só fecha a porta em dois mundos:
+**MT5 conectado** (ordens reais, igual ao script .py gerado) e **replay** (sessão simulada com hora
+de barra — a janela e a zeragem fazem parte do pregão reproduzido). No **simulador ao vivo**
+(relógio de parede) o portão fica aberto 24h — acabou o `FORA DA JANELA` às 18:22 no meio de um
+teste. Implementação: `setEnforceTimeGates`/`areTimeGatesEnforced` em `sessionRules.ts`, consultados
+por `isWithinTradingWindow` e `isSessionCloseLock`; o App vira a chave num effect sobre
+`[isReplaying, mt5State.status]`; coletor e robôs sombra **herdam automaticamente** porque o
+`paperStrategyBot` chama as mesmas funções puras. A migração de janela (08:55–17:30) e o
+`PRIOR_WINDOWS` do `tradingWindowMigration.ts` continuam valendo para o mundo real/replay.
+
+### 12.3 ✅ Limiar de sinal CALCULADO do pregão — P60 (`sessionRegime.ts` + `convergenceEvaluator.ts`)
+
+Causa raiz do "robô ligado, feed andando, nenhuma ordem": o filtro "adaptativo" era
+`minDeltaThreshold × fator` — uma **constante física** (100 ctros) maquiada; o simulador gera
+1–250 ctros/tick, então boxes de Δ 20–120 quase nunca passavam. Agora, com
+`adaptiveThresholdEnabled`, o limite efetivo é o **percentil P60 dos |Δ| do próprio lado (compra/
+venda) nos últimos max(lookback,20) boxes fechados** (`getPercentileLimit`), com fallback honesto
+para o regime multiplicativo no aquecimento (<10 boxes ou <5 Δs do lado). `minDeltaThreshold`
+degrada a aquecimento/fallback (e vira o limiar físico quando o adaptativo está desligado). O
+motivo do sinal impresso no trade ganhou `| limiar = P60 do pregão`. Bancada: sessão sintética com
+Δs 10→200 deu P60=130 (não 100); box Δ5 barrado, box Δ180 sinalizou. Seletividade ajustável
+(P50–P80) fica como próximo passo se o operador quiser.
+
+### 12.4 ✅ Balão de alerta (`AlertChip.tsx`) e o laudo dos sinais (`gateReasons` no App)
+
+O ⚠ do header agora abre um balão central com os motivos pelos quais nada abriu posição — e os
+motivos novos do ciclo: `MERCADO PARADO`, `SÉRIE SEM ROBÔ` (gráfico em Tempo — as entradas só
+disparam em Renko/Range), `RETESTE ESPERANDO CVD` e `SINAL FRACO HÁ N BOXES` com números reais
+(Δ do último box vs limiar P60). Anti-pisca: o laudo de sinal só aparece em **jejum confirmado**
+(≥5 dos últimos 6 boxes fechados sem convergência), porque julgar box a box fazia o triângulo
+piscar a cada tijolo. Balão também herdado: avisos de ativação de estratégia e netting/teto hedge.
+
+### 12.5 ✅ Sincronizar terminal — navegador interno ↔ externo (`StrategyStudio.tsx` + `mergeConfig`)
+
+Cada navegador tem um cofre localStorage próprio (config, biblioteca, velocidade do SIM) — o
+"dessincronismo" que o operador sentia. Entregue o pacote `fluxo_terminal_sync`: botões âmbar
+**Exportar tudo / Importar tudo** gerem/leem um único JSON (versão, origem, `activeConfig` +
+biblioteca inteira). Importação é **upsert por id** (nunca apaga nada local) e aplica o config com
+`active: false` — o robô nunca acorda sozinho com um import; toast "Terminal sincronizado" avisa
+das ordens abertas que não viajam junto.
+
+### 12.6 ✅ Varredura de referências órfãs de estratégia (`App.tsx` + `ShadowRobotPanel.tsx` + modal do Estúdio)
+
+Bug relatado: "apaguei a Reteste e ela continua fixada no Robô 2". O painel sombra guardava
+`strategyId` morto (select ficava em branco silencioso; "Ligar" reinjetava o id órfão). Agora:
+qualquer mudança na biblioteca dispara a varredura — sombra com estratégia removida perde o id e
+**se desliga**; perfil ativo do Robô 1 órfão limpa `profileName`; toast explica. O painel mostra
+`nome (removida)` em âmbar com option fantasma no select, e o modal de exclusão do Estúdio diz a
+verdade sobre quem está rodando a estratégia (Robô 1 por nome, Robô 2 por id — prop
+`shadowStrategyId`).
+
+### 12.7 ✅ Brindes do mesmo ciclo (sessão anterior)
+
+Ordens da **boleta manual** no modo Pirâmide passaram a respeitar Alvo/Stop digitados (em vez de
+surfar cegamente a pirâmide), e o **Estúdio de Estratégias** ficou acessível: seletor de estratégia
+sempre visível, avisos de bloqueio vindos da boleta e aviso ao ativar estratégia com posições
+abertas.
+
+### Verificação do Ciclo 12
+
+`npx tsc --noEmit` limpo em todas as entregas · `npx vite build` OK (2,06 s na última UI) ·
+asserts `robotMagicAssert` / `renkoBoxScaleAssert` / `chartContractAssert` passando ·
+bancadas headless com `npx tsx -e`: portões de tempo nos 3 regimes (SIM 24h / REPLAY / REAL) e
+P60=130 numa sessão sintética de Δs 10→200. Pendente de olhar humano: conferir em tela que a
+boleta enche com o P60 dentro do pregão simulado e o balão sem piscar.
+
+---
+
+## 📆 Ciclo 11 — 02/11/2026 · Fase 2 do multi-robô: placa de magic por robô + R$/ponto por ativo
+
+Ciclo das duas pendências de código deixadas pelo Ciclo 10: **(2) magic number por robô com filtro na
+ponte** e **(3) `POINT_VALUE_BRL` soldado em R$0,20 (só WIN)**. O tema do ciclo é *identidade*: cada
+ordem passa a carregar a placa de quem a mandou, e cada saída automática só toca posições da própria
+placa — a boleta manual e o robô deixam de poder atropelar um ao outro no mesmo símbolo. A contabilidade
+(em R$) passa a respeitar o tick-point do ativo, no script gerado e nos robôs de papel.
+
+### 11.1 ✅ `types/trading.ts` — as placas vivem num lugar só
+
+- `DEFAULT_MAGIC_NUMBER = 101010` (fallback do Robô 1 quando o config não tem magic),
+  `MANUAL_ORDER_MAGIC = 999999` (placa da Boleta manual), `mainRobotMagic(config)` (lê
+  `config.magicNumber` com fallback — substituiu as dispersas `config.magicNumber || 101010`), e
+  `robotTagForMagic(magic)` para rótulos de auditoria/toasts ("Robô 1 · magic 102030",
+  "Boleta manual", "sem magic").
+- `MT5ConnectionState` ganhou `scriptRobotMagic?` e `scriptPointValue?` — o app agora sabe o que o
+  script instalado na ponte realmente usa, e pode avisar quando divergir.
+
+### 11.2 ✅ Script Python gerado — carimbo na entrada, filtro na saída, retrocompatibilidade
+
+- **Entradas carimbam**: `execute_market_order`, `place_websocket_limit_order`,
+  `close_partial_position` e `modify_stop_loss` aceitaram `magic=None`; o handler do WebSocket lê
+  `data.get("magic")` e repassa. Sem o campo (app velho falando com script novo), cai na placa do
+  robô — comportamento antigo preservado.
+- **Saídas filtram**: `close_all_positions(side=None, magic="robot")` confere `pos.magic` antes de
+  fechar; `execute_pyramid_confluence` e `watch_closed_pyramids` olham só as posições do robô. A
+  semântica de `CLOSE_POSITIONS` ficou: payload **com** `robotMagic` (saídas do robô — inversão,
+  trava financeira) fecha só aquela placa; payload **sem** (ZERAR C/V/TUDO da boleta) fecha tudo —
+  botão de emergência do operador nunca pode ser filtrado. Documentado no docstring do script
+  (item 4b).
+- **R$/ponto por ativo**: `ASSET_POINT_VALUE` (gerado do registro: WIN 0,20 · WDO 0,10 · BTC 1,00)
+  passou a ser usado de verdade no PnL impresso da zeragem, e `ACCOUNT_INFO` agora reporta
+  `pointValue`, `robotMagic` e `manualMagic` ao app.
+- **Bug histórico corrigido de brinde**: `MT5OrderManager(..., contracts=CONTRACTS)` referenciava uma
+  constante que nunca existiu (NameError na importação — o motivo pelo qual a ponte nunca tinha
+  rodado contra a corretora). Agora é `contracts=MAIN_CONTRACTS`.
+- ⚠️ **Armadilha registrada**: o script inteiro é um template literal JS — backticks no texto gerado
+  (ex.: `` `magic` `` num docstring Python) encerram o template e quebram o `tsc`. Citações dentro do
+  texto gerado usam aspas simples.
+
+### 11.3 ✅ `App.tsx` — dispatch com placa e aviso de divergência APP × SCRIPT
+
+- Todos os 5 dispatches `ORDER_SEND` ganharam `magic`: caminhos do robô com
+  `mainRobotMagic(config)`, os 2 da Boleta manual com `MANUAL_ORDER_MAGIC` (ordens locais também
+  nascem com a placa). As saídas do robô (`CLOSE_POSITIONS` da inversão e das duas travas
+  financeiras, `ORDER_PARTIAL_CLOSE`, `ORDER_MODIFY_SL`) enviam `robotMagic`; o ZERAR da boleta
+  permanece sem filtro (emergência).
+- `ACCOUNT_INFO` guarda `scriptRobotMagic`/`scriptPointValue` no estado da ponte e, se a placa do
+  script instalado divergir da placa configurada no app, dispara toast central
+  "⚠️ MAGIC DIVERGENTE (APP × SCRIPT)" — a tela não pode anunciar uma placa e carimbar outra.
+- `AutomationPanel` explica a placa do Robô 1 (e que a boleta manual usa 999999 e nunca é tocada);
+  `ShadowRobotPanel` registra no cabeçalho que a sombra **não tem magic de propósito** — ela é
+  papel por estrutura, e a Fase 2 está pronta para quando uma sombra virar robô real.
+
+### 11.4 ✅ R$/ponto por ativo nos robôs de papel
+
+- `PaperStrategyBot` trocou o módulo-constante `POINT_VALUE_BRL` (WIN) por instância
+  `assetId`/`pointValueBrl` com `setAsset(assetId)` / `getAssetId()`; `getUnrealized` e o fechamento
+  contam em `this.pointValueBrl`.
+- `seriesCollectorService.ingest` chama `setAsset(resolveAsset(config.symbol, config.assetId).id)`
+  antes de alimentar os bots de cada escala; `shadowRobotService` chama `setAsset` no `configure`
+  e na restauração do F5 (o ativo escolhido volta do storage junto com a corrida).
+
+### 11.5 ✅ Verificação do ciclo
+
+- Assert permanente novo: `scripts/robotMagicAssert.ts` — placas do app (fallback, magic 0 lixo,
+  rótulos), conteúdo do script gerado (filtro `pos.magic`, ausência do `contracts=CONTRACTS`,
+  `MANUAL_ORDER_MAGIC`, `robotMagic`/`pointValue` no `ACCOUNT_INFO`), `ASSET_POINT_VALUE` por ativo
+  (WIN 0.2 × WDO 0.1), `pointsToBRL` determinístico e `setAsset` do robô de papel — 28 asserts.
+- `npx tsc --noEmit` limpo · `npx vite build` OK (2,80 s) · `npx tsx` nos três asserts
+  (`robotMagicAssert`, `renkoBoxScaleAssert`, `chartContractAssert`) todos passando ·
+  `python3 -m py_compile` nos scripts gerados para WIN e WDO OK.
+- 🧪 **Ficou para o navegador**: as três conferências herdadas do Ciclo 10 (replay espelhado, F5 da
+  sombra com principal OFF, overflow do chip) + o toast de divergência de magic (conferir trocando o
+  `magicNumber` do config sem baixar o script de novo).
+
+---
+
 ## 📆 Ciclo 10 — 02/11/2026 · Robô 2 na sombra (escala própria 15R/20R/25R) e o pente-fino da escala
 
 Dois trabalhos convivem neste ciclo. O principal é o **ROBÔ 2 (SOMBRA)**: um segundo robô em
@@ -1080,6 +1253,31 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 
 ## 🧭 Pendências e próximos passos conhecidos
 
+- 📍 **PONTO DE RETOMADA — 02/11/2026 (fim do Ciclo 12, terminal confiável)**: o app **acorda parado
+  e vazio** (boot de 350 ticks e replay automático deletados; On do Robô liga o feed SIM), o limiar
+  de sinal é o **P60 calculado do próprio pregão** (`getPercentileLimit`), o relógio do pregão só
+  bloqueia **ordens reais e replay** (interruptor `setEnforceTimeGates`; simulador ao vivo roda 24h),
+  o balão ⚠ explica qualquer inação sem piscar, existe **sincronismo entre navegadores** (Exportar
+  tudo/Importar tudo no Estúdio) e estratégia removida **limpa as referências órfãs** (Robôs 1 e 2).
+  Verificado com tsc + build + 3 asserts + bancadas headless (regimes de horário; P60=130).
+  **Voltar por**: (1) 🧪 conferir em tela: boleta enchendo com P60, balão estático, sincronismo
+  interno↔externo com um arquivo, modal de exclusão falando verdade; (2) opcional pedido pelo
+  operador: percentil ajustável na tela de Ajustes (P50–P80, `adaptiveDeltaPercentile`); (3) as
+  conferências herdadas dos Ciclos 10/11 (replay espelhado, F5 da sombra, overflow do chip, toast
+  de divergência de magic); (4) validação na conta demo XP; (5) repiquete contínua × vigente no
+  config; (6) homologar WDO/BTC.
+- 📍 **PONTO DE RETOMADA — 02/11/2026 (fim do Ciclo 11, Fase 2 multi-robô + R$/ponto por ativo)**:
+  cada ordem agora carrega placa de magic (Robô 1 = `config.magicNumber` · Boleta manual = 999999),
+  as saídas automáticas da ponte filtram por `pos.magic`, o ZERAR da boleta continua fechando tudo
+  (emergência), o app avisa quando a placa do script instalado divergir da configurada, e a
+  contabilidade em R$/ponto respeita o ativo (ponte, coletor e sombra). Corrigido de brinde o
+  `contracts=CONTRACTS` (NameError) do script gerado. Verificado com tsc + build + asserts
+  (`robotMagicAssert`, `renkoBoxScaleAssert`, `chartContractAssert`) + `py_compile` WIN/WDO.
+  **Voltar por**: (1) 🧪 as quatro conferências no navegador — as três herdadas do Ciclo 10 (replay
+  espelhado, F5 da sombra com principal OFF, overflow do chip) mais o toast de divergência de
+  magic; (2) commit do ciclo, quando o operador pedir; (3) validação na conta demo XP — agora a
+  ponte já isola robô × manual por magic; (4) repiquete: decidir se o config deve gravar a contínua
+  ou o vigente ao trocar de ativo; (5) homologar WDO/BTC (uma linha no registro cada).
 - ✅ **Commit do Ciclo 10** — "feat: Robô 2 (sombra) com escala própria 15R/20R/25R + pente-fino da
   escala e contrato vigente no gráfico": código novo (`shadowRobotService.ts`,
   `ShadowRobotPanel.tsx`, `MiniSelect.tsx`, `chartContractMigration.ts`, asserts
@@ -1092,9 +1290,9 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
   vivo, no replay e com o principal OFF; persiste em `fluxo_shadow_robot_v1` por dia; nunca toca a
   corretora (sem socket, sem setOrders, sem dispatch). **Voltar por**: (1) 🧪 as três conferências
   no navegador que ficaram pendentes (espelhamento visual do replay, F5 com principal OFF,
-  overflow do chip no celular); (2) **Fase 2** — magic number por robô + filtro na ponte e na
-  auditoria antes de qualquer sombra virar robô real no mesmo símbolo; (3) `POINT_VALUE_BRL` por
-  ativo da ponte (hoje soldado em R$0,20 — só WIN); (4) repiquete: decidir se o config deve gravar
+  overflow do chip no celular); (2) ✅ **entregue no Ciclo 11** — Fase 2, magic number por robô +
+  filtro na ponte e na auditoria; (3) ✅ **entregue no Ciclo 11** — `POINT_VALUE_BRL` por ativo na
+  ponte e nos robôs de papel; (4) repiquete: decidir se o config deve gravar
   a contínua ou o vigente ao trocar de ativo (a migração do vigente ainda não conferida no
   navegador); (5) validação na conta demo XP (item 🧪 abaixo).
 - ✅ **Commit `89a5bb1`** — "feat: boleta-base editavel + livro de hedge + Estudio lendo a boleta (Ciclo
@@ -1189,7 +1387,7 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 ## 🔁 Como retomar / verificar
 
 ```bash
-npm run dev          # http://localhost:3002 (--host=0.0.0.0, então dá para abrir pelo celular)
+npm run dev          # http://localhost:3000 (--host=0.0.0.0, então dá para abrir pelo celular)
 npx tsc --noEmit     # checagem de tipos usada a cada etapa
 npx vite build       # bundle de produção
 ```

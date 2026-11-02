@@ -37,6 +37,16 @@ interface StrategyStudioProps {
   onActivate: (strategy: SavedStrategy) => void;
   /** Toda mudança na biblioteca (salvar, excluir, duplicar, importar) avisa o App para a caixinha ficar em sincronia. */
   onLibraryChanged?: () => void;
+  /**
+   * Sincronização de terminal (Ciclo 12): aplica o config ativo que veio do arquivo do OUTRO
+   * navegador (interno e externo não compartilham localStorage). O App aplica com Robô PAUSADO.
+   */
+  onApplyConfig?: (config: AutomationConfig) => void;
+  /**
+   * Id da estratégia que o Robô 2 (sombra) aponta agora — o modal de exclusão usa para avisar
+   * que apagar uma em uso limpa a referência e desliga a sombra (Ciclo 12, conflito das caixinhas).
+   */
+  shadowStrategyId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,12 +190,13 @@ const fmtDate = (ts: number) =>
 // ---------------------------------------------------------------------------
 // Componente
 // ---------------------------------------------------------------------------
-export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, activeProfileName, onActivate, onLibraryChanged }) => {
+export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, activeProfileName, onActivate, onLibraryChanged, onApplyConfig, shadowStrategyId }) => {
   const [library, setLibrary] = useState<SavedStrategy[]>(() => StrategyLibraryService.list());
   const [draft, setDraft] = useState<SavedStrategy | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const fileRefAll = useRef<HTMLInputElement>(null);
 
   const refresh = () => {
     setLibrary(StrategyLibraryService.list());
@@ -253,9 +264,9 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, a
     URL.revokeObjectURL(url);
   };
 
-  const importFile = async (file: File) => {
+  const importStrategyText = async (text: string) => {
     try {
-      const s = StrategyLibraryService.importJson(await file.text());
+      const s = StrategyLibraryService.importJson(text);
       const saved = StrategyLibraryService.save(s);
       refresh();
       setDraft(saved);
@@ -263,6 +274,75 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, a
     } catch (err) {
       flash(`Falha ao importar JSON: ${err instanceof Error ? err.message : 'arquivo inválido'}`);
     }
+  };
+
+  const importFile = async (file: File) => importStrategyText(await file.text());
+
+  // =========================================================================
+  // SINCRONIZAÇÃO DE TERMINAL (Ciclo 12): o navegador interno da IDE e o externo
+  // NÃO compartilham localStorage — cada um tem config e biblioteca próprios. Este
+  // pacote único (config ativo + biblioteca inteira) viaja de um para o outro em
+  // um clique de cada lado. Importar não apaga nada local: strategies de mesmo id
+  // são substituídas pelas do arquivo; as demais ficam.
+  // =========================================================================
+  const SYNC_TIPO = 'fluxo_terminal_sync';
+
+  const exportAll = () => {
+    const payload = {
+      tipo: SYNC_TIPO,
+      versao: 1,
+      exportedAt: Date.now(),
+      origem: navigator.userAgent.includes('Electron') || window.self !== window.top ? 'navegador interno' : 'navegador externo',
+      activeConfig: currentConfig,
+      library: StrategyLibraryService.list(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sincronizacao-terminal-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    flash(`Pacote sincronizado exportado: config ativo + ${payload.library.length} estratégia(s).`);
+  };
+
+  const applySyncPayload = (parsed: { library?: unknown; activeConfig?: unknown }) => {
+    const list = Array.isArray(parsed.library) ? (parsed.library as Partial<SavedStrategy>[]) : [];
+    let applied = 0;
+    for (const s of list) {
+      if (!s || typeof s.name !== 'string' || !s.config) continue;
+      StrategyLibraryService.save({
+        id: typeof s.id === 'string' ? s.id : `strategy-${Date.now()}-${applied}`,
+        name: s.name,
+        description: typeof s.description === 'string' ? s.description : undefined,
+        createdAt: Number(s.createdAt) || Date.now(),
+        updatedAt: Number(s.updatedAt) || Date.now(),
+        config: s.config as AutomationConfig,
+      });
+      applied += 1;
+    }
+    refresh();
+    const cfg = parsed.activeConfig as AutomationConfig | undefined;
+    const hasCfg = !!cfg && typeof cfg.strategyMode === 'string';
+    if (hasCfg && onApplyConfig) onApplyConfig(cfg);
+    flash(
+      `Terminal sincronizado: ${applied} estratégia(s) na biblioteca` +
+        (hasCfg && onApplyConfig ? ' + config ativo aplicado (Robô PAUSADO por segurança).' : '. Config não aplicado (este Estúdio não recebe o config).')
+    );
+  };
+
+  const onPickSyncFile = async (file: File) => {
+    const text = await file.text();
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      flash('Falha ao sincronizar: arquivo não é um JSON válido.');
+      return;
+    }
+    if (parsed && parsed.tipo === SYNC_TIPO) applySyncPayload(parsed as { library?: unknown; activeConfig?: unknown });
+    else if (parsed && parsed.config) void importStrategyText(text); // arquivo de estratégia única também serve
+    else flash('Falha ao sincronizar: JSON sem "tipo" de pacote nem campo "config".');
   };
 
   const confirmTarget = useMemo(
@@ -304,6 +384,39 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, a
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) void importFile(f);
+              e.target.value = '';
+            }}
+          />
+        </div>
+
+        {/* Sincronização de terminal (Ciclo 12): navegador interno e externo têm cofres
+            (localStorage) separados — este pacote único leva config + biblioteca inteira de um
+            para o outro em um clique de cada lado. */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={exportAll}
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold rounded-lg border border-amber-600/40 bg-amber-950/30 text-amber-300 hover:border-amber-500 transition-colors cursor-pointer"
+            title="Baixar UM arquivo .json com o config ativo + a biblioteca inteira. Abra esse arquivo no OUTRO navegador (interno ↔ externo) no botão ao lado."
+          >
+            <Download className="w-3.5 h-3.5" />
+            Exportar tudo
+          </button>
+          <button
+            onClick={() => fileRefAll.current?.click()}
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold rounded-lg border border-amber-600/40 bg-amber-950/30 text-amber-300 hover:border-amber-500 transition-colors cursor-pointer"
+            title="Aplicar o pacote do outro navegador: repõe a biblioteca inteira e o config ativo. O Robô termina PAUSADO por segurança."
+          >
+            <Upload className="w-3.5 h-3.5" />
+            Importar tudo
+          </button>
+          <input
+            ref={fileRefAll}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void onPickSyncFile(f);
               e.target.value = '';
             }}
           />
@@ -660,8 +773,13 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({ currentConfig, a
           <div className="w-full max-w-sm rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-slate-100">Excluir estratégia?</h3>
             <p className="text-xs text-slate-400 mt-1.5 leading-snug">
-              <span className="text-slate-200 font-medium">{confirmTarget.name}</span> será removida da biblioteca. O terminal não é
-              afetado — mas se ela for a ativa, o config atual continua em uso até você trocar.
+              <span className="text-slate-200 font-medium">{confirmTarget.name}</span> será removida da biblioteca.
+              {confirmTarget.name && activeProfileName === confirmTarget.name
+                ? ' Ela é o perfil ATIVO do Robô 1: ao apagar, o config atual continua valendo, mas a referência ao nome é limpa na caixinha.'
+                : ' O config atual do terminal não é afetado.'}
+              {shadowStrategyId === confirmTarget.id
+                ? ' O Robô 2 (sombra) roda exatamente ela: será desligado e ficará em "— escolher —" até você reescolher.'
+                : ''}
             </p>
             <div className="flex gap-2 mt-4 justify-end">
               <button

@@ -29,8 +29,9 @@ import {
  * - A janela de horário e a zeragem de fim de pregão OBEDECEM à estratégia da sombra,
  *   porque é ela (e não o config ativo) que está sendo testada.
  *
- * Fase 2 (fora desta entrega, documentada no plano): ordem real de dois robôs no mesmo
- * símbolo exige `magicNumber` por robô + filtro por magic na ponte, hoje inexistente.
+ * Fase 2 do multi-robô REAL (ponte): cada robô despacha com `magicNumber` próprio e a ponte
+ * filtra por magic nas saídas — a estrutura já existe (types/trading.ts + script gerado). O
+ * Robô 2 continua PAPEL puro de propósito: sem magic, sem socket, sem dispatch.
  *
  * Persistência: localStorage por dia (sobrevive a F5; rotaciona num dia novo), no mesmo
  * padrão do Coletor de Eficiência.
@@ -126,6 +127,8 @@ class ShadowRobotService {
       const run = data.run || {};
       const cfg = normalizeShadowRobot({ enabled: run.enabled, strategyId: run.strategyId, scaleR: run.scaleR });
       const storedAsset = ASSETS[run.assetId as AssetId] || ASSETS[DEFAULT_ASSET_ID];
+      // R$/ponto da contabilidade restaurado no ativo gravado (não soldar no WIN após F5)
+      this.bot.setAsset(storedAsset.id);
       this.run = {
         enabled: cfg.enabled,
         scaleR: cfg.scaleR,
@@ -233,6 +236,8 @@ class ShadowRobotService {
     this.ensureLoaded();
     const cfg = normalizeShadowRobot(shadow);
     const boxPoints = boxPointsForR(cfg.scaleR, asset);
+    // Contabilidade sempre no R$/ponto DO ativo escolhido (WIN 0,20 · WDO 0,10 · BTC 1,00)
+    this.bot.setAsset(asset.id);
 
     const next: ShadowRun = {
       enabled: cfg.enabled,

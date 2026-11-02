@@ -1081,6 +1081,12 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               <span className="text-[10px] text-slate-500 mt-0.5 block">
                 Os LOTES vivem apenas dentro do bloco da estratégia ativa — nada duplicado aqui.
               </span>
+              <span className="text-[10px] text-slate-500 mt-0.5 block">
+                Placa do Robô 1 no MT5: a ponte carimba cada entrada com este número e as saídas
+                automáticas (inversão, zeragem de horário) só fecham posições com a mesma placa —
+                ordens da Boleta manual (placa 999999) nunca são tocadas pelo robô. Mude aqui e
+                baixe o script .py de novo.
+              </span>
             </div>
 
             <div>

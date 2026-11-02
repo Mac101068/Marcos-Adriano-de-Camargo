@@ -24,10 +24,12 @@ import {
   ClipboardCheck,
   Palette,
   Layers,
+  CalendarClock,
 } from 'lucide-react';
 import { MT5ConnectionState } from '../types/trading';
 import { UserProfile } from '../types/auth';
 import { SubscriptionStatusBadge } from './SubscriptionStatusBadge';
+import { AlertChip } from './AlertChip';
 import { ALLOW_UNCONFIRMED_PREVIEW, ASSETS, assetSymbols, chartSymbolFor, SYMBOL_ROLE_LABEL, type AssetId, type AssetSpec } from '../assets/assetRegistry';
 
 type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'studio' | 'admin';
@@ -163,21 +165,20 @@ interface AssetSelectorProps {
 }
 
 /**
- * Ficha do código do ativo no cabeçalho: o símbolo em mono + o PAPEL dele miúdo ao lado.
- * UM código só, porque o gráfico abre sempre o contrato vigente. `off` marca o único caso em que
- * a tela mostra outro código: o config está apontando para um vencimento diferente do vigente
- * (teste na contínua ou código digitado à mão em Parâmetros) — aí o âmbar avisa que o aberto não
- * é o papel padrão do pregão.
+ * Ficha do código do ativo no cabeçalho: UM código só (o gráfico abre sempre o vigente).
+ * O rótulo de papel miúdo agora só aparece na exceção que precisa de aviso: config apontando
+ * para um vencimento diferente do vigente (teste na contínua ou código digitado à mão em
+ * Parâmetros) — aí o âmbar + o rótulo dizem que o aberto não é o papel padrão do pregão.
  */
-const SymbolChip: React.FC<{ sym: string; role: string; off?: boolean }> = ({ sym, role, off }) => (
+const SymbolChip: React.FC<{ sym: string; role?: string; off?: boolean }> = ({ sym, role, off }) => (
   <span
     className={`flex items-center gap-0.5 rounded px-1 py-px font-mono leading-none ${
       off ? 'bg-amber-500/15 text-amber-200' : 'bg-slate-800 text-slate-100'
     }`}
-    title={off ? `Gráfico aberto em ${sym} (${role}), não no vigente` : `Gráfico aberto em ${sym} (${role})`}
+    title={off ? `Gráfico aberto em ${sym} (${role || 'papel não padrão'}), não no vigente` : `Gráfico aberto em ${sym}`}
   >
     <span className="text-[9px] font-semibold">{sym}</span>
-    <span className="hidden sm:inline text-[7px] uppercase tracking-wider opacity-70">{role}</span>
+    {role && <span className="hidden sm:inline text-[7px] uppercase tracking-wider opacity-70">{role}</span>}
   </span>
 );
 
@@ -266,13 +267,13 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
         className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-lg border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer"
       >
         <Layers className="w-3 h-3 text-slate-400 shrink-0" />
-        <span className="text-[10px] font-semibold text-slate-100 leading-none">{asset.id}</span>
-        <span className="hidden sm:block w-px h-2.5 bg-slate-700 shrink-0" />
-        <SymbolChip sym={shownSym} role={shownRole} off={syms.offPattern} />
+        <SymbolChip sym={shownSym} role={syms.offPattern ? shownRole : undefined} off={syms.offPattern} />
         {!asset.activeContract && (
-          <span className="hidden sm:inline text-[7px] uppercase tracking-wider text-amber-400/80 shrink-0">
-            venc. a confirmar
-          </span>
+          <AlertChip
+            tone="amber"
+            icon={<CalendarClock className="w-3.5 h-3.5" />}
+            message={`Vencimento ainda não confirmado na corretora para ${asset.label}.\nO gráfico abre na série contínua ${chartSym}. ${asset.contractNote}`}
+          />
         )}
         <span
           className={`w-2 h-2 rounded-full shrink-0 ${
@@ -314,7 +315,7 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
                   <span className="block text-[9px] font-mono text-slate-500">
                     {chartSymbolFor(spec)}{' '}
                     <span className="font-sans text-slate-600">
-                      {spec.activeContract ? 'vigente' : 'série · venc. a confirmar'}
+                      {spec.activeContract ? '' : 'venc. a confirmar'}
                     </span>
                   </span>
                 </span>

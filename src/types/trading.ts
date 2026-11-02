@@ -1,5 +1,29 @@
 import type { AssetId } from '../assets/assetRegistry';
 
+// ==============================================================================
+// IDENTIDADE DOS ROBÔS (Fase 2 do multi-robô) — o `magic` é a placa do EA no MT5:
+// cada robô carimba suas ordens com um número próprio e a ponte só mexe na posição
+// cujo magic bate com quem mandou o comando. Robô 2 (sombra) é PAPEL puro: não tem
+// magic e nunca despacha — quando (e se) ele virar real, nasce com magic próprio.
+// =============================================================================
+
+/** Magic padrão do Robô 1 quando o operador nunca digitou um. */
+export const DEFAULT_MAGIC_NUMBER = 101010;
+/** Ordens da Boleta manual: magic fixo que a ponte usa para ISOLAR o que o robô não pode tocar. */
+export const MANUAL_ORDER_MAGIC = 999999;
+
+/** Magic do robô principal efetivo (config + fallback histórico do app). */
+export function mainRobotMagic(config: { magicNumber?: number }): number {
+  return config.magicNumber || DEFAULT_MAGIC_NUMBER;
+}
+
+/** Rótulo humano de quem opera uma ordem pelo magic (auditoria, painel, chips). */
+export function robotTagForMagic(magic?: number): string {
+  if (!magic) return 'sem magic';
+  if (magic === MANUAL_ORDER_MAGIC) return 'Boleta manual';
+  return `Robô 1 · magic ${magic}`;
+}
+
 export interface Tick {
   id: string;
   timestamp: number;
@@ -247,6 +271,11 @@ export interface MT5ConnectionState {
   bridgeLegacy?: boolean;
   /** Contrato que o script .py está transmitindo (ACCOUNT_INFO.symbol) — confere com o ativo escolhido */
   scriptSymbol?: string;
+  /** Magic do robô embutido no script .py (ACCOUNT_INFO.robotMagic) — se divergir do Ajustes,
+   * as posições ficam carimbadas com placa diferente da que o app espera filtrar */
+  scriptRobotMagic?: number;
+  /** R$/ponto que o script .py usa nos relatórios em dinheiro (ACCOUNT_INFO.pointValue) */
+  scriptPointValue?: number;
 }
 
 export interface TerminalStats {

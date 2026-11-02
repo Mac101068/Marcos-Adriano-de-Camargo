@@ -1,4 +1,5 @@
 import { RenkoBox, AutomationConfig } from '../types/trading';
+import { resolveAsset } from '../assets/assetRegistry';
 import { evaluateBoxConvergence } from '../utils/convergenceEvaluator';
 import type { SessionRegimeMeter, RegimeHourStats, RegimePoint } from '../utils/sessionRegime';
 import {
@@ -240,6 +241,8 @@ class SeriesCollectorService {
       },
       meter
     );
+    // Contabilidade pelo ativo do config que alimenta a série: R$/ponto nunca soldado no WIN
+    this.bots[series].setAsset(resolveAsset(config.symbol, config.assetId).id);
     this.bots[series].onClosedBox(closedBox, conv.signal, config);
     this.updatedAt = Date.now();
     this.version++;

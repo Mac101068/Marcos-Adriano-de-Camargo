@@ -311,6 +311,25 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 - Sem resposta (MT5 fechado, histórico raso na conta demo, erro), o replay cai no **gerador sintético e
   isso aparece na tela**: chip `HISTÓRICO REAL (MT5) · N ticks` versus `SINTÉTICO · #seed`.
 
+### 5.6 Identidade por robô (magic) e R$/ponto por ativo (Ciclo 11 — Fase 2 do multi-robô)
+- **Placas únicas no `src/types/trading.ts`**: `DEFAULT_MAGIC_NUMBER = 101010` (fallback do Robô 1),
+  `MANUAL_ORDER_MAGIC = 999999` (Boleta manual), `mainRobotMagic(config)` e `robotTagForMagic(magic)`.
+- **Entradas carimbam**: cada `ORDER_SEND` leva `magic` (robô → `config.magicNumber`, boleta manual →
+  999999); o script gerado repassa o carimbo à MT5. Sem o campo (app velho × script novo), cai na placa
+  do robô — retrocompatível nos dois sentidos.
+- **Saídas filtram por placa**: `CLOSE_POSITIONS` **com** `robotMagic` (inversão, trava financeira,
+  parcial, modify-SL do robô) fecha só posições com `pos.magic` igual; **sem** `robotMagic` (ZERAR
+  C/V/TUDO da boleta) fecha tudo — botão de emergência nunca filtrado. Robô nenhum toca a boleta manual.
+- **Divergência avisada**: `ACCOUNT_INFO` reporta `pointValue`/`robotMagic`/`manualMagic`; se a placa do
+  script instalado divergir da configurada no app, toast central "⚠️ MAGIC DIVERGENTE (APP × SCRIPT)".
+- **R$/ponto por ativo de verdade**: `ASSET_POINT_VALUE` (WIN 0,20 · WDO 0,10 · BTC 1,00) no PnL da
+  zeragem, e `PaperStrategyBot` com `setAsset()`/`pointValueBrl` por instância — coletor e sombra contam
+  no tick do ativo escolhido, não mais soldado no WIN.
+- **Correção de brinde**: o script gerado tinha `contracts=CONTRACTS` (NameError — a ponte nunca tinha
+  rodado contra a corretora); agora `MAIN_CONTRACTS`. Assert permanente `scripts/robotMagicAssert.ts`.
+- A **sombra (Robô 2) não tem magic de propósito**: é papel por estrutura; a Fase 2 está pronta para
+  quando uma sombra virar robô real no mesmo símbolo.
+
 ---
 
 ## 👥 6. Módulo SaaS, Licenciamento & Admin Master
@@ -377,7 +396,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ├── index.html                        # Entry point com meta tags mobile (100dvh e anti-zoom) e <title> `Flow - Quant MT5 Terminal`
 ├── metadata.json                     # Metadados e permissões do applet
 ├── package.json / bun.lock           # React 19, Recharts 3.x, Tailwind CSS v4, Lucide Icons, jspdf/html2canvas
-├── vite.config.ts                    # Porta 3002 e --host=0.0.0.0 (para abrir do celular e de outra máquina)
+├── vite.config.ts                    # Porta 3000 e --host=0.0.0.0 (para abrir do celular e de outra máquina)
 ├── .env.example                      # GCP_USER_METADATA_URI (apenas do AI Studio; nada de segredo real aqui)
 ├── EVOLUCOES_DETALHADAS.md           # Diário de obra: causa raiz, implementação e verificação de cada ciclo
 ├── PROJECT_SUMMARY.md                # Estado atual consolidado (este arquivo)
@@ -462,6 +481,46 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ## 🆕 9. Resumo dos últimos ciclos
 
 > Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+### Ciclo 12 (02/11/2026) — Terminal confiável: acorda parado, limiar P60 do pregão e relógio só para ordens reais
+
+- ✅ **Regra do operador "acorda parado e vazio"**: deletados o boot de 350 ticks sintéticos e o
+  replay automático de abertura (os dois auto-runners que violavam a regra); `isSimulating` nasce
+  `false`; falhas do MT5 não ligam mais o SIM sozinhas. **Ligar o Robô (On) liga o feed SIM** —
+  estado "robô ON + mercado parado" virou impossível, e o balão `MERCADO PARADO` cobre a sobra.
+- ✅ **Interruptor de regime dos portões de horário** (`setEnforceTimeGates` em `sessionRules.ts`):
+  janela 08:55–17:30 e zeragem das 17:30 só bloqueiam **MT5 conectado (ordens reais) e replay
+  (sessão simulada)**. Simulador ao vivo roda **24h** — "esta janela só pode bloquear ordens reais".
+  Coletor e robôs sombra herdam a chave (mesmas funções puras do `paperStrategyBot`).
+- ✅ **Limiar CALCULADO do pregão (P60)**: com adaptativo ligado, o limite de Δ é o percentil P60
+  dos |Δ| do próprio lado nos últimos boxes fechados (`SessionRegimeMeter.getPercentileLimit`);
+  `minDeltaThreshold` (100) virou só aquecimento/fallback. Motivo impresso: `limiar = P60 do pregão`.
+- ✅ **Balão ⚠ sem piscar** (`AlertChip` + `gateReasons`): laudo numérico `SINAL FRACO HÁ N BOXES`
+  só em jejum confirmado (≥5 dos últimos 6 boxes sem convergência), mais `SÉRIE SEM ROBÔ`
+  (Tempo não despacha entradas), `RETESTE ESPERANDO CVD`, netting e teto hedge.
+- ✅ **Sincronizar terminal** (navegador interno ↔ externo): pacote `fluxo_terminal_sync`
+  (Exportar tudo/Importar tudo no Estúdio) — config + biblioteca num JSON; import é upsert por id
+  e aplica com `active: false` (robô nunca acorda sozinho).
+- ✅ **Varredura de referências órfãs**: estratégia removida da biblioteca desliga a sombra
+  (`strategyId → null`) e limpa o `profileName` do Robô 1, com toast; painel sombra mostra
+  `(removida)` em âmbar; modal de exclusão diz quem está rodando a estratégia.
+- ✅ Brindes: boleta manual respeita Alvo/Stop na Pirâmide; Estúdio com seletor sempre visível e
+  aviso ao ativar com posições abertas. Verificado: tsc + build + 3 asserts + bancadas headless
+  (regimes de horário nos 3 mundos; P60=130 numa sessão Δs 10→200).
+
+### Ciclo 11 (02/11/2026) — Fase 2 do multi-robô: placa de magic por robô + R$/ponto por ativo
+
+- ✅ **Placas centralizadas** (`types/trading.ts`): `DEFAULT_MAGIC_NUMBER`/`MANUAL_ORDER_MAGIC`/
+  `mainRobotMagic`/`robotTagForMagic`; `MT5ConnectionState` ganhou `scriptRobotMagic`/`scriptPointValue`.
+- ✅ **Ponte com identidade**: entradas carimbam `magic`, saídas do robô filtram por `pos.magic`
+  (`close_all_positions(side, magic)`), ZERAR da boleta segue global (emergência), `ACCOUNT_INFO`
+  reporta placa e R$/ponto, toast de divergência APP × SCRIPT. Retrocompatível nos dois sentidos.
+- ✅ **R$/ponto por ativo** no script gerado (`ASSET_POINT_VALUE` no PnL da zeragem) e nos robôs de
+  papel (`PaperStrategyBot.setAsset()`, coletor e sombra chamando no ingest/configure/restauração).
+- ✅ **Bug histórico**: `contracts=CONTRACTS` (NameError no script gerado) → `MAIN_CONTRACTS`.
+- ✅ **Verificado**: tsc limpo, build OK (2,80 s), `npx tsx` nos três asserts (novo
+  `robotMagicAssert.ts`, 28 asserts) passando, `python3 -m py_compile` nos .py gerados WIN e WDO.
+  🧪 Pendente no navegador: as três conferências do Ciclo 10 + o toast de divergência de magic.
 
 ### Ciclo 10 (02/11/2026) — Robô 2 na sombra (escala própria 15R/20R/25R) e o pente-fino da escala
 
@@ -658,7 +717,7 @@ Ordem de leitura da documentação: **`PROJECT_SUMMARY.md`** (estado atual) → 
 
 ```text
 Olá! Estou continuando o projeto "Fluxo & Renko 10R - MT5 Quant Terminal" (B3 WIN$, Vite + React 19 + TS,
-porta 3002 com --host=0.0.0.0; a ponte MT5 Python roda no Windows e é GERADA em runtime, não existe no repo).
+porta 3000 com --host=0.0.0.0; a ponte MT5 Python roda no Windows e é GERADA em runtime, não existe no repo).
 A documentação está consolidada em três arquivos na raiz: PROJECT_SUMMARY.md (estado atual),
 EVOLUCOES_DETALHADAS.md (histórico com causa raiz) e PROJECT_CONSOLIDATION_CHAT_SEED.md (prompt de retomada).
 Regras do projeto: toda a UI e os comentários em português; rodar `npx tsc --noEmit` a cada entrega;
@@ -668,7 +727,24 @@ Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto
 ```
 
 ### Pendências conhecidas (para não redescobrir)
-- 📍 **Onde estamos (01/11/2026, fim do Ciclo 9)**: boleta em camadas (título âmbar + ⚙ na linha do título
+- 📍 **Onde estamos (02/11/2026, fim do Ciclo 12)**: terminal confiável — acorda **parado e vazio**
+  (auto-runners do boot deletados; On do Robô liga o feed SIM), limiar de sinal é o **P60 calculado
+  do pregão**, o relógio do pregão só bloqueia **ordens reais e replay** (simulador ao vivo roda
+  24h — `setEnforceTimeGates`), o balão ⚠ explica qualquer inação sem piscar, os dois navegadores
+  se sincronizam por um JSON (Exportar/Importar tudo) e estratégia removida limpa as referências
+  órfãs dos Robôs 1 e 2. Verificado com tsc + build + asserts + bancadas headless. **Voltar por**:
+  (1) 🧪 conferir em tela (boleta enchendo com P60, balão estático, sincronismo, modal honesto);
+  (2) percentil ajustável nos Ajustes se o operador pedir; (3) conferências herdadas dos Ciclos
+  10/11; (4) validação na demo XP; (5) repiquete contínua × vigente; (6) homologar WDO/BTC.
+- 📍 **Posição anterior (02/11/2026, fim do Ciclo 11 — superada pelo ponto acima, mantida como histórico)**: Fase 2 do multi-robô entregue — cada ordem carrega
+  placa de magic (Robô 1 = `config.magicNumber` · Boleta manual = 999999), saídas automáticas filtram por
+  placa, ZERAR da boleta continua fechando tudo, app avisa divergência APP × SCRIPT, e a contabilidade em
+  R$/ponto respeita o ativo (ponte, coletor e sombra). Corrigido o `contracts=CONTRACTS` do script gerado.
+  Verificado com tsc + build + asserts + `py_compile`. **Voltar por**: (1) 🧪 quatro conferências no
+  navegador (replay espelhado, F5 da sombra com principal OFF, overflow do chip — herdadas do Ciclo 10 —
+  e o toast de divergência de magic); (2) commit do ciclo, quando o operador pedir; (3) validação na conta
+  demo XP; (4) repiquete do vigente × contínua no config; (5) homologar WDO/BTC.
+- 📍 **Posição anterior (01/11/2026, fim do Ciclo 9)**: boleta em camadas (título âmbar + ⚙ na linha do título
   + sub-caixa **Parâmetros** com os seis steppers, sem a linha Preço), cabeçalho/tira mostrando os **dois
   códigos rotulados** (`WIN$N série · WINZ26 vigente`, com o vivo destacado), gráfico com **marca d'água
   opcional por ativo** e as três faixas do topo apertadas. Verificado por tsc + build + browser (boleta 8/8)

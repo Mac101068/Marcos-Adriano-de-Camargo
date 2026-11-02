@@ -43,11 +43,16 @@ export function evaluateBoxConvergence(
   const gainUp = labels.gainLabelUp ?? `+${config.boxPoints} pts`;
   const gainDown = labels.gainLabelDown ?? `-${config.boxPoints} pts`;
 
-  // Limiar efetivo do momento: fixo × fator de volume × fator direcional do lado.
+  // Corte do momento (Ciclo 12): com o filtro adaptativo LIGADO o limiar é CALCULADO do
+  // pregão — percentil P60 das agressões do próprio lado nas últimas janelas de boxes.
+  // `minDeltaThreshold` físico vira apenas o fallback de warm-up (menos de 10 boxes) e o
+  // valor usado quando o adaptativo está DESLIGADO. Assim o Robô cobra força ACIMA da
+  // média deste mercado, não acima de um número de contratos congelado na config.
   const adaptive = config.adaptiveThresholdEnabled === true && meter !== undefined;
-  const limitBuy = adaptive ? meter!.getAdaptiveLimit(config.minDeltaThreshold, 'BUY', box.delta) : config.minDeltaThreshold;
-  const limitSell = adaptive ? meter!.getAdaptiveLimit(config.minDeltaThreshold, 'SELL', box.delta) : config.minDeltaThreshold;
-  const factorLabel = adaptive ? ` | fator ${box.regimeFactor?.toFixed?.(2) ?? meter!.getFactor().toFixed(2)}x` : '';
+  const SESSION_PERCENTILE = 0.6;
+  const limitBuy = adaptive ? meter!.getPercentileLimit('BUY', SESSION_PERCENTILE, config.minDeltaThreshold) : config.minDeltaThreshold;
+  const limitSell = adaptive ? meter!.getPercentileLimit('SELL', SESSION_PERCENTILE, config.minDeltaThreshold) : config.minDeltaThreshold;
+  const factorLabel = adaptive ? ' | limiar = P60 do pregão' : '';
 
   // SE A ESTRATÉGIA ATIVA FOR: PIRÂMIDE DE CONFLUÊNCIA FLUXO & RENKO 10R
   if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {

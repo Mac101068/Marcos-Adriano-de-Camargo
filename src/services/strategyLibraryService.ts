@@ -15,7 +15,12 @@ import { ASSETS, resolveAsset, type AssetId } from '../assets/assetRegistry';
 
 const STORAGE_KEY = 'fluxo_strategy_library_v1';
 
-function mergeConfig(partial: unknown): AutomationConfig {
+/**
+ * Merge defensivo de qualquer config parcial com o DEFAULT (campos novos que estratégia ou
+ * sincronização antiga não tinham voltam saneados). Exportado para o App usar no "Importar
+ * tudo" da sincronização de terminal — nenhum caminho aplica config cru sem saneamento.
+ */
+export function mergeConfig(partial: unknown): AutomationConfig {
   const p = (partial ?? {}) as Partial<AutomationConfig>;
   return {
     ...DEFAULT_EA_CONFIG,

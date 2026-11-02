@@ -1,5 +1,5 @@
 import { AutomationConfig, TradeOrder } from '../types/trading';
-import { parseHHMM } from './sessionRules';
+import { parseHHMM, areTimeGatesEnforced } from './sessionRules';
 
 /**
  * Portões de ENTRADA compartilhados pelas duas estratégias (Pirâmide e Reteste) e pelo
@@ -14,8 +14,13 @@ import { parseHHMM } from './sessionRules';
  * Falha ABERTA de propósito: se a estratégia vier com o horário vazio ou fora de 'HH:MM'
  * (campo de texto digitado errado), o portão NÃO bloqueia — um `nowHM < ''` silencioso travaria
  * o robô para sempre sem aviso nenhum. O chip de diagnóstico da tira mostra a janela interpretada.
+ *
+ * INTERRUPTOR DE REGIME (Ciclo 12): no simulador ao vivo a janela não existe — ela só fecha a
+ * porta para ordens REAIS (MT5 conectado) e para a SESSÃO SIMULADA do replay. `areTimeGatesEnforced`
+ * é virado pelo App; coletor/sombra herdam pelo mesmo caminho (paperStrategyBot chama esta função).
  */
 export function isWithinTradingWindow(timestamp: number, config: AutomationConfig): boolean {
+  if (!areTimeGatesEnforced()) return true;
   if (!config.tradingHoursEnabled) return true;
   const startMin = parseHHMM(config.tradingStartTime);
   const endMin = parseHHMM(config.tradingStopEntriesTime);

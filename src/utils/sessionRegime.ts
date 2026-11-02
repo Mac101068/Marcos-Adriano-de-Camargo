@@ -172,6 +172,28 @@ export class SessionRegimeMeter {
     return Math.round(baseThreshold * clamp(this.lastFactor * dir, 0.5, 3.0));
   }
 
+  /**
+   * Limiar CALCULADO do pregão (Ciclo 12 — regra do operador: "os limiares são calculados,
+   * não dependem de valores físicos"). Em vez de um número de contratos travado, o corte é
+   * o percentil `percentile` das agressões DO PRÓPRIO LADO nas últimas janelas de boxes:
+   * P60 de compra = "os 40% boxes verdes mais agressivos deste pregão sinalizam". O limiar
+   * sobe e desce com a régua da sessão (abertura forte, almoço magro) sem nenhum valor físico.
+   * Sem histórico suficiente (menos de 10 boxes fechados), não há estatística: cai no velho
+   * fixo × fator — que é também o comportamento de warm-up.
+   */
+  getPercentileLimit(side: 'BUY' | 'SELL', percentile: number, baseThreshold: number): number {
+    if (this.records.length < 10) return this.getAdaptiveLimit(baseThreshold, side, 0);
+    const win = this.records.slice(-Math.max(this.lookbackBoxes, 20));
+    const mags =
+      side === 'BUY'
+        ? win.map((r) => r.delta).filter((d) => d > 0)
+        : win.map((r) => -r.delta).filter((d) => d > 0);
+    if (mags.length < 5) return this.getAdaptiveLimit(baseThreshold, side, 0);
+    const sorted = [...mags].sort((a, b) => a - b);
+    const idx = Math.min(sorted.length - 1, Math.floor(clamp(percentile, 0, 0.95) * sorted.length));
+    return Math.max(1, Math.round(sorted[idx]));
+  }
+
   isWarmedUp(): boolean {
     return this.lastFactor !== 1 || this.records.length >= MIN_BOXES_WARMUP;
   }
