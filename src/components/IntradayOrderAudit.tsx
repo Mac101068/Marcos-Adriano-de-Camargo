@@ -33,6 +33,8 @@ interface IntradayOrderAuditProps {
   symbol?: string;
   /** Spec do ativo (R$/ponto e casas do preço); `symbol` continua sendo o código do contrato nos relatórios. */
   asset?: AssetSpec;
+  /** Escala do tijolo definida no gráfico — sai do `config.boxPoints`, nunca de um "10R" fixo. */
+  boxScaleLabel?: string;
   onClearAudit?: () => void;
   onOpenSettings?: () => void;
 }
@@ -42,6 +44,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
   currentPrice,
   symbol = 'WIN$N',
   asset = ASSETS[DEFAULT_ASSET_ID],
+  boxScaleLabel = '10R',
   onClearAudit,
   onOpenSettings,
 }) => {
@@ -104,12 +107,12 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
 
   // Ação de exportar CSV
   const handleExportCSV = () => {
-    OrderAuditService.exportToCSV(orders, symbol);
+    OrderAuditService.exportToCSV(orders, symbol, boxScaleLabel);
   };
 
   // Ação de copiar relatório para a área de transferência
   const handleCopyReport = () => {
-    const text = OrderAuditService.generateClipboardAuditReport(orders, symbol);
+    const text = OrderAuditService.generateClipboardAuditReport(orders, symbol, boxScaleLabel);
     navigator.clipboard.writeText(text);
     setCopiedToast(true);
     setTimeout(() => setCopiedToast(false), 2500);
@@ -133,7 +136,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Rastreamento imutável de todas as ordens geradas pelo Robô 10R e disparos manuais no pregão de hoje.
+              Rastreamento imutável de todas as ordens geradas pelo Robô no box {boxScaleLabel} e disparos manuais no pregão de hoje.
             </p>
           </div>
         </div>
@@ -679,7 +682,7 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                 <div className="relative">
                   <span className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-900 border-2 border-emerald-400" />
                   <div className="flex items-center justify-between text-slate-300 font-bold">
-                    <span>1. Detecção de Sinal & Convergência 10R</span>
+                    <span>1. Detecção de Sinal & Convergência no box {boxScaleLabel}</span>
                     <span className="text-[10px] text-slate-400">{selectedOrderForAudit.timeStr}</span>
                   </div>
                   <p className="text-slate-400 text-[11px] mt-0.5">

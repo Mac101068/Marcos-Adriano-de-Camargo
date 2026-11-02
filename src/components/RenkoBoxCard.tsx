@@ -22,6 +22,8 @@ interface RenkoBoxCardProps {
   /** tamanho da área do canvas, usado para manter o card dentro da área visível */
   bounds: { w: number; h: number };
   variant?: 'floating' | 'mobile' | 'window';
+  /** Escala anunciada no título — vem do box configurado (`renkoScaleLabel`), nunca de um "10R" fixo. */
+  scaleLabel?: string;
   mobileOpen?: boolean;
   onToggleMobile?: (open: boolean) => void;
 }
@@ -140,9 +142,13 @@ export const RenkoBoxCard: React.FC<RenkoBoxCardProps> = ({
   isInspection,
   bounds,
   variant = 'floating',
+  scaleLabel,
   mobileOpen = false,
   onToggleMobile,
 }) => {
+  // Sem rótulo passado pelo gráfico, a própria barra denuncia o tamanho — nunca um "10R" herdado
+  // de quando a escala era fixa.
+  const scale = scaleLabel ?? `${Math.abs(box.close - box.open)} pts`;
   const cardRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
   const [pos, setPos] = useState<HudPosition | null>(() => readSavedPos());
@@ -226,7 +232,7 @@ export const RenkoBoxCard: React.FC<RenkoBoxCardProps> = ({
     return (
       <div className="w-full h-full overflow-y-auto p-2.5 font-sans text-xs">
         <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
-          <span className="font-bold text-slate-100">Box Renko 10R #{box.index}</span>
+          <span className="font-bold text-slate-100">Box Renko {scale} #{box.index}</span>
           <div className="flex items-center gap-1.5">
             {directionBadge}
             <span
@@ -257,7 +263,7 @@ export const RenkoBoxCard: React.FC<RenkoBoxCardProps> = ({
         >
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${box.direction === 'UP' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-            <span className="font-bold text-slate-200">10R #{box.index}</span>
+            <span className="font-bold text-slate-200">{scale} #{box.index}</span>
             <span className={`font-bold ${box.delta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
               Δ{box.delta > 0 ? '+' : ''}
               {box.delta}
@@ -274,7 +280,7 @@ export const RenkoBoxCard: React.FC<RenkoBoxCardProps> = ({
     return (
       <div className="bg-slate-950/95 backdrop-blur-md border border-slate-700 rounded-lg p-2.5 shadow-2xl animate-in slide-in-from-bottom duration-200">
         <div className="flex items-center justify-between pb-1 border-b border-slate-800">
-          <span className="font-bold text-slate-100 text-xs">Box Renko 10R #{box.index}</span>
+          <span className="font-bold text-slate-100 text-xs">Box Renko {scale} #{box.index}</span>
           <button
             onClick={() => onToggleMobile?.(false)}
             className="p-1 text-slate-400 hover:text-slate-100 text-xs flex items-center gap-0.5 cursor-pointer"
@@ -309,7 +315,7 @@ export const RenkoBoxCard: React.FC<RenkoBoxCardProps> = ({
           title="Arraste para reposicionar o box card"
         >
           <Move className="w-3 h-3 text-slate-500" />
-          <span className="font-bold text-slate-200">10R #{box.index}</span>
+          <span className="font-bold text-slate-200">{scale} #{box.index}</span>
           <span className={`font-bold ${box.delta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
             Δ{box.delta > 0 ? '+' : ''}
             {box.delta}
@@ -348,7 +354,7 @@ export const RenkoBoxCard: React.FC<RenkoBoxCardProps> = ({
         <div className="flex items-center gap-1.5 font-bold text-slate-100">
           <Move className="w-3 h-3 text-slate-500" />
           <Pin className="w-3 h-3 text-sky-400 rotate-45" />
-          <span>Box Renko 10R #{box.index}</span>
+          <span>Box Renko {scale} #{box.index}</span>
         </div>
         <div className="flex items-center gap-1.5">
           {directionBadge}

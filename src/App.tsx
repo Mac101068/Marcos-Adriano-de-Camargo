@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 import { Tick, RenkoBox, TradeOrder, AutomationConfig, TerminalStats, MT5ConnectionState } from './types/trading';
 import { RenkoFlowEngine } from './utils/renkoCalculator';
 import { RangeBarEngine, TimeBarEngine, ChartSeries } from './utils/barEngines';
@@ -12,16 +12,18 @@ import {
   pointsToBRL,
   formatPrice,
   renkoScaleLabel,
+  boxPointsForR,
   isStaleOrderPrice,
   referencePrice,
   rememberLastPrice,
   assetSymbols,
-  SYMBOL_ROLE_LABEL,
+  chartSymbolFor,
   type AssetId,
   type AssetSpec,
 } from './assets/assetRegistry';
 import { migrateAssetBaseline, AssetBaselineMigration } from './assets/assetMigration';
 import { migrateAssetSelection, AssetSelectionMigration } from './assets/assetSelectionMigration';
+import { migrateChartVigenteContract, ChartContractMigration } from './assets/chartContractMigration';
 import {
   MarketHistoryService,
   marketHistoryService,
@@ -31,11 +33,13 @@ import { computeSessionLevels, computeRunningVwap, PriceLevel, VwapCurve } from 
 import type { HedgeBook, HedgeSideBook } from './components/BoletaTicket';
 import { getBridgeToken } from './utils/bridgeSecurity';
 import { seriesCollectorService } from './services/seriesCollectorService';
+import { shadowRobotService } from './services/shadowRobotService';
 import type { SessionRegimeMeter } from './utils/sessionRegime';
 import { SimulatorView } from './components/SimulatorView';
 import { B3MarketSimulator, generateHistoricalTicks, randomReplaySeed } from './utils/marketSimulator';
 import { Header } from './components/Header';
 import { RenkoFlowChart } from './components/RenkoFlowChart';
+import { MiniSelect } from './components/MiniSelect';
 import { TimesAndTrades } from './components/TimesAndTrades';
 import { AutomationPanel } from './components/AutomationPanel';
 import { OrdersAndStats } from './components/OrdersAndStats';
@@ -91,6 +95,9 @@ const ALT_RENKO_SCALES: { key: 'renko15r' | 'renko20r' | 'renko25r'; pts: number
   { key: 'renko25r', pts: 125, label: '25R (125 pts)' },
 ];
 
+/** Dias oferecidos na caixa de replay. O teto de 10 dias é do handleReplayHistory, não daqui. */
+const REPLAY_DAY_CHOICES = [1, 3, 5];
+
 /**
  * Resumo de uma corrida de replay, congelado NA LINHA DE CHEGADA. Existe porque o feed ao
  * vivo continua somando ticks depois que a reprodução termina — sem isto, comparar o PnL do
@@ -114,6 +121,15 @@ type ReplayRunSummary = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'studio' | 'admin'>('chart');
+  /**
+   * Token de atalho entre telas: o chip da escala no gráfico pede o BLOCO DO RENKO dos Parâmetros,
+   * o AutomationPanel rola até o campo, pisca e devolve o token (null). Um clique, duas ações.
+   */
+  const [paramFocus, setParamFocus] = useState<'renkoBox' | null>(null);
+  const goToRenkoParam = () => {
+    setActiveTab('settings');
+    setParamFocus('renkoBox');
+  };
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => AuthService.getCurrentUser());
   // Resultado da migração da trava de horário. É ref porque o useState do `config` logo abaixo
   // roda antes de qualquer efeito; o aviso ao operador sai no efeito de montagem.
@@ -123,6 +139,9 @@ export default function App() {
   // E idem para a migração da SELEÇÃO de ativo (Fase 2): `assetId` no config, nas estratégias
   // salvas e o livro de auditoria, que deixa de ser uma chave única.
   const assetSelectionRef = useRef<AssetSelectionMigration | null>(null);
+  // E idem para a migração do CONTRATO do gráfico: quem tinha a série contínua gravada passa a
+  // abrir o vigente (a contínua ficou só para os testes de histórico).
+  const chartContractRef = useRef<ChartContractMigration | null>(null);
   // Última vez que o preço real do MT5 foi gravado como régua do ativo (amortecido: 30s).
   const lastPriceWriteRef = useRef<number>(0);
   const [showRenewModal, setShowRenewModal] = useState<boolean>(false);
@@ -135,6 +154,8 @@ export default function App() {
     // A seleção de ativo precisa estar gravada ANTES do loadSavedConfig lá embaixo: o storage
     // vence o default, então um config antigo sem `assetId` só resolve certo depois da migração.
     assetSelectionRef.current = migrateAssetSelection();
+    // Depois das duas acima: esta reescreve só o `symbol`, e precisa ver o `assetId` já preenchido.
+    chartContractRef.current = migrateChartVigenteContract();
     return EaConfigService.loadSavedConfig();
   });
   /**
@@ -145,10 +166,9 @@ export default function App() {
    */
   const asset = React.useMemo(() => resolveAsset(config.symbol, config.assetId), [config.symbol, config.assetId]);
   /**
-   * Os dois códigos que determinam o gráfico aberto, sempre rotulados pelo papel: a SÉRIE contínua
-   * ('WIN$N', emenda vencimentos — é a que presta para teste longo) e o VIGENTE ('WINZ26', o papel
-   * do pregão de hoje). `live` é o que a ponte subscreve de verdade. Cabeçalho e tira de status lêem
-   * deste memo, então os dois lados da tela nunca podem discordar.
+   * O código que a ponte subscreve de verdade e o papel dele. O gráfico abre sempre o VIGENTE
+   * (`chartSymbolFor`); os outros campos deste memo só servem para a tela não mentir quando o
+   * config estiver apontando para outro vencimento — um teste longo na contínua, por exemplo.
    */
   const assetSyms = React.useMemo(() => assetSymbols(asset, config.symbol), [asset, config.symbol]);
   const [isSimulating, setIsSimulating] = useState<boolean>(true);
@@ -212,6 +232,15 @@ export default function App() {
     } catch {
       // Ignora erro de storage
     }
+  }, [simulationSpeed]);
+  /**
+   * Espelho da velocidade para quem precisa LER o valor sem reimplementar a corrida. O replay usa
+   * este ref a cada passo, então mexer na caixa "Nx" no meio da reprodução muda o compasso na hora
+   * (com estado puro, o valor ficaria congelado no closure do início da corrida).
+   */
+  const simulationSpeedRef = useRef<number>(simulationSpeed);
+  useEffect(() => {
+    simulationSpeedRef.current = simulationSpeed;
   }, [simulationSpeed]);
 
   const [ticks, setTicks] = useState<Tick[]>([]);
@@ -286,6 +315,38 @@ export default function App() {
   const handleToggleBoxWindow = () => {
     setBoxWindowOpen((v) => {
       // Ao reabrir pelo menu, leva o operador para a aba do gráfico onde a janela vive
+      if (!v) setActiveTab('chart');
+      return !v;
+    });
+  };
+  // =========================================================================================
+  // ROBÔ 2 (SOMBRA) na interface: janela flutuante no gráfico + chip na 3ª linha.
+  // O App só LÊ o service (nada daqui escreve em ordens/auditoria/socket) e repassa o patch
+  // de escolha para o config, que é a fonte persistida.
+  // =========================================================================================
+  const shadowVersion = useSyncExternalStore(shadowRobotService.subscribe, shadowRobotService.getVersion);
+  const shadowWindowRef = useRef<{ v: number; snap: ReturnType<typeof shadowRobotService.getSnapshot> } | null>(null);
+  if (!shadowWindowRef.current || shadowWindowRef.current.v !== shadowVersion) {
+    shadowWindowRef.current = { v: shadowVersion, snap: shadowRobotService.getSnapshot() };
+  }
+  const shadowSnap = shadowWindowRef.current.snap;
+  // Janela flutuante do Robô 2 — escondida por padrão (o chip da tira é o atalho), persistida
+  const [shadowWindowOpen, setShadowWindowOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('fluxo_shadow_window_open_v1') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('fluxo_shadow_window_open_v1', shadowWindowOpen ? '1' : '0');
+    } catch {
+      // Ignora erro de storage
+    }
+  }, [shadowWindowOpen]);
+  const handleToggleShadowWindow = () => {
+    setShadowWindowOpen((v) => {
       if (!v) setActiveTab('chart');
       return !v;
     });
@@ -372,6 +433,44 @@ export default function App() {
     renko25r: new RenkoFlowEngine(125, asset),
   });
 
+  // MOTOR DO ROBÔ 2 (sombra): escala própria, CVD e medidor de regime próprios. Existe só
+  // enquanto a sombra estiver ligada com uma estratégia válida.
+  const shadowEngineRef = useRef<RenkoFlowEngine | null>(null);
+
+  /** Motor da sombra criado/sincronizado na escala efetiva (pts = R pedido × tick do ativo). */
+  const ensureShadowEngine = useCallback((): RenkoFlowEngine | null => {
+    const eff = shadowRobotService.getEffectiveConfig();
+    if (!eff) return null;
+    const eng = shadowEngineRef.current;
+    if (!eng) {
+      const created = new RenkoFlowEngine(eff.boxPoints, resolveAsset(eff.symbol, eff.assetId));
+      shadowEngineRef.current = created;
+      shadowRobotService.registerRegimeMeter(created.getRegimeMeter());
+      return created;
+    }
+    // Troca de ativo/escala: o config efetivo já vem com o spec atual, então o motor acompanha.
+    // O initialize() da corrida (boot / reset / replay) é o que realinha o preço de partida.
+    eng.setAsset(resolveAsset(eff.symbol, eff.assetId));
+    eng.setBoxPoints(eff.boxPoints);
+    return eng;
+  }, []);
+
+  /**
+   * Um tick alimenta o motor da sombra. O config passado é o da ESTRATÉGIA da sombra (limiares,
+   * regime, janela e mode dela) — nunca o config ativo: por isso ela é independente do robô 1.
+   */
+  const feedShadowEngine = useCallback((tick: Tick) => {
+    const eff = shadowRobotService.getEffectiveConfig();
+    if (!eff) return;
+    const eng = ensureShadowEngine();
+    if (!eng) return;
+    eng.getRegimeMeter().setLookbackBoxes(eff.regimeLookbackBoxes ?? 20);
+    const res = eng.processTick(tick, eff);
+    if (res.newBoxClosed && res.closedBox) {
+      shadowRobotService.processClosedBox(res.closedBox, eng.getBoxes().slice(0, -1), eff, eng.getRegimeMeter());
+    }
+  }, [ensureShadowEngine]);
+
   const [orders, setOrders] = useState<TradeOrder[]>(() => {
     // Troca do preço de referência do ativo: o pregão salvo no preço antigo é saneado UMA vez,
     // antes de qualquer leitura. O aviso ao operador sai no efeito de montagem.
@@ -391,6 +490,9 @@ export default function App() {
     const base = referencePrice(asset);
     const at = (offset: number) => base + offset;
     const priceLabel = (offset: number) => formatPrice(base + offset, asset);
+    // A escala narrada nas ordens de demonstração nasce do box configurado — se o operador
+    // estiver testando 8R, o pregão de exemplo não pode afirmar que os boxes são de 10R.
+    const seedBoxLabel = renkoScaleLabel(config.boxPoints, asset);
 
     const defaultPyramidOrders: TradeOrder[] = [
       {
@@ -439,7 +541,7 @@ export default function App() {
         status: 'OPEN',
         source: 'ROBOT_EA',
         magicNumber: 101010,
-        triggerReason: 'Fechamento Box 10R Verde · Pirâmide #1 (Alvo +50p)',
+        triggerReason: `Fechamento Box ${seedBoxLabel} Verde · Pirâmide #1 (Alvo +50p)`,
         auditTrail: [
           {
             id: 'evt-pyr-1',
@@ -470,7 +572,7 @@ export default function App() {
         status: 'OPEN',
         source: 'ROBOT_EA',
         magicNumber: 101010,
-        triggerReason: 'Fechamento Box 10R Verde · Pirâmide #2 (Alvo +50p)',
+        triggerReason: `Fechamento Box ${seedBoxLabel} Verde · Pirâmide #2 (Alvo +50p)`,
         auditTrail: [
           {
             id: 'evt-pyr-2',
@@ -506,7 +608,7 @@ export default function App() {
         status: 'CLOSED_PROFIT',
         pointsResult: 50,
         financialResult: pointsToBRL(50, 1, asset),
-        triggerReason: 'Fechamento Box 10R Verde · Pirâmide Anterior (+50p Alvo Concluído)',
+        triggerReason: `Fechamento Box ${seedBoxLabel} Verde · Pirâmide Anterior (+50p Alvo Concluído)`,
         auditTrail: [
           {
             id: 'evt-pyr-prev-1',
@@ -552,15 +654,15 @@ export default function App() {
         status: 'CLOSED_PROFIT',
         pointsResult: 150,
         financialResult: pointsToBRL(150, 2, asset),
-        triggerReason: 'Convergência Alta 10R (Delta +380 contratos)',
+        triggerReason: `Convergência Alta ${seedBoxLabel} (Delta +380 contratos)`,
         auditTrail: [
           {
             id: 'evt-init-1-1',
             timestamp: Date.now() - 3600000 * 3.5,
             timeStr: '09:18:24',
             action: 'ORDER_DISPATCHED',
-            title: 'Ordem Disparada pelo Robô 10R',
-            details: 'Convergência Alta confirmada. Delta +380 contratos no fechamento do box 10R.',
+            title: `Ordem Disparada pelo Robô ${seedBoxLabel}`,
+            details: `Convergência Alta confirmada. Delta +380 contratos no fechamento do box ${seedBoxLabel}.`,
             price: at(-300),
             contracts: 2,
           },
@@ -602,14 +704,14 @@ export default function App() {
         status: 'CLOSED_PROFIT',
         pointsResult: 50,
         financialResult: pointsToBRL(50, 2, asset),
-        triggerReason: 'Convergência Alta 10R [Parcial Batida]',
+        triggerReason: `Convergência Alta ${seedBoxLabel} [Parcial Batida]`,
         auditTrail: [
           {
             id: 'evt-init-2-1',
             timestamp: Date.now() - 3600000 * 2.9,
             timeStr: '09:34:10',
             action: 'ORDER_DISPATCHED',
-            title: 'Ordem Disparada pelo Robô 10R',
+            title: `Ordem Disparada pelo Robô ${seedBoxLabel}`,
             details: `Compra enviada a mercado a ${priceLabel(-150)} pts com 2 contratos.`,
             price: at(-150),
             contracts: 2,
@@ -646,6 +748,9 @@ export default function App() {
     title: string;
     description: string;
     timestamp: number;
+    // Notificações de ordens (execução/envio) só aparecem na aba Gráfico; avisos operacionais
+    // críticos (ponte, segurança, travas) seguem visíveis em qualquer aba.
+    chartOnly?: boolean;
   } | null>(null);
 
   // Estado da Conexão MT5 Live Bridge
@@ -673,6 +778,11 @@ export default function App() {
     timeEngineRef.current.initialize(reference);
     // Escalas paralelas 15R/20R/25R começam sincronizadas com o mercado (só o coletor usa)
     ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(reference));
+    // Robô 2 (sombra) na mesma régua — se estiver ligado com estratégia válida
+    if (shadowRobotService.getEffectiveConfig()) {
+      const sEng = ensureShadowEngine();
+      if (sEng) sEng.initialize(reference);
+    }
     // Simula 350 ticks para gerar os primeiros ~20 boxes
     for (let i = 0; i < 350; i++) {
       const t = sim.generateNextTick();
@@ -696,9 +806,22 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Atualiza tamanho do box quando a config mudar
+  // Escala do box (R) editável no gráfico: além de informar o motor, recalcula TODA a história
+  // nos ticks guardados — trocar 10R por 8R/9R/15R/25R/29R redesenha o pregão inteiro na escala
+  // nova na hora, que é o que permite testar. O `initialize()` reseta o medidor de regime, mas
+  // mantém a MESMA referência de objeto, então o registro no coletor continua valendo.
   useEffect(() => {
-    engineRef.current.setBoxPoints(config.boxPoints);
+    const eng = engineRef.current;
+    eng.setBoxPoints(config.boxPoints);
+    const hist = allTicksRef.current;
+    if (hist.length > 0) {
+      eng.initialize(hist[0].price, hist[0].timestamp);
+      for (const t of hist) eng.processTick(t, config);
+    }
+    setBoxes([...eng.getBoxes()]);
+    setCurrentBox(eng.getCurrentBox());
+    setCvd(eng.getCvd());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.boxPoints]);
 
   // Persiste a escolha de série e as escalas experimentais no navegador
@@ -749,6 +872,49 @@ export default function App() {
     }
   }, []);
 
+  // =========================================================================================
+  // ROBÔ 2 (SOMBRA) — corrida.
+  // O config efetivo é o snapshot da estratégia escolhida com `boxPoints` rederivado do R
+  // pedido no tick do ativo atual. Nada aqui toca `setOrders`, a auditoria de ordens ou o
+  // websocket da ponte: a blindagem da sombra é exatamente não existir esse wiring.
+  //
+  // Ligar/desligar é um `setState` do config → o efeito reconfigura e, ao desligar, derruba o
+  // motor (o livro fica no storage para o F5 não apagar a corrida). Ao TROCAR estratégia,
+  // escala ou ativo o service reinicia o livro — a curva de capital passa a ser de outra
+  // corrida e misturar as duas seria leitura errada — e o motor vai junto: o 1º tick seguinte
+  // recria o motor já no preço vivo (sem inventar boxes).
+  // =========================================================================================
+  useEffect(() => {
+    const eff = shadowRobotService.configure(config.shadowRobot, asset, config);
+    if (!eff) {
+      shadowEngineRef.current = null;
+      return;
+    }
+    const eng = ensureShadowEngine();
+    if (!eng) return;
+    if (eng.getBoxes().length > 0 && eng.getBoxPoints() !== eff.boxPoints) {
+      // Escala trocada no meio da corrida: os tijolos velhos são de outra régua, o motor vai fora
+      shadowEngineRef.current = null;
+      ensureShadowEngine();
+      return;
+    }
+    // LIGADA NO MEIO DO PREGÃO (fora do replay, que já realinha o motor na abertura da corrida):
+    // um motor recém-criado está ancorado no preço de referência do boot ou num ontem parado.
+    // Realinha no preço vivo para o 1º tijolo da sombra nascer de hoje.
+    const anchor = eng.getCurrentBox()?.timeEnd ?? 0;
+    if (!isReplaying && Math.abs(Date.now() - anchor) > 90_000 && currentPrice > 0) {
+      eng.initialize(currentPrice);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    config.shadowRobot?.enabled,
+    config.shadowRobot?.strategyId,
+    config.shadowRobot?.scaleR,
+    asset.id,
+    // a estratégia da biblioteca pode ter sido salva/editada/apagada com a sombra já ligada
+    StrategyLibraryService.list().map((s) => `${s.id}:${s.updatedAt}`).join('|'),
+  ]);
+
   // Função para processar a execução de um tick
   const handleIncomingTick = useCallback(
     (tick: Tick) => {
@@ -777,7 +943,7 @@ export default function App() {
       // Adiciona na fita de Times & Trades
       setTicks((prev) => [tick, ...prev.slice(0, 99)]);
 
-      // Processa no motor de Renko 10R e Fluxo
+      // Processa no motor de Renko (escala do box da config) e Fluxo
       const renkoRes = engine.processTick(tick, config);
       setCvd(engine.getCvd());
       setCurrentBox(engine.getCurrentBox());
@@ -838,12 +1004,20 @@ export default function App() {
         }
       }
 
+      // ROBÔ 2 (sombra): motor e livro próprios, na escala e estratégia escolhidas. Roda com o
+      // robô principal desligado e não obedece a `config.active` nem às travas dele.
+      shadowRobotService.markToMarket(tick.price, tick.timestamp, mt5State.status === 'CONNECTED');
+      feedShadowEngine(tick);
+
       // =========================================================================
       // ROBÔ NA SÉRIE ATIVA (Opção A): as ordens são disparadas pela série
       // escolhida na barra do gráfico. Séries inativas só alimentam o coletor.
       // =========================================================================
-      const mt5TagShort = chartSeries === 'renko' ? '10R' : `RNG${rangePoints}`;
-      const robotTag = chartSeries === 'renko' ? 'Renko 10R' : `Range ${rangePoints}pts`;
+      // A etiqueta do robô segue a escala definida no gráfico: o auditor lê aqui o box que
+      // realmente formou o sinal (8R, 9R, 15R...), nunca um "10R" de quando a escala era fixa.
+      const renkoTagShort = renkoScaleLabel(config.boxPoints, asset);
+      const mt5TagShort = chartSeries === 'renko' ? renkoTagShort : `RNG${rangePoints}`;
+      const robotTag = chartSeries === 'renko' ? `Renko ${renkoTagShort}` : `Range ${rangePoints}pts`;
       let result: ActiveTickResult = { newBoxClosed: false };
       if (chartSeries === 'renko') {
         result = renkoRes;
@@ -860,7 +1034,7 @@ export default function App() {
           const oppositeType = signalType === 'BUY' ? 'SELL' : 'BUY';
 
           // =========================================================================
-          // ESTRATÉGIA 1: PIRÂMIDE COM CONFLUÊNCIA DE FLUXO & RENKO 10R
+          // ESTRATÉGIA 1: PIRÂMIDE COM CONFLUÊNCIA DE FLUXO & RENKO (escala do box da config)
           // (Compre no fechamento de cada bloco verde com TP de 50p, mantendo a principal
           // aberta até a virada de fluxo. Zeragem total por inversão sem SL fixo).
           // =========================================================================
@@ -915,6 +1089,7 @@ export default function App() {
                   type: signalType,
                   title: `🔄 INVERSÃO DE MERCADO [${robotTag}]: POSIÇÕES ANTERIORES ZERADAS!`,
                   description: `Virada do fluxo para ${signalType === 'BUY' ? 'ALTA' : 'BAIXA'}. Entrada mãe e ordens da pirâmide encerradas (R$ ${totalClosedPnL.toFixed(2)}).`,
+                  chartOnly: true,
                   timestamp: Date.now(),
                 });
 
@@ -1005,6 +1180,7 @@ export default function App() {
                   setLatestToast({
                     id: `main-toast-${Date.now()}`,
                     type: signalType,
+                    chartOnly: true,
                     title: useLimitEntry
                       ? `🎯 ORDEM LIMITADA DA MÃE POSICIONADA! [${robotTag}]`
                       : `🚀 ENTRADA PRINCIPAL ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} EXECUTADA!`,
@@ -1072,6 +1248,7 @@ export default function App() {
                   setLatestToast({
                     id: `pyr-toast-${Date.now()}`,
                     type: signalType,
+                    chartOnly: true,
                     title: useLimitEntry
                       ? `🎯 PIRÂMIDE #${pyramidLevel} LIMIT POSICIONADA [${mt5TagShort}] (+${tpPoints}p TP)`
                       : `🔺 PIRÂMIDE #${pyramidLevel} ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} [${mt5TagShort}] (+${tpPoints}p TP)!`,
@@ -1137,6 +1314,7 @@ export default function App() {
                     type: signalType,
                     title: `ORDEM LIMITADA POSICIONADA NO RETESTE [${robotTag}]`,
                     description: `Convergência detectada! Aguardando o preço VOLTAR para testar a entrada em ${limitPrice.toLocaleString('pt-BR')} pts.`,
+                    chartOnly: true,
                     timestamp: Date.now(),
                   });
                 } else {
@@ -1145,6 +1323,7 @@ export default function App() {
                     type: signalType,
                     title: `ORDEM ${signalType === 'BUY' ? 'COMPRA' : 'VENDA'} DISPARADA A MERCADO [${robotTag}]`,
                     description: `${result.signalReason} a ${tick.price.toLocaleString('pt-BR')} pts`,
+                    chartOnly: true,
                     timestamp: Date.now(),
                   });
                 }
@@ -1339,6 +1518,7 @@ export default function App() {
                 type: 'BUY',
                 title: `🎯 COMPRA ACIONADA NO RETESTE DA ENTRADA!`,
                 description: `O preço voltou e executou a compra a ${ord.limitPrice.toLocaleString('pt-BR')} pts (Abertura do Box)!`,
+                chartOnly: true,
                 timestamp: Date.now(),
               });
               const fillEvt = OrderAuditService.createEvent(
@@ -1367,6 +1547,7 @@ export default function App() {
                 type: 'SELL',
                 title: `🎯 VENDA ACIONADA NO RETESTE DA ENTRADA!`,
                 description: `O preço subiu e executou a venda a ${ord.limitPrice.toLocaleString('pt-BR')} pts (Abertura do Box)!`,
+                chartOnly: true,
                 timestamp: Date.now(),
               });
               const fillEvt = OrderAuditService.createEvent(
@@ -1472,6 +1653,7 @@ export default function App() {
                   id: `partial-toast-${Date.now()}`,
                   type: ord.type,
                   title: `🎯 SAÍDA PARCIAL EXECUTADA (+${pts} pts)!`,
+                  chartOnly: true,
                   description: `${partialCtros} contrato(s) realizado(s) com lucro de R$ ${partialFin.toFixed(2)}. ${
                     config.moveStopToBreakevenOnPartial ? 'Stop Loss movido para o Breakeven protegido!' : ''
                   }`,
@@ -1598,6 +1780,7 @@ export default function App() {
                 id: `tp-toast-${Date.now()}`,
                 type: ord.type,
                 title: isPyr ? `🎯 TP PIRÂMIDE (+${points} pts)!` : `🎯 TAKE PROFIT BATIDO (+${points} pts)!`,
+                chartOnly: true,
                 description: `${isPyr ? `Ordem da pirâmide #${ord.pyramidLevel || 1}` : 'Operação'} liquidada com lucro de R$ ${fin.toFixed(2)}. ${
                   isPyr
                     ? config.moveMainToBreakevenOnPyramidTp
@@ -1865,6 +2048,7 @@ export default function App() {
             setLatestToast({
               id: `mt5-ord-${Date.now()}`,
               type: payload.orderType === 'BUY' ? 'BUY' : 'SELL',
+              chartOnly: true,
               title: payload.status === 'DONE' ? 'ORDEM EXECUTADA NO MT5' : 'ERRO NO ENVIO MT5',
               description:
                 payload.status === 'DONE'
@@ -2001,6 +2185,7 @@ export default function App() {
           role === 'MAIN'
             ? `🟢 ORDEM MÃE ${type} EXECUTADA`
             : `🔺 PIRÂMIDE #${pyrLevel} ${type} EXECUTADA`,
+        chartOnly: true,
         description:
           role === 'MAIN'
             ? `Entrada: ${entryPrice.toLocaleString('pt-BR')} pts · Surfe até reversão`
@@ -2058,6 +2243,7 @@ export default function App() {
       id: newOrder.id,
       type,
       title: `ORDEM ${type === 'BUY' ? 'COMPRA' : 'VENDA'} MANUAL ENVIADA`,
+      chartOnly: true,
       description: `Entrada: ${entryPrice.toLocaleString('pt-BR')} pts · SL: ${sl} · TP: ${tp}`,
       timestamp: Date.now(),
     });
@@ -2127,7 +2313,7 @@ export default function App() {
       status: 'OPEN',
       source: 'ROBOT_EA',
       magicNumber: config.magicNumber || 101010,
-      triggerReason: `Fechamento Box 10R Verde · Pirâmide #1 (Alvo: +${config.pyramidTpPoints || 50}p)`,
+      triggerReason: `Fechamento Box ${renkoScaleLabel(config.boxPoints, asset)} Verde · Pirâmide #1 (Alvo: +${config.pyramidTpPoints || 50}p)`,
       auditTrail: [
         OrderAuditService.createEvent(
           'ORDER_DISPATCHED',
@@ -2153,6 +2339,7 @@ export default function App() {
       type: 'BUY',
       title: '🎯 ESTRATÉGIA PIRÂMIDE EXECUTANDO!',
       description: `Ordem Mãe @ ${motherPrice} pts (surfe) + Pirâmide #1 @ ${pyr1Price} pts (Alvo TP +50p: ${pyr1Price + 50} pts).`,
+      chartOnly: true,
       timestamp: now,
     });
   }, [currentPrice, config]);
@@ -2204,6 +2391,7 @@ export default function App() {
       id: `close-${Date.now()}`,
       type: side === 'BUY' ? 'BUY' : 'SELL',
       title: side ? (side === 'BUY' ? 'COMPRAS ZERADAS' : 'VENDAS ZERADAS') : 'POSIÇÕES ZERADAS',
+      chartOnly: true,
       description: `${targets.length} posição(ões) ${side ? (side === 'BUY' ? 'de compra' : 'de venda') : 'aberta(s)'} encerrada(s) a mercado e registrada(s) na auditoria.`,
       timestamp: Date.now(),
     });
@@ -2253,7 +2441,7 @@ export default function App() {
     setChartSeries(s);
     const label =
       s === 'renko'
-        ? 'Pontos (Renko 10R)'
+        ? `Pontos (Renko ${renkoScaleLabel(config.boxPoints, asset)})`
         : s === 'range'
         ? `Range ${rangePoints} pts`
         : `Tempo ${timeframeSec}s`;
@@ -2287,6 +2475,9 @@ export default function App() {
   // O slider da aba Simulador aceita qualquer valor de 1 a 10: se a velocidade atual não estiver
   // entre os chips, ela entra na lista para a seleção nunca ficar sem nenhum item aceso.
   const speedChoices = SPEED_CHOICES.includes(simulationSpeed) ? SPEED_CHOICES : [...SPEED_CHOICES, simulationSpeed].sort((x, y) => x - y);
+  // Mesmo cuidado com os dias: um valor salvo antigo fora de 1/3/5 entra na lista, para a caixa
+  // nunca ficar com o botão mostrando um número solto e nenhuma opção acesa.
+  const dayChoices = REPLAY_DAY_CHOICES.includes(replayDays) ? REPLAY_DAY_CHOICES : [...REPLAY_DAY_CHOICES, replayDays].sort((a, b) => a - b);
 
   // Resultado da última corrida, congelado na linha de chegada (ver ReplayRunSummary acima).
   const [lastReplay, setLastReplay] = useState<ReplayRunSummary | null>(null);
@@ -2312,13 +2503,6 @@ export default function App() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReplaying]);
-
-  // Atalho na zona SEMPRE visível da tira: em janela estreita a esquerda rola e o grupo do replay
-  // (velocidade + seed) sai da vista junto. Este chip mostra os valores atuais e leva até eles.
-  const replayGroupRef = useRef<HTMLDivElement | null>(null);
-  const revealReplayControls = () => {
-    replayGroupRef.current?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
-  };
 
   /** Rótulo honesto do volume usado nos ticks reais (decisão 7: sem volume não existe fluxo). */
   const volumeSourceLabel = (v?: VolumeSource): string =>
@@ -2351,7 +2535,10 @@ export default function App() {
       try {
         const res = await marketHistoryService.requestHistory({
           reqId: `hist-${Date.now()}`,
-          symbol: config.symbol || asset.primarySymbol,
+          // Teste longo pede a SÉRIE CONTÍNUA, não o código do gráfico: 'WINZ26' tem poucos dias de
+          // vida na corretora, e um replay de 5 dias voltaria quase vazio. O gráfico segue operando o
+          // vigente — a contínua é símbolo de teste, não escolha do operador.
+          symbol: asset.primarySymbol,
           days: targetDays + 1,
           asset,
           send: (payload) => socket.send(payload),
@@ -2384,7 +2571,7 @@ export default function App() {
         };
       }
     },
-    [asset, config.symbol, mt5State.status]
+    [asset, mt5State.status]
   );
 
   const handleReplayHistory = (days: number) => {
@@ -2459,8 +2646,17 @@ export default function App() {
       timeEng.setIntervalMs(timeframeSec * 1000);
       timeEng.initialize(ticks[0].price, ticks[0].timestamp);
       ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(ticks[0].price, ticks[0].timestamp));
+      // Motor do Robô 2 entra na mesma régua da corrida (senão ele começaria de outro preço)
+      if (shadowRobotService.getEffectiveConfig()) {
+        const sEng = ensureShadowEngine();
+        if (sEng) sEng.initialize(ticks[0].price, ticks[0].timestamp);
+      }
       seriesCollectorService.reset();
       seriesCollectorService.beginBatch();
+      // A sombra reinicia o próprio livro junto: uma corrida de replay é UMA corrida por robô
+      // (resetBook preserva a escolha de estratégia/escala — só zera a contabilidade)
+      shadowRobotService.resetBook();
+      shadowRobotService.beginBatch();
       allTicksRef.current = [];
 
       // Um tick atravessa os 6 contadores. No modo "OPERA" ele passa pelo MESMO caminho do
@@ -2492,6 +2688,9 @@ export default function App() {
             seriesCollectorService.ingest(alt.key, ar.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`, altEng.getRegimeMeter());
           }
         }
+        // Replay SEMPRE é mercado sintético: `false` para não marcar o dia como "dado real"
+        shadowRobotService.markToMarket(t.price, t.timestamp, false);
+        feedShadowEngine(t);
       };
 
       const stepFor = (t: Tick) => {
@@ -2545,12 +2744,21 @@ export default function App() {
       // 3000 passos de 40ms ≈ 1min45 de reprodução em 1x (seja 1 dia ou 5). Subir esse número
       // deixa o 1x mais lento; o 10x continua rápido porque queima mais ticks por passo
       const BASE_STEPS = 3000;
-      // Velocidade escolhida (vale também para o feed ao vivo): mais rápido = mais ticks por passo
-      const speed = Math.max(1, Math.min(10, Math.round(simulationSpeed)));
-      const stepMs = speed >= 8 ? 16 : speed >= 4 ? 25 : STEP_MS;
       // A animação reproduz apenas os dias-alvo (o contexto já está na tela)
       const replayTicks = ticks.length - contextEnd;
-      const chunk = Math.max(2, Math.ceil((replayTicks * speed) / BASE_STEPS));
+      // Compasso derivado da velocidade escolhida (mais rápido = mais ticks por passo). Relido a
+      // CADA passo: assim a caixa "Nx" da tira vale também no MEIO da corrida, e não só na próxima.
+      // A ordem dos ticks nunca muda, então o determinismo está preservado — mesmo seed, mesmo PnL
+      // em 1x, 2x, 3x, 5x ou 10x; só o ritmo da animação é outro.
+      const paceFor = (s: number) => {
+        const speed = Math.max(1, Math.min(10, Math.round(s)));
+        return {
+          speed,
+          stepMs: speed >= 8 ? 16 : speed >= 4 ? 25 : STEP_MS,
+          chunk: Math.max(2, Math.ceil((replayTicks * speed) / BASE_STEPS)),
+        };
+      };
+      let pace = paceFor(simulationSpeedRef.current);
       let cursor = contextEnd;
       let iters = 0;
       let timerId: number | null = null;
@@ -2562,6 +2770,7 @@ export default function App() {
         if (timerId !== null) clearTimeout(timerId);
         replayAbortRef.current = null;
         seriesCollectorService.endBatch();
+        shadowRobotService.endBatch();
         if (!operate) allTicksRef.current = ticks.slice(0, Math.max(cursor, contextEnd)); // no modo opera o próprio feed monta o buffer
         publish(cursor);
         setReplayProgress(0);
@@ -2569,7 +2778,7 @@ export default function App() {
         // Meta da corrida (dias/velocidade/seed/modo). O PnL em si é somado no efeito de
         // [isReplaying], porque aqui o `orders` deste fechamento ainda não foi commitado.
         pendingReplayMetaRef.current = {
-          days: replayTargetDays, speed, seed: seedForRun, operated: operate, aborted,
+          days: replayTargetDays, speed: pace.speed, seed: seedForRun, operated: operate, aborted,
           source: run.source, volumeSource: run.volumeSource, tickCount: ticks.length,
         };
         setLatestToast({
@@ -2588,7 +2797,7 @@ export default function App() {
             run.source === 'REAL'
               ? `Fonte: HISTÓRICO REAL (MT5) · ${volumeSourceLabel(run.volumeSource)}.`
               : `Seed do pregão: #${seedForRun}.`
-          } Velocidade ${speed}x.${operate ? '' : ' Replay silencioso (OPERA desligado): não abriu ordem nenhuma.'} ${
+          } Velocidade ${pace.speed}x.${operate ? '' : ' Replay silencioso (OPERA desligado): não abriu ordem nenhuma.'} ${
             zeroedOrders
               ? ' Ordens abertas, auditoria e PnL da sessão foram zerados antes de começar (nada de real é enviado à corretora).'
               : ' MT5 conectado: suas posições reais foram preservadas.'
@@ -2598,7 +2807,9 @@ export default function App() {
       };
 
       const step = () => {
-        const upto = Math.min(ticks.length, cursor + chunk);
+        // Velocidade relida a cada passo → a caixa "Nx" responde durante a corrida
+        pace = paceFor(simulationSpeedRef.current);
+        const upto = Math.min(ticks.length, cursor + pace.chunk);
         for (; cursor < upto; cursor += 1) stepFor(ticks[cursor]);
         publish(upto);
         // O buffer de ticks (contador da tela Simulador e repick das séries) sincroniza a cada
@@ -2611,7 +2822,7 @@ export default function App() {
           finish(false);
           return;
         }
-        timerId = window.setTimeout(step, stepMs);
+        timerId = window.setTimeout(step, pace.stepMs);
       };
 
       replayAbortRef.current = () => finish(true);
@@ -2725,6 +2936,31 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // AVISO DA TROCA DE CONTRATO DO GRÁFICO (vigente em vez de série contínua). Vai por último na
+  // fila (3s) porque a tela mostra um toast por vez, e só aparece na primeira abertura depois da regra.
+  useEffect(() => {
+    const m = chartContractRef.current;
+    if (!m || (!m.config && m.strategies === 0)) return;
+    const timer = setTimeout(() => {
+      setLatestToast({
+        id: `chart-contract-migration-${Date.now()}`,
+        type: 'INFO',
+        title: `GRÁFICO AGORA ABRE O CONTRATO VIGENTE: ${m.to || asset.activeContract || asset.primarySymbol}`,
+        description: `${[
+          m.config ? 'A estratégia ativa' : '',
+          m.strategies > 0 ? `${m.strategies} estratégia(s) salvas do Estúdio` : '',
+        ]
+          .filter(Boolean)
+          .join(' e ')} estava(m) na série contínua ${asset.primarySymbol} sem nenhum ajuste manual e passou(ram) para ${
+          chartSymbolFor(asset)
+        }, o papel do pregão de hoje na corretora. A contínua continua sendo o símbolo dos testes longos de histórico; um vencimento digitado à mão por você nunca seria reescrito.`,
+        timestamp: Date.now(),
+      });
+    }, 3000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Avançar 1 tick manual
   const handleStepTick = () => {
     const nextTick = simulatorRef.current.generateNextTick();
@@ -2788,6 +3024,14 @@ export default function App() {
     rangeEngineRef.current.initialize(reference);
     timeEngineRef.current.initialize(reference);
     ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(reference));
+    // Motor do Robô 2 na mesma régua e no ativo novo (a escala dele é derivada do tick atual)
+    if (shadowRobotService.getEffectiveConfig()) {
+      const sEng = ensureShadowEngine();
+      if (sEng) {
+        sEng.setAsset(activeAsset);
+        sEng.initialize(reference);
+      }
+    }
     setRangeBoxes([]);
     setRangeCurrentBox(null);
     setTimeBoxes([]);
@@ -2839,7 +3083,8 @@ export default function App() {
     const updated: AutomationConfig = {
       ...config,
       assetId: id,
-      symbol: next.primarySymbol,
+      // Gráfico no vigente do ativo novo (sem vencimento confirmado, cai na contínua do registro).
+      symbol: chartSymbolFor(next),
       boxPoints: box.points,
       // Ensaio de spec não homologado nunca acorda o Robô (decisão 2 do plano).
       active: unconfirmed ? false : config.active,
@@ -3031,6 +3276,14 @@ export default function App() {
     return () => clearTimeout(t);
   }, [latestToast]);
 
+  // Ao sair da aba Gráfico, descarta o aviso de ordem ainda pendente: ele só vive na tela do
+  // gráfico, e não pode pipocar atrasado quando o operador voltar para a aba.
+  useEffect(() => {
+    if (activeTab !== 'chart') {
+      setLatestToast((t) => (t && t.chartOnly ? null : t));
+    }
+  }, [activeTab]);
+
   // =========================================================================
   // DIAGNÓSTICO DOS PORTÕES DE ORDEM: com o MT5 conectado o robô obedece o tick real da
   // corretora e nenhum dos portões abaixo age. Em simulação o espelho chama as MESMAS funções
@@ -3066,6 +3319,21 @@ export default function App() {
     mt5State.status === 'CONNECTED' && mt5State.scriptSymbol
       ? asset.prefixes.some((p) => (mt5State.scriptSymbol ?? '').toUpperCase().startsWith(p))
       : undefined;
+
+  // Chip do Robô 2 na 3ª linha: texto neutro + número colorido (a regra de cor da plataforma).
+  const shadowRun = shadowSnap.run;
+  const shadowChipSummary = shadowRun.enabled
+    ? `Sombra ${shadowRun.scaleR}R${shadowRun.strategyName ? ` · "${shadowRun.strategyName}"` : ''}`
+    : '+ Sombra';
+  const shadowChipDetail = shadowRun.enabled
+    ? [
+        `Robô 2 (sombra) · ${shadowRun.scaleR}R = ${shadowRun.boxPoints} pts · ${shadowRun.assetId}`,
+        shadowRun.strategyName ? `Estratégia: "${shadowRun.strategyName}"` : 'Sem estratégia',
+        `Trades ${shadowSnap.stats.trades} · ${shadowSnap.stats.wins}W/${shadowSnap.stats.losses}L · win rate ${shadowSnap.stats.winRate.toFixed(1)}%`,
+        `Rebaixamento máx. R$ ${shadowSnap.stats.maxDrawdown.toFixed(2)}`,
+        shadowRun.warning || 'Clique para abrir o livro e os controles',
+      ].join('\n')
+    : 'Robô 2 (sombra) desligado — clique para abrir e escolher a estratégia';
 
   return (
     <div className="flex flex-col h-[100dvh] w-screen bg-[#0a0a0a] text-slate-100 overflow-hidden font-sans">
@@ -3104,20 +3372,19 @@ export default function App() {
 
       {/* Tira de Métricas e Status Rápido — a esquerda rola sozinha e o PnL fica SEMPRE à vista
           (antes, com o replay na linha, o conteúdo estourava a largura e o PnL sumia da tela) */}
-      <div className="flex items-center gap-2.5 px-3 sm:px-6 py-0.5 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono">
+      <div className="flex items-center gap-2.5 px-3 sm:px-6 py-0 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono">
         <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1 overflow-x-auto no-scrollbar">
           {/* ── REPLAY DO SIMULADOR (discreto, na cor apenas a setinha) ──
               Roda o histórico desde a PRIMEIRA barra (mínimo 1 dia) desenhando o período
               aos poucos; na abertura da plataforma já se dispara sozinho. Clicar de novo para
               parar. O chip "Nx" é a velocidade do replay e do feed ao vivo. */}
           <div
-            ref={replayGroupRef}
-            className="flex items-center gap-1 shrink-0 rounded-md border border-slate-800 bg-slate-900/70 px-1 py-0.5"
+            className="flex items-center gap-1 shrink-0 rounded-md border border-slate-800 bg-slate-900/70 px-1 py-0"
             title="Simulador: reproduz o histórico desde a primeira barra (mínimo 1 dia cheio). Ao abrir a plataforma isso já dispara sozinho, sem precisar da aba Simulador."
           >
             <button
               onClick={() => (isReplaying ? handleStopReplay() : handleReplayHistory(replayDays))}
-              className="flex items-center gap-1 rounded border border-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors whitespace-nowrap cursor-pointer hover:text-slate-100 hover:border-slate-600"
+              className="flex items-center gap-1 rounded border border-slate-800 px-1.5 py-0 text-[10px] font-semibold text-slate-300 transition-colors whitespace-nowrap cursor-pointer hover:text-slate-100 hover:border-slate-600"
               title={isReplaying ? `Parar a reprodução (${replayProgress}% rodado)` : `Rodar ${replayDays} dia(s) de simulador agora — zera as ordens e começa na primeira barra`}
             >
               {isReplaying ? (
@@ -3127,31 +3394,27 @@ export default function App() {
               )}
               <span className="tabular-nums">{isReplaying ? `${replayProgress}%` : ''}</span>
             </button>
-            <div className="flex items-center gap-0.5 shrink-0"
+            {/* Velocidade: o valor atual É o botão; o clique abre as outras. Antes eram cinco
+                chips em linha, largura que a tira não tem — e o número escolhido ainda era
+                repetido no chip da direita, que sumiu junto com esta mudança. */}
+            <MiniSelect
+              label="velocidade do simulador"
+              value={simulationSpeed}
+              options={speedChoices.map((s) => ({
+                value: s,
+                label: `${s}x`,
+                title: `Rodar em ${s}x — no feed ao vivo isso é ${(2 / s).toFixed(2).replace('.', ',')}s por tick`,
+              }))}
+              onChange={setSimulationSpeed}
               title={`Velocidade do simulador: comanda o compasso do replay e o ritmo do feed ao vivo (1x ≈ 1min45 para rodar o dia; 2x ≈ 55s, 3x ≈ 35s, 5x ≈ 15s, 10x ≈ 5s).
 
 A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduzidos na mesma ordem em qualquer velocidade, então o PnL da corrida tem de sair IDÊNTICO em 1x, 2x, 3x, 5x e 10x. Se mudar com o seed fixo, é bug de determinismo — o chip "Corrida" mostra o seed usado.`}
-            >
-              {speedChoices.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setSimulationSpeed(s)}
-                  className={`px-1 py-0.5 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer font-mono ${
-                    simulationSpeed === s
-                      ? 'border-slate-600 bg-slate-800 text-slate-100'
-                      : 'border-transparent text-slate-500 hover:text-slate-300'
-                  }`}
-                  title={`Rodar em ${s}x — no feed ao vivo isso é ${(2 / s).toFixed(2).replace('.', ',')}s por tick`}
-                >
-                  {s}x
-                </button>
-              ))}
-            </div>
+            />
             {/* Replay OPERA a estratégia (ordens/PnL na tela) x replay silencioso (só coletor) */}
             <button
               onClick={() => setReplayOperates((v) => !v)}
               disabled={isReplaying}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
+              className={`px-1.5 py-0 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
                 replayOperates
                   ? 'border-slate-600 bg-slate-800 text-slate-100'
                   : 'border-slate-800 text-slate-600 hover:text-slate-400'
@@ -3164,39 +3427,43 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
             >
               OPERA
             </button>
-            <div className="flex items-center gap-0.5">
-              {[1, 3, 5].map((d) => (
-                <button
-                  key={d}
-                  onClick={() => handleReplayHistory(d)}
-                  disabled={isReplaying}
-                  className={`px-1 py-0.5 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
-                    replayDays === d
-                      ? 'border-slate-700 bg-slate-800 text-slate-100'
-                      : 'border-transparent text-slate-500 hover:text-slate-300'
-                  } ${isReplaying ? 'opacity-40 cursor-wait' : ''}`}
-                  title={`Rodar ${d} dia(s) e lembrar essa escolha para a próxima abertura`}
-                >
-                  {d}d
-                </button>
-              ))}
-            </div>
-            {/* Seed do pregão sintético: é o que torna honesta a comparação entre velocidades */}
-            <div className="flex items-center gap-0.5 shrink-0 ml-0.5">
+            {/* Dias do replay na mesma caixa de um clique. Escolher dispara a corrida (como os chips
+                antigos); durante uma corrida em andamento a escolha só fica guardada para a próxima. */}
+            <MiniSelect
+              label="dias de replay"
+              value={replayDays}
+              options={dayChoices.map((d) => ({
+                value: d,
+                label: `${d}d`,
+                title: `Rodar ${d} dia(s) e lembrar essa escolha para a próxima abertura`,
+              }))}
+              // NÃO fica desabilitada durante a corrida: escolher ali só guarda para a próxima, que
+              // é o comportamento descrito no onChange. Uma caixa travada também não deixaria o
+              // usuário ler as opções enquanto o replay roda.
+              onChange={(d) => {
+                if (isReplaying) setReplayDays(d);
+                else handleReplayHistory(d);
+              }}
+              title="Dias de histórico que o replay roda (o mínimo é um dia cheio). Ele sempre abre com +1 dia anterior de contexto, para a abertura do 1º dia ter o fechamento de ontem como referência."
+            />
+            {/* Seed do pregão sintético: é o que torna honesta a comparação entre velocidades.
+                Um controle só — o eco que existia na ponta direita da tira foi removido. */}
+            <div className="flex items-center gap-1 shrink-0 ml-0.5">
+              <span className="text-[9px] uppercase tracking-wider text-slate-600">Seed</span>
               <button
                 onClick={() => setReplaySeed((prev) => (prev === null ? lastReplay?.seed ?? randomReplaySeed() : null))}
-                className={`px-1 py-0.5 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer font-mono ${
+                className={`px-1 py-0 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer font-mono tabular-nums ${
                   replaySeed === null
-                    ? 'border-transparent text-slate-500 hover:text-slate-300'
+                    ? 'border-transparent text-slate-400 hover:text-slate-100'
                     : 'border-slate-600 bg-slate-800 text-emerald-300'
                 }`}
                 title={
                   replaySeed === null
-                    ? `SEED AUTO: cada corrida sorteia um pregão sintético diferente (o número fica no chip "Corrida"). Clique para FIXAR o seed da última corrida e reproduzir exatamente o mesmo mercado — só assim faz sentido comparar PnL entre velocidades.`
+                    ? `AUTO: cada corrida sorteia um pregão sintético diferente (o número fica no chip "Corrida"). Clique para FIXAR o seed da última corrida e reproduzir exatamente o mesmo mercado — só assim faz sentido comparar PnL entre velocidades.`
                     : `Pregão sintético FIXO (seed #${replaySeed}): toda corrida reproduz o MESMO mercado, tick por tick. Clique para voltar ao AUTO.`
                 }
               >
-                {replaySeed === null ? 'SEED AUTO' : `SEED #${replaySeed}`}
+                {replaySeed === null ? 'AUTO' : `#${replaySeed}`}
               </button>
               {replaySeed !== null && (
                 <button
@@ -3210,29 +3477,8 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Os dois códigos do gráfico aberto, cada um com o seu papel — antes um "Ativo:" solto
-                deixava a dúvida se o que estava na tela era a série contínua ou o contrato vigente. */}
-            <span className="text-slate-400">Gráfico:</span>
-            <span className="text-slate-100 font-bold">{assetSyms.live}</span>
-            <span className="text-[9px] uppercase tracking-wider text-slate-600">
-              {SYMBOL_ROLE_LABEL[assetSyms.liveRole]}
-            </span>
-            {/* O outro caminho do MESMO ativo, sem repetir o que já está aberto: é ele que se troca
-                para rodar teste longo na contínua ou para operar o papel vigente da conta. */}
-            <span
-              className="text-slate-500 hidden sm:inline"
-              title={
-                `Série contínua ${assetSyms.series}: emenda vencimentos — os testes longos rodam nela.\n` +
-                (assetSyms.active
-                  ? `Contrato vigente ${assetSyms.active}: o papel do pregão de hoje, na conta.
-`
-                  : 'Vencimento vigente ainda a confirmar neste ativo.\n') +
-                `Aberto agora: ${assetSyms.live} (${SYMBOL_ROLE_LABEL[assetSyms.liveRole]}).`
-              }
-            >
-              {assetSyms.others.map((t) => `· ${t.sym} ${SYMBOL_ROLE_LABEL[t.role]}`).join(' ')}
-              {!assetSyms.active && !assetSyms.others.length && '· venc. a confirmar'}
-            </span>
+            {/* O código do contrato aberto saiu desta linha: ele já está no seletor de ativo do
+                cabeçalho, e o mesmo símbolo escrito duas vezes na mesma tela era a duplicidade. */}
             <span className="text-emerald-400 font-semibold">{currentPrice.toLocaleString('pt-BR')} pts</span>
             {/* Spec não homologado: o aviso fica na tira o tempo todo, não só no dropdown, porque um
                 R$/ponto errado contamina PnL e a trava financeira em dinheiro real. */}
@@ -3245,13 +3491,8 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <span className="text-slate-400">CVD:</span>
-            <span className={`font-semibold ${cvd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {cvd > 0 ? '+' : ''}
-              {cvd.toLocaleString('pt-BR')}
-            </span>
-          </div>
+          {/* O CVD saiu da tira: ele já mora no card do Box Renko (e na linha do próprio gráfico) —
+              na tela do pregão a mesma medida escrita em dois lugares só convida a discordarem. */}
           <div className="hidden md:flex items-center gap-2 shrink-0">
             <span className="text-slate-400">Origem:</span>
             <span className={mt5State.status === 'CONNECTED' ? 'text-emerald-400 font-bold' : 'text-neutral-400'}>
@@ -3260,13 +3501,11 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
                 : 'Simulação B3'}
             </span>
           </div>
-          <div className="hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] shrink-0">
-            <span className="text-slate-400">Modo:</span>
-            <span className="text-emerald-400 font-bold">{config.accountMode}</span>
-          </div>
+          {/* "Modo: SIMULADA" saiu daqui: a linha Origem abaixo já diz MT5 Real ou Simulação B3 —
+              duas fichas dizendo a mesma coisa na mesma linha eram redundância pura. */}
           {/* Estratégia ativa — caixinha de seleção da biblioteca do Estúdio. Trocar aqui
               aplica o snapshot e força o Robô PAUSADO; o link dos ajustes continua no cadeado. */}
-          <div className="hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] shrink-0"
+          <div className="hidden lg:flex items-center gap-1.5 px-1.5 py-0 rounded bg-slate-900 border border-slate-800 text-[11px] shrink-0"
             title="Selecione uma estratégia salva para aplicar no terminal (o Robô é pausado por segurança). Para programar novas, abra o Estúdio."
           >
             <span className="text-slate-400">Estratégia:</span>
@@ -3300,7 +3539,7 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
           </div>
           {/* Por que nenhuma ordem sai? Espelho ao vivo dos portões de entrada (Robô / trava financeira / janela de entradas / trava de pregão) */}
           {blocksEntries && (
-            <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] font-semibold shrink-0 max-w-[340px] ${
+            <div className={`flex items-center gap-1.5 px-2 py-0 rounded border text-[10px] font-semibold shrink-0 max-w-[340px] ${
               finLockNow && config.active
                 ? 'bg-rose-500/10 border-rose-500/40 text-rose-300'
                 : 'bg-amber-500/10 border-amber-500/40 text-amber-300'
@@ -3325,11 +3564,11 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
         </div>
 
         <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
-          {/* A medida da corrida e o atalho ficam na zona fixa (a direita nunca some), porque os
-              controles de velocidade/seed moram no grupo do replay, que rola na esquerda. */}
+          {/* A medida da corrida fica na zona fixa (a direita nunca some). O eco de velocidade/seed
+              que existia aqui saiu: os dois valores agora só têm um lugar na tela — o grupo do replay. */}
           {lastReplay && !isReplaying && (
             <div
-              className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded border border-slate-800 bg-slate-900/70 text-[10px] shrink-0"
+              className="hidden sm:flex items-center gap-1.5 px-1.5 py-0 rounded border border-slate-800 bg-slate-900/70 text-[10px] shrink-0"
               title={`Corrida de ${lastReplay.days} dia(s) em ${lastReplay.speed}x · ${
                 lastReplay.source === 'REAL'
                   ? `HISTÓRICO REAL (MT5), ${lastReplay.tickCount.toLocaleString('pt-BR')} ticks${lastReplay.volumeSource ? ` · volume: ${volumeSourceLabel(lastReplay.volumeSource)}` : ''}`
@@ -3351,35 +3590,23 @@ ${
               <span className={`font-bold ${lastReplay.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                 R$ {lastReplay.pnl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
+              {/* A ORIGEM da corrida (histórico real x sintético) saiu do texto do chip: a tira
+                  "Origem" já diz de onde vem o mercado, e o hover do chip repete o detalhe. */}
               <span className="text-slate-500">
-                {lastReplay.trades}t · {lastReplay.speed}x ·{' '}
-                {lastReplay.source === 'REAL'
-                  ? `HISTÓRICO REAL (MT5) · ${lastReplay.tickCount.toLocaleString('pt-BR')} ticks`
-                  : `#${lastReplay.seed} SINTÉTICO`}
+                {lastReplay.trades}t
               </span>
               {!lastReplay.operated && <span className="text-amber-400/80">silencioso</span>}
             </div>
           )}
-          <button
-            onClick={revealReplayControls}
-            className="flex items-center gap-1.5 px-2 py-0.5 rounded border border-slate-800 bg-slate-900/70 text-[10px] font-semibold text-slate-300 shrink-0 cursor-pointer hover:border-slate-600 transition-colors"
-            title={`Velocidade ${simulationSpeed}x · seed ${replaySeed === null ? 'AUTO (um pregão novo a cada corrida)' : `fixo #${replaySeed}`}.
-
-Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita aquela área rola sozinha e eles somem da vista — clique aqui para levar a tela até eles.`}
-          >
-            <Activity className="w-3 h-3 text-slate-500" />
-            <span className="font-mono">{simulationSpeed}x</span>
-            <span className="text-slate-600">·</span>
-            <span className="font-mono text-slate-400">{replaySeed === null ? 'SEED AUTO' : `#${replaySeed}`}</span>
-          </button>
           {/* Posições abertas e PnL da sessão saíram daqui: migraram para o painel Hedge da boleta,
               abaixo dos botões COMPRA/VENDA (contratos por lado, flutuante, ganhos, perdas, PnL do dia). */}
         </div>
       </div>
 
-      {/* Conteúdo Principal com compensação inferior no celular. Moldura de 2px/4px: as três
-          faixas do topo já comem altura e o gráfico precisa respirar na vertical. */}
-      <main className="flex-1 min-h-0 p-0.5 sm:p-1 pb-16 lg:pb-1 bg-slate-950 overflow-hidden">
+      {/* Conteúdo Principal com compensação inferior no celular. Sem vão no topo (p-todo menos
+          pb): as três faixas do topo precisam colar uma na outra — qualquer padding superior aqui
+          cria um segundo vão visível entre a tira de status e a barra do gráfico. */}
+      <main className="flex-1 min-h-0 p-0.5 pt-0 pb-16 sm:p-1 sm:pt-0 lg:pb-1 bg-slate-950 overflow-hidden">
         {!AuthService.isSubscriptionActive(currentUser) && currentUser.role !== 'ADMIN' ? (
           <div className="h-full w-full overflow-y-auto">
             <SubscriptionPaywall
@@ -3437,6 +3664,8 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                   chartSeries={chartSeries}
                   onSeriesChange={handleSeriesChange}
                   renkoBoxPoints={config.boxPoints}
+                  onRenkoBoxPointsChange={(v) => handleBoletaConfigPatch({ boxPoints: v })}
+                  onOpenRenkoParam={goToRenkoParam}
                   rangePoints={rangePoints}
                   onRangePointsChange={setRangePoints}
                   timeframeSec={timeframeSec}
@@ -3445,6 +3674,14 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                   onDadosWindowClose={() => setDadosPanelOpen(false)}
                   boxWindowOpen={boxWindowOpen}
                   onBoxWindowClose={() => setBoxWindowOpen(false)}
+                  shadowEnabled={shadowRun.enabled}
+                  shadowSummary={shadowChipSummary}
+                  shadowPnl={shadowRun.enabled ? shadowSnap.stats.liveEquity : undefined}
+                  shadowDetail={shadowChipDetail}
+                  onOpenShadowWindow={handleToggleShadowWindow}
+                  shadowWindowOpen={shadowWindowOpen}
+                  onShadowWindowClose={() => setShadowWindowOpen(false)}
+                  onPatchShadowConfig={handleBoletaConfigPatch}
                   priceLevels={sessionLevels}
                   vwapCurve={vwapCurve}
                   asset={asset}
@@ -3512,7 +3749,11 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
 
             {activeTab === 'comparativo' && (
               <div className="h-full w-full">
-                <SeriesComparisonView onReplayHistory={handleReplayHistory} isReplaying={isReplaying} />
+                <SeriesComparisonView
+                  onReplayHistory={handleReplayHistory}
+                  isReplaying={isReplaying}
+                  onPatchConfig={handleBoletaConfigPatch}
+                />
               </div>
             )}
 
@@ -3529,6 +3770,7 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                   stats={stats}
                   currentPrice={currentPrice}
                   asset={asset}
+                  boxScaleLabel={renkoScaleLabel(config.boxPoints, asset)}
                   onNavigateToAudit={() => setActiveTab('audit')}
                 />
               </div>
@@ -3541,6 +3783,7 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                   currentPrice={currentPrice}
                   symbol={config.symbol}
                   asset={asset}
+                  boxScaleLabel={renkoScaleLabel(config.boxPoints, asset)}
                   onClearAudit={handleResetAudit}
                   onOpenSettings={() => setActiveTab('settings')}
                 />
@@ -3583,6 +3826,8 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                   // Arrow explícita: handleResetData ganhou opções (troca de ativo) e o clique do
                   // botão passaria o MouseEvent como se fosse `options`.
                   onResetData={() => handleResetData()}
+                  focusParam={paramFocus}
+                  onFocusParamConsumed={() => setParamFocus(null)}
                 />
               </div>
             )}
@@ -3764,6 +4009,16 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
                 <span>Box Renko</span>
               </button>
               <button
+                onClick={() => { handleToggleShadowWindow(); setMoreNavOpen(false); }}
+                className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
+                  shadowWindowOpen && activeTab === 'chart' ? 'border-emerald-600 bg-emerald-950/40 text-emerald-200 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                }`}
+                title="Janela do segundo robô, em papel, com estratégia e escala próprias"
+              >
+                <Cpu className="w-5 h-5 mb-1" />
+                <span>Robô 2</span>
+              </button>
+              <button
                 onClick={() => { setActiveTab('docs'); setMoreNavOpen(false); }}
                 className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
                   activeTab === 'docs' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
@@ -3861,8 +4116,9 @@ Os controles ficam no grupo do replay, no começo desta tira. Em janela estreita
           boleta e a régua e empurraria o aviso para a faixa da boleta). Base a 14px ACIMA da
           linha divisória (--fluxo-divider-y), acompanhando o arrasto do divisor; os fallbacks
           valem só antes do primeiro desenho. Some sozinho em 2,4s ou no ✕. O palco é
-          pointer-events-none (o gráfico continua clicável); só o cartão recebe eventos. */}
-      {latestToast && (
+          pointer-events-none (o gráfico continua clicável); só o cartão recebe eventos.
+          Avisos marcados com chartOnly (ordens executadas/enviadas) só aparecem na aba Gráfico. */}
+      {latestToast && (activeTab === 'chart' || !latestToast.chartOnly) && (
         <div
           className="fixed z-50 flex justify-center pointer-events-none"
           style={{

@@ -1,11 +1,11 @@
 import { Tick, RenkoBox, AutomationConfig } from '../types/trading';
 import { evaluateBoxConvergence } from './convergenceEvaluator';
 import { SessionRegimeMeter } from './sessionRegime';
-import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, snapToTick } from '../assets/assetRegistry';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, renkoScaleLabel, snapToTick } from '../assets/assetRegistry';
 
 /**
  * Calculador de Gráficos Atemporais:
- * 1. Renko 10R (50 pontos no Mini-Índice B3)
+ * 1. Renko na escala configurável (`boxPoints`; WIN 50 pts = 10R no Mini-Índice B3)
  * 2. Fluxo Atemporal (Delta de Agressão e CVD tick-a-tick)
  * 3. Detector de Convergência Preço vs Fluxo
  */
@@ -40,6 +40,11 @@ export class RenkoFlowEngine {
 
   public setBoxPoints(points: number) {
     this.boxPoints = points;
+  }
+
+  /** Escala atual do motor (usada pelo Robô 2 para conferir se o motor acompanhou a escala). */
+  public getBoxPoints(): number {
+    return this.boxPoints;
   }
 
   /**
@@ -419,6 +424,14 @@ export class RenkoFlowEngine {
   ) {
     this.regimeMeter.feedClosedBox(box);
     box.regimeFactor = this.regimeMeter.getFactor();
-    return evaluateBoxConvergence(box, config, this.boxes, {}, this.regimeMeter);
+    // O motivo do sinal denuncia a escala REAL do tijolo — nunca um "10R" herdado de quando
+    // a escala era fixa (é o texto que aparece na auditoria de ordens).
+    return evaluateBoxConvergence(
+      box,
+      config,
+      this.boxes,
+      { priceLabel: `Preço ${renkoScaleLabel(this.boxPoints, this.asset)}` },
+      this.regimeMeter
+    );
   }
 }

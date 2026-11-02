@@ -3,9 +3,10 @@
 Você está assumindo o projeto **Fluxo & Renko 10R - MT5 Quant Terminal**: aplicação web de trading
 quantitativo que hoje roda no Mini-Índice B3 (`WIN$`) e está preparada para multi-mercado (WDO e BTC
 já têm linha no registro, mas seguem **`a_confirmar`**), enviando ordens automatizadas ao MetaTrader 5
-por uma ponte WebSocket em Python. **Fase atual: refino visual consolidado até o Ciclo 9 (boleta em
-camadas, dois códigos do ativo rotulados, marca d'água no gráfico); próximo marco é a validação na conta
-demo da XP** (a ponte ainda nunca rodou contra a corretora de verdade).
+por uma ponte WebSocket em Python. **Fase atual: Ciclo 10 consolidado — Robô 2 na sombra (segundo
+robô em papel com escala própria 15R/20R/25R) entregue e validada por espelho headless, mais o
+pente-fino da escala (rótulos "10R" lidos do box) e o contrato vigente no gráfico; próximo marco é a
+validação na conta demo da XP** (a ponte ainda nunca rodou contra a corretora de verdade).
 
 ## 0. QUEM É O USUÁRIO E COMO TRABALHAR
 - Brasileiro, iniciante em programação. **Toda a UI, comentários e documentação em português.**
@@ -64,9 +65,20 @@ demo da XP** (a ponte ainda nunca rodou contra a corretora de verdade).
    (Renko 10R, Renko 15R, Range, Tempo…) com contadores `PaperCounters`; aba **Comparativo** decide qual
    escala merece ordem real. Dia com dado verdadeiro é marcado `real` (`markRealData`/`hasRealData`) e
    **o replay nunca apaga**.
-8. **Simulador & Replay**: feed autônomo B3; replay **progressivo** (1x ≈ 2,0 s/tick, um dia ≈ 1min45;
+8. **Robô 2 (sombra)** (`shadowRobotService.ts`, Ciclo 10): segundo robô em **papel** com
+   identidade própria — estratégia da biblioteca, **escala em R** (15R/20R/25R persistida como R; o
+   box em pontos deriva por `boxPointsForR(scaleR, asset)`, ex.: WIN 20R = 100 pts, WDO 20R = 10 pts),
+   motor de barras/CVD/regime **exclusivos**, livro, curva e CSV próprios (`fluxo_shadow_robot_v1`,
+   dia-a-dia, batch no replay, dia `real` protegido). Roda ao vivo, no replay e com o principal OFF
+   (ignora `config.active` de propósito). Usa o **mesmo** `evaluateBoxConvergence` do terminal —
+   provado por espelho headless: sombra 20R × coletor renko20r = 271 boxes / 269 trades idênticos.
+   **Blindagem por estrutura**: o service não tem socket, não tem `setOrders`, não tem callback de
+   dispatch — nenhum caminho para ordem real. UI: chip `+ Sombra` na tira do gráfico + janela
+   flutuante (`ShadowRobotPanel`), seção no Comparativo, bloco em Parâmetros, botão no menu mobile.
+   ⚠️ **Fase 2 pendente**: robô real no mesmo símbolo exige `magicNumber` por robô + filtro na ponte.
+9. **Simulador & Replay**: feed autônomo B3; replay **progressivo** (1x ≈ 2,0 s/tick, um dia ≈ 1min45;
    10x ≈ 5 s); modo **OPERA** roda a estratégia de verdade pelo mesmo `handleIncomingTick` do terminal.
-9. **Gráfico** (canvas, `RenkoFlowChart.tsx`): só **Pontos (Renko)** e **Range** como séries desenháveis
+10. **Gráfico** (canvas, `RenkoFlowChart.tsx`): só **Pontos (Renko)** e **Range** como séries desenháveis
    (Tempo saiu do gráfico, ficou no coletor). **Dois divisores arrastáveis idênticos** (linha + alça +
    3 pontos + destaque verde no hover/arraste): preço↔fluxo (`flowPaneRatio` 18–55%, padrão 33%) e, no
    modo Heikin-Ashi, **Heikin-Ashi↔histograma** (`haHistSplit` 30–85%, padrão 66%). Os dois arrastam com
@@ -77,17 +89,17 @@ demo da XP** (a ponte ainda nunca rodou contra a corretora de verdade).
    `HISTOGRAMA · DELTA`). Duplo clique reseta cada divisor; escalas persistidas. **Marca d'água do ativo**
    (sigla + produto + os dois códigos) é desenhada atrás dos tijolos, dentro do `clip()` do painel de preço,
    com alfa ~0.13 e corpo proporcional; liga/desliga na engrenagem (`fluxo_renko_asset_watermark_v1`).
-10. **Heikin-Ashi de fluxo tricolor**: 🟢 subida contínua de agressão compradora, 🔴 descida contínua
+11. **Heikin-Ashi de fluxo tricolor**: 🟢 subida contínua de agressão compradora, 🔴 descida contínua
     vendedora, ⚪ reversão/indecisão/absorção.
-11. **Linhas de ordem no gráfico** com tags (`🟢 COMPRA MÃE (SURFE)`, `🔺 PIRÂMIDE #N (+50p TP)`,
+12. **Linhas de ordem no gráfico** com tags (`🟢 COMPRA MÃE (SURFE)`, `🔺 PIRÂMIDE #N (+50p TP)`,
     `⏳ RETESTE LIMITE`, `🎯 PARCIAL`, `🛡️ SL BREAKEVEN`, `🏁 TAKE PROFIT`), badges no eixo Y e setas de
     borda quando SL/TP saem do zoom. `openOrders` inclui `OPEN` **e** `PENDING_LIMIT`.
-12. **Auditoria intraday** (`IntradayOrderAudit` + `orderAuditService`): trilha por ordem, filtros,
+13. **Auditoria intraday** (`IntradayOrderAudit` + `orderAuditService`): trilha por ordem, filtros,
     timeline e CSV padrão BR (UTF-8 **com BOM**, `;`).
-13. **SaaS & Admin Master** (`authService`, `AdminPanel`, `SubscriptionPaywall`): ⚠️ ainda **maquete em
+14. **SaaS & Admin Master** (`authService`, `AdminPanel`, `SubscriptionPaywall`): ⚠️ ainda **maquete em
     `localStorage`**, sem backend. Admin: `marcos.a.camargo@gmail.com`, vitalício.
-14. **Dossiê executivo em PDF** (`ProjectDossierPdfModal`, `@media print`, A4).
-15. **Registro de Ativo** (`src/assets/assetRegistry.ts`) — a **única** fonte dos números por contrato:
+15. **Dossiê executivo em PDF** (`ProjectDossierPdfModal`, `@media print`, A4).
+16. **Registro de Ativo** (`src/assets/assetRegistry.ts`) — a **única** fonte dos números por contrato:
     `pointValue` (R$/ponto), `tickSize`, `decimals`, `basePrice`, `prefixes`, `primarySymbol` (a **série
     contínua**, `WIN$N` — emenda vencimentos e é a dos testes longos; padrão do config), `activeContract`
     (o **vigente**, `WINZ26`; vazio em WDO/BTC porque não se inventa vencimento), `watermarkCaption`,
@@ -97,7 +109,7 @@ demo da XP** (a ponte ainda nunca rodou contra a corretora de verdade).
     (último preço real, válido 7 dias), `isStaleOrderPrice`, e a taxonomia de códigos
     (`SymbolRole`, `symbolRole`, `SYMBOL_ROLE_LABEL`, `assetSymbols`). **Homologar um ativo = trocar
     `status` nessa tabela**, nenhum outro código.
-16. **Seletor de ativo no Header** (`AssetSelector`, Zona 1 — existe no mobile): uma linha com a sigla do
+17. **Seletor de ativo no Header** (`AssetSelector`, Zona 1 — existe no mobile): uma linha com a sigla do
     ativo + **fichas de cada código rotulado pelo papel** (`SymbolChip`: `WIN$N série`, `WINZ26 vigente`),
     o vivo destacado e ponto de status; o dropdown traz a legenda "Série contínua ($N) = testes longos ·
     Vigente = papel do pregão de hoje". A tira de status do App diz **`Gráfico:`** + os mesmos códigos
@@ -105,12 +117,12 @@ demo da XP** (a ponte ainda nunca rodou contra a corretora de verdade).
     (os 3 números pendentes) e, confirmada, entra em ensaio com **Robô forçado em OFF**, ponte em SEGURO
     e chip permanente `SPEC NÃO HOMOLOGADO`. **Trocar de ativo com ordem aberta é BLOQUEADO** (nunca
     liquida em silêncio). `ALLOW_UNCONFIRMED_PREVIEW = false` tranca tudo em uma linha.
-17. **Estúdio de Estratégias** (`StrategyStudio.tsx` + `strategyLibraryService.ts`): biblioteca versionada
+18. **Estúdio de Estratégias** (`StrategyStudio.tsx` + `strategyLibraryService.ts`): biblioteca versionada
     em `fluxo_strategy_library_v1`, separada dos perfis do Ajustes. Ativar = gesto explícito **+ Robô
     PAUSADO**. ⚠️ `mergeConfig` normaliza `assetId` pelo símbolo — como todo sítio de merge.
-18. **Níveis do pregão + VWAP no gráfico** (`priceLevels.ts`, puro): AJUSTE, FECHAMENTO, ABERTURA,
+19. **Níveis do pregão + VWAP no gráfico** (`priceLevels.ts`, puro): AJUSTE, FECHAMENTO, ABERTURA,
     LEILÃO, MÁX, MÍN e curva de VWAP laranja; nada de nível com < 20 ticks do dia.
-19. **Histórico real pela ponte (Fase 2)**: `marketHistoryService.ts` + rota `REQUEST_HISTORY` no script
+20. **Histórico real pela ponte (Fase 2)**: `marketHistoryService.ts` + rota `REQUEST_HISTORY` no script
     gerado; o replay se **rotula** `HISTÓRICO REAL (MT5)` ou `SINTÉTICO · #seed`, com origem do volume
     (`TICK`/`M1_RATE`/`NONE`). Sem MT5, o sintético continua funcionando normalmente.
 
@@ -150,7 +162,8 @@ src/
 ├── assets/
 │   ├── assetRegistry.ts          # números por contrato (WIN ativo; WDO/BTC a_confirmar) + helpers puros
 │   ├── assetMigration.ts         # migração do preço-base (flag fluxo_asset_base_171500_v1)
-│   └── assetSelectionMigration.ts # migração da seleção (flag fluxo_asset_selection_v1)
+│   ├── assetSelectionMigration.ts # migração da seleção (flag fluxo_asset_selection_v1)
+│   └── chartContractMigration.ts  # migração do contrato do gráfico (flag fluxo_chart_vigente_v1): contínua gravada → vigente
 ├── types/{trading,strategy,auth,drawing}.ts
 ├── services/
 │   ├── eaConfigService.ts        # config + presets + perfis + merge defensivo (normaliza assetId no load e no import)
@@ -158,6 +171,7 @@ src/
 │   ├── orderAuditService.ts      # auditoria **por ativo** (`auditKeyForAsset`) + CSV BR
 │   ├── marketHistoryService.ts   # pedido de histórico real (reqId, chunks, dedupe, timeout, suficiência)
 │   ├── seriesCollectorService.ts # coletor multi-série, marca real/replay
+│   ├── shadowRobotService.ts     # **Robô 2 (sombra)**: runner em papel, escala própria 15R/20R/25R, livro/curva/CSV próprios, batch no replay — sem socket/setOrders/dispatch
 │   └── authService.ts            # SaaS (localStorage)
 ├── utils/
 │   ├── renkoCalculator.ts        # boxes Renko, delta/CVD por box, Heikin-Ashi (com setAsset)
@@ -168,7 +182,7 @@ src/
 │   ├── tradingGates.ts           # portões de entrada compartilhados (puro)
 │   ├── tradingWindowMigration.ts # migração da trava de horário
 │   ├── marketSimulator.ts        # feed sintético do ativo escolhido
-│   ├── paperStrategyBot.ts       # robô sombra (espelho das regras do terminal)
+│   ├── paperStrategyBot.ts       # robô sombra (espelho das regras do terminal); `BotKey = SeriesKey | 'shadow'`
 │   ├── sessionRules.ts           # trava 17:30 → 18:05 lendo tradingCloseAllTime
 │   ├── bridgeSecurity.ts         # token da ponte
 │   └── pythonScriptGenerator.ts  # gera o .py: AUTH/ARM/tetos + REQUEST_HISTORY (≈1.3k linhas de script)
@@ -186,20 +200,27 @@ src/
     ├── StrategyStudio.tsx        # aba Estúdio (biblioteca de estratégias; "Puxar da boleta" copia a base)
     ├── AutomationPanel.tsx       # Ajustes em BLOCOS por estratégia (Pirâmide tem bloco dedicado:
     │                             #   🏄 Ordem Mãe · 🔺 Pirâmides · 🔄 Regras de Saída com "🛡️ Proteção da Ordem Mãe")
+    │                             #   e bloco do **Robô 2 (sombra)** com o ShadowRobotPanel
+    ├── ShadowRobotPanel.tsx      # painel do Robô 2: identidade, warning, métricas e controles (liga/estratégia/15R-20R-25R/CSV/zerar); variantes `window` e `page`
+    ├── MiniSelect.tsx            # caixa compacta de escolha (velocidade do simulador, dias do replay) — substituiu os 5 chips da tira
     ├── SimulatorView, SeriesComparisonView, TechnicalEvaluationView, TimesAndTrades,
     │   EquityCurveView, OrdersAndStats, IntradayOrderAudit
     ├── Header, PythonScriptView, DocumentationView, ProjectDossierPdfModal
     └── AdminPanel, SubscriptionPaywall, SubscriptionStatusBadge
 scripts/strategyLab.ts           # laboratório headless das duas estratégias (+ CSV de veredito)
+scripts/renkoBoxScaleAssert.ts   # assert: escala do box × rótulo anunciado (nunca "10R" soldado)
+scripts/chartContractAssert.ts   # assert: migração contínua → vigente (inclusive os casos "não reescreve")
 ```
 
-Chaves de `localStorage`: `fluxo_renko_ea_config_v3` (com `assetId`), `fluxo_renko_ea_profiles_v3`,
+Chaves de `localStorage`: `fluxo_renko_ea_config_v3` (com `assetId` e `shadowRobot`), `fluxo_renko_ea_profiles_v3`,
 `fluxo_strategy_library_v1`, `fluxo_renko_chart_scales_v2` (inclui `haHistSplit`),
 `fluxo_renko_flow_mode_v1`, `fluxo_renko_price_levels_v1`, `fluxo_boleta_open_v1` (boleta aberta/recolhida),
 `fluxo_boleta_params_open_v1` (sub-caixa Parâmetros), `fluxo_renko_asset_watermark_v1` (marca d'água),
 `fluxo_bridge_token_v1`,
 `fluxo_renko_intraday_audit_v3` (legado) **+ `..._WIN` / `_WDO` / `_BTC`**, `fluxo_asset_last_price_v1`,
-flags de migração `fluxo_asset_base_171500_v1`, `fluxo_asset_selection_v1`,
+`fluxo_shadow_robot_v1` (**Robô 2**: corrida, livro, curva e marca `real` por dia),
+`fluxo_shadow_window_open_v1` (janela flutuante do Robô 2),
+flags de migração `fluxo_asset_base_171500_v1`, `fluxo_asset_selection_v1`, `fluxo_chart_vigente_v1`,
 `fluxo_trading_window_08_55_17_30_v2`, `fluxo_series_collector_v1`, `fluxo_renko_spacing_mode_v2`,
 `fluxo_renko_visible_count_v3`, `fluxo_renko_hud_pos_v1`, `fluxo_chart_series_v1`,
 `fluxo_chart_range_pts_v1`, `fluxo_chart_time_sec_v1`, `fluxo_dados_window_v1`,
@@ -214,9 +235,11 @@ flags de migração `fluxo_asset_base_171500_v1`, `fluxo_asset_selection_v1`,
 ## 4. DOCUMENTAÇÃO
 - `PROJECT_SUMMARY.md` — estado atual consolidado (regras, arquitetura, árvore de arquivos).
 - `EVOLUCOES_DETALHADAS.md` — diário de obra por ciclo, com causa raiz, implementação e verificação
-  (último ciclo: **9 — §9.1–9.5**, boleta em camadas, os dois códigos do ativo, marca d'água e as três
-  faixas do topo apertadas; antes dele §8.9–8.13, boleta-base + hedge + Estúdio).
+  (último ciclo: **10 — §10.1–10.6**, Robô 2 na sombra com escala própria + pente-fino da escala +
+  contrato vigente no gráfico; antes dele **9 — §9.1–9.5**, boleta em camadas e marca d'água).
 - `PROJECT_CONSOLIDATION_CHAT_SEED.md` — ponteiro/índice; **este arquivo (`CHAT_SEED.md`) é o prompt**.
+- `CHAT_SEED_CICLO_10.md` — seed do Ciclo 10: résumé da evolução e **tarefas da próxima conversa**
+  (colar sozinho ou depois deste).
 
 ## 5. COMO VERIFICAR
 ```bash
@@ -228,7 +251,21 @@ npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migraç
 ```
 
 ## 6. PENDÊNCIAS ABERTAS
-- 📍 **PONTO DE RETOMADA (fim do Ciclo 9, 01/11/2026)**: boleta em camadas (título âmbar + ⚙ dos ajustes
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 10, 02/11/2026)**: existe o **Robô 2 (sombra)** — segundo robô
+  em papel com estratégia da biblioteca, escala própria (15R/20R/25R), motor/CVD/regime exclusivos,
+  livro/curva/CSV próprios (`shadowRobotService` + chip `+ Sombra` na tira + janela flutuante + seção
+  no Comparativo + bloco em Parâmetros + botão no menu mobile). Roda ao vivo, no replay e com o
+  principal OFF; persiste em `fluxo_shadow_robot_v1` por dia; **nunca toca a corretora** (sem
+  socket/setOrders/dispatch). Junto entraram o pente-fino da escala (rótulos via `renkoScaleLabel`),
+  a `MiniSelect` na tira e a migração do **contrato vigente** (`fluxo_chart_vigente_v1`). Verificado:
+  espelho sombra×coletor idêntico (271 boxes / 269 trades), persistência F5, normalize sanitizando
+  lixo, WIN→WDO rederivando o box, tsc + build limpos (diário §10.1–10.6). **Voltar por**:
+  (1) 🧪 as três conferências no navegador que ficaram pendentes (espelhamento visual do replay, F5
+  com o principal OFF, overflow do chip no celular); (2) **Fase 2 do multi-robô real** — `magicNumber`
+  por robô + filtro na ponte/auditoria (sem isso, sombra jamais vira ordem real no mesmo símbolo);
+  (3) `POINT_VALUE_BRL` por ativo no script gerado (hoje soldado em R$0,20 — só WIN); (4) conferir a
+  migração do vigente no navegador (ainda não vista em tela); (5) validação na demo XP (abaixo).
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 9, 01/11/2026 — superado pelo ponto acima, mantido como histórico)**: boleta em camadas (título âmbar + ⚙ dos ajustes
   do gráfico na linha do título + 📌 + ⌄, sem selo SIM/MT5 e sem linha `Preço`; sub-caixa recolhível
   **Parâmetros** com os seis steppers da base, persistida em `fluxo_boleta_params_open_v1`), cabeçalho e
   tira de status mostrando **os dois códigos rotulados** (`WIN$N série` · `WINZ26 vigente`, vivo destacado;
@@ -246,7 +283,9 @@ npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migraç
   canvas, sempre visível, base editável + livro de hedge, offset pela largura real do canvas (nunca
   breakpoint cego); **Ciclo 9** — boleta em camadas com ⚙ na linha do título, os dois códigos do ativo
   rotulados, marca d'água por ativo e as três faixas do topo apertadas (header `py-1` com botões
-  `py-1`/`py-0.5 text-[11px]`, tira `py-0.5`, barra do gráfico `h-7`, `main p-0.5 sm:p-1`).
+  `py-1`/`py-0.5 text-[11px]`, tira `py-0.5`, barra do gráfico `h-7`, `main p-0.5 sm:p-1`); **Ciclo 10** —
+  pente-fino da escala (nenhum "10R" soldado em card/título/auditoria/dossiê/script), `MiniSelect` na
+  tira (velocidade e dias) e contrato vigente como padrão do gráfico.
 - 🧪 **Validação na CONTA DEMO XP iminente** (primeiro contato real com a ponte). Antes dela, resolver o
   item 🔎 abaixo — os cinco pontos têm correção pequena e mudam o comportamento do feed.
 - 🔎 **Simulador "sempre rodando": diagnóstico PRONTO, nenhuma linha mexida** (detalhe completo com

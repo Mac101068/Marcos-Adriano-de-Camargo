@@ -35,9 +35,16 @@ export type SeriesKey =
   | 'renko20r'
   | 'renko25r';
 
+/**
+ * Chave de qualquer `PaperStrategyBot` no sistema. 'shadow' é o ROBÔ 2 (sombra): vive fora do
+ * coletor, com estratégia e escala próprias, e por isso NÃO entra em `SeriesKey` — os mapas
+ * `Record<SeriesKey, ...>` do coletor e das telas de comparação continuam só com as séries dele.
+ */
+export type BotKey = SeriesKey | 'shadow';
+
 export interface PaperTrade {
   id: string;
-  series: SeriesKey;
+  series: BotKey;
   mode: AutomationConfig['strategyMode'];
   direction: 'BUY' | 'SELL';
   role: 'MAIN' | 'PYRAMID';
@@ -119,7 +126,7 @@ let uid = 0;
 const nextId = () => `paper_${Date.now().toString(36)}_${++uid}`;
 
 export class PaperStrategyBot {
-  readonly series: SeriesKey;
+  readonly series: BotKey;
   private closedTrades: PaperTrade[] = [];
   private equity = 0;
   private equityCurve: EquityPoint[] = [];
@@ -138,7 +145,7 @@ export class PaperStrategyBot {
   private largestWin = 0;
   private largestLoss = 0;
 
-  constructor(series: SeriesKey) {
+  constructor(series: BotKey) {
     this.series = series;
   }
 

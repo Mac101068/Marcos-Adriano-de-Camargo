@@ -28,7 +28,7 @@ import {
 import { MT5ConnectionState } from '../types/trading';
 import { UserProfile } from '../types/auth';
 import { SubscriptionStatusBadge } from './SubscriptionStatusBadge';
-import { ALLOW_UNCONFIRMED_PREVIEW, ASSETS, assetSymbols, SYMBOL_ROLE_LABEL, type AssetId, type AssetSpec } from '../assets/assetRegistry';
+import { ALLOW_UNCONFIRMED_PREVIEW, ASSETS, assetSymbols, chartSymbolFor, SYMBOL_ROLE_LABEL, type AssetId, type AssetSpec } from '../assets/assetRegistry';
 
 type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'studio' | 'admin';
 
@@ -106,7 +106,7 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
     <div ref={rootRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
+        className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
           groupActive ? 'bg-slate-800/70 text-slate-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
         }`}
       >
@@ -163,17 +163,18 @@ interface AssetSelectorProps {
 }
 
 /**
- * Ficha de um código do ativo no cabeçalho: o símbolo em mono + o PAPEL dele miúdo ao lado.
- * O código que está alimentando o gráfico agora ganha texto claro e fundo; os outros ficam em
- * cinza. Assim os dois símbolos deixam de ler como "nome duplicado" e passam a ler como
- * "este é o da série histórica, este é o vigente, e este é o que está aberto".
+ * Ficha do código do ativo no cabeçalho: o símbolo em mono + o PAPEL dele miúdo ao lado.
+ * UM código só, porque o gráfico abre sempre o contrato vigente. `off` marca o único caso em que
+ * a tela mostra outro código: o config está apontando para um vencimento diferente do vigente
+ * (teste na contínua ou código digitado à mão em Parâmetros) — aí o âmbar avisa que o aberto não
+ * é o papel padrão do pregão.
  */
-const SymbolChip: React.FC<{ sym: string; role: string; live: boolean }> = ({ sym, role, live }) => (
+const SymbolChip: React.FC<{ sym: string; role: string; off?: boolean }> = ({ sym, role, off }) => (
   <span
     className={`flex items-center gap-0.5 rounded px-1 py-px font-mono leading-none ${
-      live ? 'bg-slate-800 text-slate-100' : 'text-slate-500'
+      off ? 'bg-amber-500/15 text-amber-200' : 'bg-slate-800 text-slate-100'
     }`}
-    title={live ? `Gráfico aberto em ${sym}` : `${sym} — ${role} deste ativo`}
+    title={off ? `Gráfico aberto em ${sym} (${role}), não no vigente` : `Gráfico aberto em ${sym} (${role})`}
   >
     <span className="text-[9px] font-semibold">{sym}</span>
     <span className="hidden sm:inline text-[7px] uppercase tracking-wider opacity-70">{role}</span>
@@ -221,12 +222,12 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
   const ids = Object.keys(ASSETS) as AssetId[];
   const previewSpec = previewFor ? ASSETS[previewFor] : null;
 
-  // Fichas de código do ativo aberto: série contínua, vigente e — quando o config estiver num
-  // código que não é nenhum dos dois — esse código na frente, marcado como vivo. A lista vem pronta
-  // do registro, onde o cabeçalho e a tira de status bebem a mesma fonte: se discordassem, a tela
-  // mostraria um símbolo e desenharia outro.
+  // O código do gráfico é sempre o vigente do ativo (sem vencimento confirmado, a contínua do
+  // registro) — e é a mesma conta que o App faz, porque `assetSymbols` é uma fonte única.
   const syms = assetSymbols(asset, liveSymbol);
-  const liveUpper = syms.live.toUpperCase();
+  const chartSym = syms.chart;
+  const shownSym = syms.offPattern ? syms.live : chartSym;
+  const shownRole = SYMBOL_ROLE_LABEL[syms.offPattern ? syms.liveRole : syms.chartRole];
 
   const pick = (id: AssetId) => {
     if (id === assetId) {
@@ -254,24 +255,21 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
         title={
           `${asset.label} — ${asset.contractNote}
 ` +
-          `Série contínua ${syms.series}: emenda os vencimentos, por isso é o código dos TESTES LONGOS (replay de dias, coletor).
-` +
-          (syms.active
-            ? `Contrato vigente ${syms.active}: o papel do pregão de hoje, o que a corretora tem na conta.
+          (asset.activeContract
+            ? `Gráfico no contrato vigente ${chartSym}: o papel do pregão de hoje, o que a corretora tem na conta.
 `
-            : `Contrato vigente: ainda não confirmado na corretora para este ativo.
+            : `Vencimento ainda não confirmado na corretora para este ativo — o gráfico abre na série ${chartSym}.
 `) +
-          `Gráfico aberto em ${syms.live} (${SYMBOL_ROLE_LABEL[syms.liveRole]}).`
+          `A série contínua ${asset.primarySymbol} é símbolo dos testes longos de histórico, não do gráfico.` +
+          (syms.offPattern ? `\nATENÇÃO: aberto em ${syms.live} (${shownRole}).` : '')
         }
         className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-lg border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer"
       >
         <Layers className="w-3 h-3 text-slate-400 shrink-0" />
         <span className="text-[10px] font-semibold text-slate-100 leading-none">{asset.id}</span>
         <span className="hidden sm:block w-px h-2.5 bg-slate-700 shrink-0" />
-        {syms.tokens.map((t) => (
-          <SymbolChip key={t.sym} sym={t.sym} role={SYMBOL_ROLE_LABEL[t.role]} live={t.sym.toUpperCase() === liveUpper} />
-        ))}
-        {!syms.active && (
+        <SymbolChip sym={shownSym} role={shownRole} off={syms.offPattern} />
+        {!asset.activeContract && (
           <span className="hidden sm:inline text-[7px] uppercase tracking-wider text-amber-400/80 shrink-0">
             venc. a confirmar
           </span>
@@ -288,8 +286,8 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
         <div className="absolute top-full left-0 mt-1.5 z-50 w-[248px] py-1 rounded-lg bg-slate-900 border border-slate-700/80 shadow-2xl shadow-black/50">
           <p className="px-3 py-1 text-[10px] uppercase tracking-wider text-slate-500">Ativo em operação</p>
           <p className="px-3 pb-1 text-[9px] leading-snug text-slate-600">
-            Série contínua (<span className="font-mono text-slate-500">$N</span>) = testes longos · Vigente = papel do
-            pregão de hoje
+            O gráfico abre o vigente de cada ativo; a série contínua (<span className="font-mono text-slate-500">$N</span>)
+            fica nos testes longos de histórico
           </p>
           {ids.map((id) => {
             const spec = ASSETS[id];
@@ -314,15 +312,10 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
                 <span className="flex-1 min-w-0">
                   <span className="block">{spec.label}</span>
                   <span className="block text-[9px] font-mono text-slate-500">
-                    {spec.primarySymbol} <span className="font-sans text-slate-600">série</span>
-                    {spec.activeContract ? (
-                      <>
-                        {' · '}
-                        {spec.activeContract} <span className="font-sans text-slate-600">vigente</span>
-                      </>
-                    ) : (
-                      <span className="font-sans text-amber-400/70"> · venc. a confirmar</span>
-                    )}
+                    {chartSymbolFor(spec)}{' '}
+                    <span className="font-sans text-slate-600">
+                      {spec.activeContract ? 'vigente' : 'série · venc. a confirmar'}
+                    </span>
                   </span>
                 </span>
                 {spec.status === 'a_confirmar' && (
@@ -432,7 +425,7 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   return (
-    <header className="flex items-center justify-between gap-2 px-2.5 sm:px-4 md:px-6 py-1 bg-slate-950 border-b border-slate-800/80 shrink-0">
+    <header className="flex items-center justify-between gap-2 px-2.5 sm:px-4 md:px-6 py-0.5 bg-slate-950 border-b border-slate-800/80 shrink-0">
       {/* Zone 1: Brand Title & EA Registered Status. Vão apertado e fonte miúda: cabeçalho, tira de
           métricas e barra do gráfico são três faixas empilhadas — cada pixel vertical aqui é tela de
           gráfico ganha embaixo. */}
@@ -450,7 +443,7 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Zone 2: Menu superior agrupado — encostado no título, ocupando a linha livre */}
-      <nav className="hidden lg:flex items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-slate-800 flex-1 justify-start ml-1">
+      <nav className="hidden lg:flex items-center gap-1 bg-slate-900/80 p-0.5 rounded-lg border border-slate-800 flex-1 justify-start ml-1">
         <MenuGroup label="Gráficos" icon={LineChart} items={chartItems} activeTab={activeTab} onSelect={setActiveTab} />
         <MenuGroup label="Análise" icon={BarChart2} items={analysisItems} activeTab={activeTab} onSelect={setActiveTab} />
         <MenuGroup label="Sistema" icon={Settings} items={systemItems} activeTab={activeTab} onSelect={setActiveTab} rightAlign />
@@ -459,7 +452,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleDadosPanel}
           title="Abrir/fechar a janela de controles do painel Renko (Sinal, Exibição, Escalas, Desenho, Ordem rápida)"
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
             dadosPanelOpen
               ? 'bg-slate-800/70 text-slate-300 font-semibold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
@@ -474,7 +467,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleBoxWindow}
           title="Abrir/fechar a janela do Box Renko (OHLC, fluxo Heikin-Ashi, CVD e convergência do box ativo)"
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
             boxWindowOpen
               ? 'bg-slate-800/70 text-slate-300 font-semibold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'

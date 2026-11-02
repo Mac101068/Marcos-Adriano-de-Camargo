@@ -18,6 +18,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import { AutomationConfig } from '../types/trading';
+import { renkoScaleLabel, resolveAsset } from '../assets/assetRegistry';
 
 interface ProjectDossierPdfModalProps {
   isOpen: boolean;
@@ -38,30 +39,40 @@ export const ProjectDossierPdfModal: React.FC<ProjectDossierPdfModalProps> = ({
     window.print();
   };
 
+  // O dossiê é a fotografia do setup: toda medida em "boxes" sai do box configurado no gráfico.
+  // Fixar 50 pts / "10R" aqui seria documentar um robô que não é o que o operador montou.
+  const asset = resolveAsset(config.symbol, config.assetId);
+  const boxPts = config.boxPoints || 50;
+  const boxScaleLabel = renkoScaleLabel(boxPts, asset);
+  const boxes = (pts: number) => {
+    const n = Math.round((pts / boxPts) * 10) / 10;
+    return `${n} ${n === 1 ? 'box' : 'boxes'} ${boxScaleLabel}`;
+  };
+
   const handleDownloadMarkdown = () => {
     const mdContent = `# 📊 DOSSIÊ TÉCNICO & MANUAL DE ENGENHARIA QUANTITATIVA
 ## Fluxo & Renko 10R - MT5 Quant Terminal
 **Data do Relatório**: ${new Date().toLocaleDateString('pt-BR')}
 **Ativo Homologado**: ${config.symbol} (Mini-Índice B3)
-**Setup de Referência**: ${config.profileName} (10R Institucional com Reteste de Pullback)
+**Setup de Referência**: ${config.profileName} (Box ${boxScaleLabel} com Reteste de Pullback)
 
 ---
 
 ### 1. SUMÁRIO EXECUTIVO & ESPECIFICAÇÃO DO SISTEMA
-O **Fluxo & Renko 10R MT5 Quant Terminal** é uma plataforma algorítmica de alta precisão que combina a filtragem de ruído temporal do gráfico Renko 10R (50 pontos no Mini-Índice B3) com a microestrutura de mercado do fluxo de ordens (Tape Reading tick-a-tick, Delta de Agressão e CVD).
+O **Fluxo & Renko 10R MT5 Quant Terminal** é uma plataforma algorítmica de alta precisão que combina a filtragem de ruído temporal do gráfico Renko ${boxScaleLabel} (${boxPts} pontos no Mini-Índice B3) com a microestrutura de mercado do fluxo de ordens (Tape Reading tick-a-tick, Delta de Agressão e CVD).
 O sistema envia ordens nativas para o MetaTrader 5 via ponte bidirecional WebSocket com suporte total a contas Hedge e Netting.
 
 ### 2. PRINCIPAIS REGRAS & ENGENHARIA QUANTITATIVA
-- **Gráfico Renko 10R**: Tamanho de 50 pontos por tijolo. Inversão exige 100 pontos (2 boxes). Blocos sólidos e aproximação progressiva.
+- **Gráfico Renko ${boxScaleLabel}**: Tamanho de ${boxPts} pontos por tijolo. Inversão exige ${boxPts * 2} pontos (${boxes(boxPts * 2)}). Blocos sólidos e aproximação progressiva.
 - **Painel de Fluxo Heikin-Ashi Tricolor**:
   - Verde (#10b981): Pressão compradora acelerando.
   - Vermelho (#ef4444): Pressão vendedora acelerando.
   - Cinza (#94a3b8): Reversão de fluxo, absorção ou indecisão.
 - **Gatilho de Entrada no Pullback**: Ordem limite posicionada no reteste da abertura do box gerador do sinal.
 - **Gestão de Risco**:
-  - Stop Loss: 100 pontos (2 boxes).
-  - Take Profit: 150 pontos (3 boxes).
-  - Saída Parcial: 50 pontos (1 box a favor) com 1 contrato.
+  - Stop Loss: ${config.stopLossPoints} pontos (${boxes(config.stopLossPoints)}).
+  - Take Profit: ${config.takeProfitPoints} pontos (${boxes(config.takeProfitPoints)}).
+  - Saída Parcial: ${config.partialPoints} pontos (${boxes(config.partialPoints)} a favor) com ${config.partialContracts} contrato(s).
   - Breakeven Automático: Stop movido para Entrada + 5 pts (offset de taxas da B3) imediatamente na parcial.
   - Trailing Stop: Ativação a 60 pts com distância de 50 pts da máxima/mínima.
 - **Livro de Auditoria Intraday**: Registro cronológico de todos os eventos com exportação CSV no padrão brasileiro (UTF-8 BOM, ponto e vírgula).
@@ -165,7 +176,7 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
               </div>
               <div className="p-2 bg-slate-950/70 rounded border border-slate-800/80 print:bg-white print:border-gray-300">
                 <span className="text-[10px] text-slate-400 block print:text-gray-600">Tamanho Renko:</span>
-                <strong className="text-emerald-400 print:text-emerald-800">{config.boxPoints} pts (10R)</strong>
+                <strong className="text-emerald-400 print:text-emerald-800">{config.boxPoints} pts ({boxScaleLabel})</strong>
               </div>
               <div className="p-2 bg-slate-950/70 rounded border border-slate-800/80 print:bg-white print:border-gray-300">
                 <span className="text-[10px] text-slate-400 block print:text-gray-600">Delta Mínimo:</span>
@@ -179,11 +190,11 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
               </div>
               <div className="p-2 bg-slate-950/70 rounded border border-slate-800/80 print:bg-white print:border-gray-300">
                 <span className="text-[10px] text-slate-400 block print:text-gray-600">Stop Loss:</span>
-                <strong className="text-rose-400 print:text-rose-800">{config.stopLossPoints} pts (2 boxes)</strong>
+                <strong className="text-rose-400 print:text-rose-800">{config.stopLossPoints} pts ({boxes(config.stopLossPoints)})</strong>
               </div>
               <div className="p-2 bg-slate-950/70 rounded border border-slate-800/80 print:bg-white print:border-gray-300">
                 <span className="text-[10px] text-slate-400 block print:text-gray-600">Take Profit:</span>
-                <strong className="text-emerald-400 print:text-emerald-800">{config.takeProfitPoints} pts (3 boxes)</strong>
+                <strong className="text-emerald-400 print:text-emerald-800">{config.takeProfitPoints} pts ({boxes(config.takeProfitPoints)})</strong>
               </div>
               <div className="p-2 bg-slate-950/70 rounded border border-slate-800/80 print:bg-white print:border-gray-300">
                 <span className="text-[10px] text-slate-400 block print:text-gray-600">Saída Parcial:</span>
@@ -207,7 +218,7 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
               1. Visão Geral & Filosofia Quantitativa
             </h2>
             <p className="text-slate-300 leading-relaxed print:text-black">
-              O terminal une a pureza do <strong>gráfico atemporal de Renko 10R</strong> com a análise profunda de <strong>Tape Reading tick-a-tick</strong>. Ao desconsiderar o tempo cronológico e reagir exclusivamente à oscilação de preço e ao saldo líquido de agressões (Delta e CVD), o operador elimina o ruído do mercado e entra alinhado com a liquidez institucional dos grandes players da B3.
+              O terminal une a pureza do <strong>gráfico atemporal de Renko ${boxScaleLabel}</strong> com a análise profunda de <strong>Tape Reading tick-a-tick</strong>. Ao desconsiderar o tempo cronológico e reagir exclusivamente à oscilação de preço e ao saldo líquido de agressões (Delta e CVD), o operador elimina o ruído do mercado e entra alinhado com a liquidez institucional dos grandes players da B3.
             </p>
           </div>
 
@@ -215,14 +226,14 @@ Relatório gerado automaticamente pelo Fluxo & Renko 10R MT5 Quant Terminal.`;
           <div className="space-y-3">
             <h2 className="text-sm sm:text-base font-bold text-slate-100 flex items-center gap-2 border-b border-slate-800 pb-1 print:text-black print:border-black/20">
               <Layers className="w-4 h-4 text-emerald-400 print:text-emerald-700" />
-              2. Especificação Técnica: Renko 10R & Fluxo Heikin-Ashi
+              2. Especificação Técnica: Renko ${boxScaleLabel} & Fluxo Heikin-Ashi
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="bg-slate-900/50 border border-slate-800 p-3 rounded-lg print:border-gray-300 print:bg-white">
-                <h4 className="font-bold text-slate-200 mb-1 print:text-black">Tijolos Renko 10R (50 Pontos)</h4>
+                <h4 className="font-bold text-slate-200 mb-1 print:text-black">Tijolos Renko ${boxScaleLabel} (${boxPts} Pontos)</h4>
                 <ul className="list-disc list-inside space-y-1 text-slate-400 print:text-gray-800 text-xs">
-                  <li>Formação: 50 pontos no sentido do movimento anterior.</li>
-                  <li>Reversão: Exige 100 pontos (2 boxes) no sentido contrário.</li>
+                  <li>Formação: ${boxPts} pontos no sentido do movimento anterior.</li>
+                  <li>Reversão: Exige ${boxPts * 2} pontos (${boxes(boxPts * 2)}) no sentido contrário.</li>
                   <li>Corpo: 100% sólido preenchido sem miolo vazado.</li>
                   <li>Aproximação Temporal Progressiva: boxes recentes mais abertos, compactando-se ao envelhecer.</li>
                   <li>Escalas ajustáveis com zoom independente nos eixos X, Y e Fluxo.</li>

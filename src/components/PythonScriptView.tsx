@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AutomationConfig } from '../types/trading';
 import { generatePythonMT5Script } from '../utils/pythonScriptGenerator';
+import { renkoScaleLabel, resolveAsset } from '../assets/assetRegistry';
 import { Download, Copy, Check, Terminal, BookOpen, AlertTriangle, ShieldCheck, Cpu, ArrowRightLeft, CheckCircle2 } from 'lucide-react';
 
 interface PythonScriptViewProps {
@@ -10,6 +11,8 @@ interface PythonScriptViewProps {
 export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) => {
   const [copied, setCopied] = useState<boolean>(false);
   const scriptContent = generatePythonMT5Script(config);
+  // A descrição do robô tem que bater com o script gerado: ambos leem a mesma escala do box.
+  const boxLabel = renkoScaleLabel(config.boxPoints, resolveAsset(config.symbol, config.assetId));
 
   const handleCopy = () => {
     navigator.clipboard.writeText(scriptContent);
@@ -89,7 +92,7 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
               <span>1. Terminal Web (Navegador)</span>
             </div>
             <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
-              Exibe os gráficos atemporais de Renko 10R e Fluxo (Delta/CVD), permite disparar ordens manuais e monitorar os disparos automáticos.
+              Exibe os gráficos atemporais de Renko {boxLabel} e Fluxo (Delta/CVD), permite disparar ordens manuais e monitorar os disparos automáticos.
             </p>
           </div>
 
@@ -178,7 +181,7 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
           <div className="space-y-1.5">
             <span className="font-semibold text-neutral-400">2. Disparo e Envio de Ordens Automáticas:</span>
             <p className="text-slate-400 leading-relaxed">
-              O preço 10R é calculado atemporalmente em caixas de {config.boxPoints} pontos. Ao detectar convergência (Delta <code className="text-slate-200 font-mono">≥ ±{config.minDeltaThreshold}</code>), o script chama <code className="text-slate-200 font-mono">mt5.order_send()</code> a mercado com Stop Loss de {config.stopLossPoints} pts e Take Profit de {config.takeProfitPoints} pts diretamente na sua conta da corretora.
+              O preço {boxLabel} é calculado atemporalmente em caixas de {config.boxPoints} pontos. Ao detectar convergência (Delta <code className="text-slate-200 font-mono">≥ ±{config.minDeltaThreshold}</code>), o script chama <code className="text-slate-200 font-mono">mt5.order_send()</code> a mercado com Stop Loss de {config.stopLossPoints} pts e Take Profit de {config.takeProfitPoints} pts diretamente na sua conta da corretora.
               {config.adaptiveThresholdEnabled ? (
                 <>
                   {' '}Com o <b className="text-emerald-300">Limiar Adaptativo de Regime</b> ligado, o ±{config.minDeltaThreshold} vira ponto de partida: o script embute um <code className="text-slate-200 font-mono">RegimeMeter</code> (volume dos últimos {config.regimeLookbackBoxes ?? 20} boxes ÷ média do dia, 0,5x–3x) e exige Delta acima de <code className="text-slate-200 font-mono">±{config.minDeltaThreshold} × fator</code> — horas quentes exigem agressão proporcional, horas frias liberam sinais antes travados.

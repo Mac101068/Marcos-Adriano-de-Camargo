@@ -8,6 +8,132 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 10 — 02/11/2026 · Robô 2 na sombra (escala própria 15R/20R/25R) e o pente-fino da escala
+
+Dois trabalhos convivem neste ciclo. O principal é o **ROBÔ 2 (SOMBRA)**: um segundo robô em
+**papel**, com estratégia da biblioteca, **escala Renko própria (15R/20R/25R)**, motor de barras,
+CVD, medidor de regime, livro e curva de capital **próprios** — rodando ao vivo, no replay e com o
+robô principal desligado, sem jamais tocar a corretora. O segundo é o **pente-fino herdado do
+fix de escala**: os rótulos "10R" soldados em cards/títulos/auditoria/dossiê/script passaram a ler a
+escala real do box via `renkoScaleLabel()`, a tira de controles trocou cinco chips de velocidade
+por uma `MiniSelect`, e o gráfico passou a **abrir o contrato vigente** por padrão (migração).
+
+### 10.1 ✅ `shadowRobotService.ts` — o runner do segundo robô, por construção sem caminho para ordem real
+
+**Pedido do operador.** "Quero um segundo robô operando uma segunda estratégia em outra escala, na
+sombra do primeiro, para comparar resultado sem arriscar dinheiro."
+
+**Causa raiz / decisão de arquitetura.** O `PaperStrategyBot` já existia para os robôs sombra do
+coletor, mas não havia **um robô com identidade própria, persistência própria e controles na tela**.
+E havia um risco de projeto: se o segundo robô recebesse `setOrders` ou o socket da ponte, um bug
+poderia despachar ordem real sem magic number próprio. A blindagem foi feita **por estrutura**,
+**não por condição**: o service **não recebe socket, não recebe `setOrders`, não tem callback de
+dispatch** — não existe caminho possível do código da sombra até a corretora.
+
+**O que foi implementado** (`src/services/shadowRobotService.ts`, ~467 linhas):
+- Ele possui um `PaperStrategyBot('shadow')` — o `BotKey = SeriesKey | 'shadow'` ampliou a identidade do
+  robô de papel **sem quebrar** os `Record<SeriesKey, …>` do coletor (o `'shadow'` não entra nas
+  seis séries dele).
+- `configure(shadowRobot, asset, baseConfig)` resolve `(strategyId, scaleR, ativo)` → **config
+efetiva**: copia a estratégia da biblioteca por cima do config base e deriva o box por
+  `boxPointsForR(scaleR, asset)` = `clampRenkoR(scaleR) × tickSize` — em WIN, 20R = 100 pts; em
+  WDO, 20R = 10 pts. A escala é guardada **em R**, não em pontos, para o relatório continuar
+  comparável depois de trocar de ativo.
+- `processClosedBox(box, prevBoxes, eff, meter)` usa o **mesmo** `evaluateBoxConvergence` do
+  terminal — sombra e robô principal decidem sinal com a mesma matemática, nenhuma regra paralela.
+- Persistência dia-a-dia em `fluxo_shadow_robot_v1` (rotação de dia, flag `real`, replay nunca
+  apaga dia com dado verdadeiro — espelha a regra do Coletor). `beginBatch/endBatch` com
+  `batchDepth` inibem persistência/notify por barra durante o replay (senão 4 mil boxes = 4 mil
+  `setItem`). `markToMarket` com `isReal` marca o dia quando um tick da ponte alimentou a sombra.
+- `resetBook()` limpa a contabilidade **sem apagar a corrida** (usado no replay, que precisa
+  reprocessar o dia mantendo estratégia/escala); `reset()` zera tudo inclusive a escolha.
+- `exportCsv()` no padrão BR (UTF-8 com BOM, `;`), `subscribe`/`getVersion` para
+  `useSyncExternalStore` com snapshot cacheado por versão.
+
+### 10.2 ✅ Wiring no `App.tsx` — o segundo motor de barras vivendo ao lado do primeiro
+
+- `shadowEngineRef` + `ensureShadowEngine()` criam um `RenkoFlowEngine` **exclusivo** da sombra no
+  box efetivo (`getBoxPoints()` novo getter em `renkoCalculator.ts` para conferir a escala); se a
+  estratégia registra medidor de regime, ele é do engine da sombra (`registerRegimeMeter`).
+- `feedShadowEngine(tick)` alimenta o engine e, a cada box fechado, chama `processClosedBox` com o
+  CVD/boxes anteriores do **próprio** engine. É chamado em **três** sítios: no
+  `handleIncomingTick` (ao vivo, depois do loop das escalas alternativas), no `ingestSilent` do
+  replay, e no boot/reinicialização de dados.
+- Efeito de `configure()` roda quando mudam `shadowRobot.{enabled,strategyId,scaleR}`, ativo ou
+  biblioteca; se a estratégia ainda não existe, o service fica inativo com **warning** (o chip
+  avisa em vez de operar no escuro).
+- Guarda anti-âncora-velha: ligar a sombra com ticks fluindo e o engine parado há >90 s recria o
+  engine no preço vivo (senão o primeiro box nasceria de uma âncora de horas atrás).
+- Replay: `resetBook()` + `beginBatch()` antes do loop, `markToMarket(…, false)` +
+  `feedShadowEngine(t)` por tick, `endBatch()` ao terminar — a sombra **opera o replay junto**,
+  mesmo com o robô principal OFF.
+
+### 10.3 ✅ Chip `+ Sombra` na tira de status e janela flutuante do livro
+
+- Terceira linha do status do gráfico ganhou o chip: desligado mostra `+ Sombra` (clique abre o
+  painel para escolher estratégia); ligado mostra `Sombra 20R · "nome"` + PnL colorido, e o
+  hover/title traz escala em pts, ativo, trades W/L, win rate e rebaixamento — **o chip é atalho
+  para os parâmetros de origem**, nunca um número solto.
+- Janela flutuante (mesma `DadosPanelWindow` dos outros painéis, 246 px, arrastável, posição
+  limitada ao pai) com `ShadowRobotPanel` dentro; aberta/fechada persiste em
+  `fluxo_shadow_window_open_v1`.
+- `ShadowRobotPanel.tsx` (duas variantes: janela flutuante e página) — identidade da corrida,
+  warning quando inativa, métricas (Agora, Realizado, Posições, Trades/Win/Loss, Win Rate, PF,
+  DD, Expectativa) e controles: Ligar/Desligar, dropdown de estratégia da biblioteca, botões de
+  escala **15R / 20R / 25R**, exportar CSV, zerar.
+
+### 10.4 ✅ Comparativo, Parâmetros e menu mobile
+
+- **Comparativo** (`SeriesComparisonView.tsx`): seção nova **"Robô 2 (sombra)"** no fim dos grupos,
+  com o painel + `ShadowEquityChart` (curva de capital própria), lida via
+  `useSyncExternalStore(shadowRobotService…)`. Escala alternativa deixa de ser só número do
+  coletor e passa a ter histórico de trades navegável.
+- **Parâmetros** (`AutomationPanel.tsx`): BLOCO entre o robô principal e o resto — `Cpu` +
+  `ShadowRobotPanel variant="page"`, com patch `onPatchConfig` escrevendo `config.shadowRobot`
+  pelo mesmo `eaConfigService` de sempre (nada de storage paralelo).
+- **Tipos e config** (`trading.ts` + `eaConfigService.ts`): `ShadowScaleR = 15|20|25`,
+  `ShadowRobotConfig { enabled, strategyId, scaleR }`, campo opcional `shadowRobot?` no
+  `AutomationConfig`; `DEFAULT_SHADOW_ROBOT` desligado em 20R; **`normalizeShadowRobot()`**
+  sanitiza campo a campo no `loadSavedConfig` — config velho ou JSON corrompido cai no padrão,
+  escala impossível (ex.: `7`) é rejeitada. Segue a regra dos merge sites: normalizar **na leitura**,
+  não depender de migração uma-vez.
+- **Mobile**: botão **"Robô 2"** no menu "Mais" do rodapé, mesmo destino do chip.
+
+### 10.5 ✅ Pente-fino da escala e da tira (trabalho de refino que estava na mesa)
+
+- **Rótulo de escala nunca soldado**: `RenkoBoxCard`, `OrdersAndStats`, `IntradayOrderAudit`,
+  `ProjectDossierPdfModal`, `PythonScriptView` e o script Python gerado passaram a receber a
+  escala via `renkoScaleLabel(config.boxPoints, asset)` ("Blocos 10R" → "Blocos {label}", título
+  do script "RENKO 10R" → "RENKO {label}"). Um box de 8R não pode ser anunciado como 10R.
+- **`MiniSelect.tsx`** (novo): velocidade do simulador (5 chips → 1 caixa `2x`) e dias do replay
+  (`3d`) numa lista compacta com `aria-label` e título explicativo; escolher durante uma corrida
+  que roda guarda para a próxima em vez de travar a caixa.
+- **`chartContractMigration.ts`** (novo, flag `fluxo_chart_vigente_v1`): o gráfico abre o
+  **contrato vigente** (`WINZ26`) por padrão; a série contínua (`WIN$N`) fica como símbolo interno
+  do teste longo/histórico. A migração só reescreve `symbol` **exatamente igual** à contínua —
+  vencimento digitado à mão é escolha deliberada e nunca é tocado; ativo sem vigente confirmado
+  (WDO/BTC) fica intacto (não se inventa código). Config **e** biblioteca de estratégias migram.
+- Asserts permanentes criados: `scripts/renkoBoxScaleAssert.ts` (escala do box × rótulo) e
+  `scripts/chartContractAssert.ts` (regras da migração de contrato, inclusive os casos "não
+  reescreve").
+
+### 10.6 ✅ Verificação do ciclo (o que foi provado e o que ficou para o navegador)
+
+- **Espelho sombra × coletor**: script temporário rodou o MESMO feed pela sombra (20R) e pelo
+  coletor `renko20r` — **271 boxes / 269 trades idênticos, zero divergência**. Apagado depois da
+  entrega (regra do projeto para asserts temporários).
+- **Persistência**: teste com processo espelho do storage provou que 179 trades, R$ 3.970,
+  metadados da corrida e `boxPoints` derivado sobrevivem a F5; e que `shadowRobot` ausente,
+  parcial ou impossível normaliza para o padrão.
+- **Troca de ativo**: WIN 20R = 100 pts → WDO 20R = 10 pts, escala rederivada pelo tick do ativo.
+- `npx tsc --noEmit` limpo e `npx vite build` OK (2,22 s) na entrega; asserts permanentes
+  (`renkoBoxScaleAssert`, `chartContractAssert`) passando.
+- 🧪 **Não conferido no navegador** (ficou para o operador, com o dev server em pé): (1) ver o
+  replay espelhado na tela com os dois robôs comparando lado a lado; (2) persistência da sombra
+  com o robô principal OFF atravessando um F5; (3) overflow do chip na tira em celular.
+
+---
+
 ## 📆 Ciclo 9 — 01/11/2026 · Refino visual: boleta em camadas, os dois códigos do ativo e marca d'água
 
 Ciclo inteiramente da fase **REFINO VISUAL**: nenhuma regra de estratégia mudou. A boleta ganhou
@@ -935,9 +1061,42 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
     `<header>` quase não devolveu pixels: quem governa a altura são os controles internos (`py-1.5
     text-xs` nos grupos de menu e nas ações). Apertar três faixas empilhadas exige medir o conteúdo,
     não o invólucro.
+14. **Blindagem por estrutura, não por condição (Ciclo 10).** O Robô 2 não é um robô real com um
+    `if` na frente: ele é um serviço que **não tem referência** ao socket, a `setOrders` nem a
+    callback de dispatch. Condição erra-se com um refactor; ausência de caminho, não. E a sombra
+    ignora de propósito `config.active` e as travas do robô principal — a contabilidade dela roda
+    mesmo com o primeiro desligado, porque é a estratégia da sombra que está sendo testada.
+15. **Escala da sombra mora em R, não em pontos (Ciclo 10).** `scaleR` (15/20/25) é o que se
+    persiste; `boxPoints = scaleR × tickSize` deriva no momento de operar. Guardar pontos tornaria
+    o relatório incomparável depois de trocar de ativo (WIN 20R = 100 pts vs. WDO 20R = 10 pts).
+16. **Um sinal, dois robôs, uma matemática (Ciclo 10).** A sombra chama o **mesmo**
+    `evaluateBoxConvergence` do terminal e opera o **mesmo** `PaperStrategyBot` do coletor; se um
+    dia divergir, é bug — não regra alternativa. O espelho sombra×coletor (271 boxes / 269 trades
+    idênticos) existe para provar isso em CI de bolso.
+17. **Contrato vigente é escolha do produto, não do operador (Ciclo 10).** A migração
+    `fluxo_chart_vigente_v1` só reescreve `symbol` **exatamente igual** à série contínua; um
+    vencimento digitado à mão é deliberação e nunca é tocado. Ativo sem vigente confirmado fica
+    intacto — inventar código de vencimento seria assinar um gráfico que não existe na corretora.
 
 ## 🧭 Pendências e próximos passos conhecidos
 
+- ✅ **Commit do Ciclo 10** — "feat: Robô 2 (sombra) com escala própria 15R/20R/25R + pente-fino da
+  escala e contrato vigente no gráfico": código novo (`shadowRobotService.ts`,
+  `ShadowRobotPanel.tsx`, `MiniSelect.tsx`, `chartContractMigration.ts`, asserts
+  `renkoBoxScaleAssert`/`chartContractAssert`) mais wiring em `App.tsx` e os docs desta
+  consolidação. Enviado a `origin/main` em 02/11/2026 depois de `npx tsc --noEmit` limpo, `npx
+  vite build` OK (2,22 s), espelho sombra×coletor idêntico e teste de persistência F5 passando.
+- 📍 **PONTO DE RETOMADA — 02/11/2026 (fim do Ciclo 10, Robô 2 na sombra)**: existe um segundo
+  robô em papel com identidade própria (`shadowRobotService` + chip `+ Sombra` na tira do gráfico
+  + janela flutuante + seção no Comparativo + bloco em Parâmetros + botão no menu mobile). Roda ao
+  vivo, no replay e com o principal OFF; persiste em `fluxo_shadow_robot_v1` por dia; nunca toca a
+  corretora (sem socket, sem setOrders, sem dispatch). **Voltar por**: (1) 🧪 as três conferências
+  no navegador que ficaram pendentes (espelhamento visual do replay, F5 com principal OFF,
+  overflow do chip no celular); (2) **Fase 2** — magic number por robô + filtro na ponte e na
+  auditoria antes de qualquer sombra virar robô real no mesmo símbolo; (3) `POINT_VALUE_BRL` por
+  ativo da ponte (hoje soldado em R$0,20 — só WIN); (4) repiquete: decidir se o config deve gravar
+  a contínua ou o vigente ao trocar de ativo (a migração do vigente ainda não conferida no
+  navegador); (5) validação na conta demo XP (item 🧪 abaixo).
 - ✅ **Commit `89a5bb1`** — "feat: boleta-base editavel + livro de hedge + Estudio lendo a boleta (Ciclo
   8.9–8.13)": 11 arquivos, **1.657 inserções / 798 remoções** — código (App, BoletaTicket, RenkoFlowChart,
   ChartControlSidebar, AutomationPanel, StrategyStudio, pythonScriptGenerator) mais a documentação desta

@@ -3,7 +3,7 @@ import { SessionRegimeMeter } from './sessionRegime';
 
 /**
  * Avaliador de convergência Preço x Fluxo compartilhado entre as três séries:
- * Pontos (Renko 10R), Range e Tempo. Todas as barras chegam no formato RenkoBox,
+ * Pontos (Renko), Range e Tempo. Todas as barras chegam no formato RenkoBox,
  * então a mesma estratégia clássica mede a eficiência dos três gráficos.
  *
  * Extraído de forma fiel do RenkoFlowEngine (comportamento idêntico para o Renko,
@@ -37,7 +37,9 @@ export function evaluateBoxConvergence(
   labels: ConvergenceSeriesLabels = {},
   meter?: SessionRegimeMeter
 ): ConvergenceResult {
-  const priceLabel = labels.priceLabel ?? 'Preço 10R';
+  // Fallback apenas para chamadores sem rótulo definido: os motores sempre passam a escala
+  // derivada do box configurado, então o motivo nunca anuncia um R fixo de época antiga.
+  const priceLabel = labels.priceLabel ?? `Preço ${config.boxPoints} pts`;
   const gainUp = labels.gainLabelUp ?? `+${config.boxPoints} pts`;
   const gainDown = labels.gainLabelDown ?? `-${config.boxPoints} pts`;
 

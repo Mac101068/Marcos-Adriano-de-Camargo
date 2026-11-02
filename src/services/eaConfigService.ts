@@ -1,15 +1,40 @@
-import { AutomationConfig, ConfigPreset } from '../types/trading';
-import { ASSETS, DEFAULT_ASSET_ID, resolveAsset, type AssetId } from '../assets/assetRegistry';
+import { AutomationConfig, ConfigPreset, ShadowRobotConfig, ShadowScaleR } from '../types/trading';
+import { ASSETS, DEFAULT_ASSET_ID, chartSymbolFor, resolveAsset, type AssetId } from '../assets/assetRegistry';
 
 const STORAGE_KEY_CONFIG = 'fluxo_renko_ea_config_v3';
 const STORAGE_KEY_PROFILES = 'fluxo_renko_ea_profiles_v3';
 
+/**
+ * Default do Robô 2 (sombra): desligado e sem estratégia.
+ * Fica exportado porque a UI e o runner precisam da mesma resposta quando o campo
+ * não existe na config (config antigas, presets, import de JSON).
+ */
+export const DEFAULT_SHADOW_ROBOT: ShadowRobotConfig = { enabled: false, strategyId: null, scaleR: 20 };
+
+/** Escalas aceitas pelo Robô 2 (a UI monta o seletor a partir daqui). */
+export const SHADOW_SCALE_CHOICES: ShadowScaleR[] = [15, 20, 25];
+
+/**
+ * Sanitiza o bloco `shadowRobot` vindo do storage: objeto ausente, incompleto ou com valor
+ * impossível (escala fora de 15/20/25) cai no default campo a campo — o mesmo cuidado dos
+ * demais campos abaixo, para config antigas não quebrarem a sombra.
+ */
+export function normalizeShadowRobot(raw?: Partial<ShadowRobotConfig> | null): ShadowRobotConfig {
+  const scale = raw?.scaleR as ShadowScaleR | undefined;
+  return {
+    enabled: raw?.enabled === true,
+    strategyId: typeof raw?.strategyId === 'string' && raw.strategyId ? raw.strategyId : null,
+    scaleR: scale !== undefined && SHADOW_SCALE_CHOICES.includes(scale) ? scale : DEFAULT_SHADOW_ROBOT.scaleR,
+  };
+}
+
 export const DEFAULT_EA_CONFIG: AutomationConfig = {
   active: true,
   // Ativo do seletor (Fase 2) e o código do contrato andam juntos: o símbolo vem do registro,
-  // então trocar de ativo num lugar não deixa o outro apontando para outro mercado.
+  // então trocar de ativo num lugar não deixa o outro apontando para outro mercado. O código é o
+  // VIGENTE (o papel do pregão de hoje na corretora) — a série contínua ficou para os testes.
   assetId: DEFAULT_ASSET_ID,
-  symbol: ASSETS[DEFAULT_ASSET_ID].primarySymbol,
+  symbol: chartSymbolFor(ASSETS[DEFAULT_ASSET_ID]),
   boxPoints: 50, // 10R no Mini-Índice
   contracts: 1, // 1 contrato padrão na Ordem Mãe
   minDeltaThreshold: 100, // Delta mínimo de agressão líquida
@@ -66,6 +91,7 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   holdMainUntilFlip: true,
   closeAllOnFlowFlip: true,
   noFixedStopLoss: true,
+  shadowRobot: { ...DEFAULT_SHADOW_ROBOT },
   profileName: '10R Pirâmide & Confluência',
   lastSavedTimestamp: Date.now(),
 };
@@ -228,6 +254,9 @@ export class EaConfigService {
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
           mt5MaxOrdersPerMinute: parsed.mt5MaxOrdersPerMinute ?? DEFAULT_EA_CONFIG.mt5MaxOrdersPerMinute,
           enablePartialExit: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? false : (parsed.enablePartialExit ?? true),
+          // Robô 2: sempre reassemble — storage antigo não tem o campo, e um objeto parcial
+          // não pode deixar `scaleR` undefined (a sombra derivaria pts de undefined).
+          shadowRobot: normalizeShadowRobot(parsed.shadowRobot),
           lastSavedTimestamp: parsed.lastSavedTimestamp || Date.now(),
         };
       }

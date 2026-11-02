@@ -41,6 +41,8 @@ interface SectionProps {
 interface ChartControlSidebarProps {
   /* Sinal */
   blockCount: number;
+  /** Escala anunciada ao lado da contagem de blocos — vem do gráfico (nunca um "10R" fixo). */
+  blockScaleLabel?: string;
   activePosCount: number;
 
   /* Exibição */
@@ -234,6 +236,7 @@ const Segmented: React.FC<{
 
 export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
   blockCount,
+  blockScaleLabel = 'Renko',
   activePosCount,
   flowViewMode,
   onFlowViewMode,
@@ -310,7 +313,7 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
         <Section title="Sinal" icon={Activity}>
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-[11px] font-mono">
-              <span className="text-slate-500">Blocos 10R</span>
+              <span className="text-slate-500">Blocos {blockScaleLabel}</span>
               <span className="text-emerald-400 font-bold tabular-nums">{blockCount}</span>
             </div>
             {/* O chip de PnL flutuante saiu daqui: o número vivo mora no painel Hedge da boleta. */}

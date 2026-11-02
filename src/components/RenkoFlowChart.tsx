@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { RenkoBox, TradeOrder } from '../types/trading';
+import { AutomationConfig, RenkoBox, TradeOrder } from '../types/trading';
 import { ChartSeries } from '../utils/barEngines';
 import { Drawing, DrawingColor, DrawingTool, loadDrawings, saveDrawings } from '../types/drawing';
 import { ChartLayout, DrawingOverlay } from './DrawingOverlay';
@@ -8,15 +8,21 @@ import {
   ASSETS,
   AssetSpec,
   DEFAULT_ASSET_ID,
+  boxPointsForR,
+  clampRenkoR,
+  chartSymbolFor,
   formatPrice,
   pointsToBRL,
   referencePrice,
+  renkoRChoices,
+  renkoRFromBoxPoints,
   renkoScaleLabel,
   snapToTick,
 } from '../assets/assetRegistry';
 import { ChartControlSidebar } from './ChartControlSidebar';
 import { BoletaTicket, BOLETA_GAP, BOLETA_WIDTH, STORAGE_KEY_OPEN, HedgeBook } from './BoletaTicket';
 import { DadosPanelWindow } from './DadosPanelWindow';
+import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
 import { Sliders, ArrowUp, ArrowDown } from 'lucide-react';
 
@@ -93,6 +99,16 @@ interface RenkoFlowChartProps {
   chartSeries?: ChartSeries;
   onSeriesChange?: (s: ChartSeries) => void;
   renkoBoxPoints?: number;
+  /**
+   * DEFINIÇÃO DA ESCALA DO BOX (fonte única: `config.boxPoints`). O R é editável no gráfico e
+   * tudo que depende dele — motor, robôs, boleta, script Python, auditoria — lê este valor.
+   */
+  onRenkoBoxPointsChange?: (points: number) => void;
+  /**
+   * Atalho para o BLOCO DO RENKO nos Parâmetros. A escala do box é definida no painel de
+   * Parâmetros; o gráfico só a lê. Em vez de um número morto na barra, o clique abre o bloco.
+   */
+  onOpenRenkoParam?: () => void;
   rangePoints?: number;
   onRangePointsChange?: (n: number) => void;
   timeframeSec?: number;
@@ -103,6 +119,18 @@ interface RenkoFlowChartProps {
   // Janela flutuante do Box Renko (atalho "Box Renko" no menu)
   boxWindowOpen?: boolean;
   onBoxWindowClose?: () => void;
+  // ROBÔ 2 (SOMBRA): chip na tira de status + janela flutuante com o livro e os controles.
+  // O gráfico não conhece o service — o App lê a sombra e entrega o resumo pronto.
+  shadowEnabled?: boolean;
+  shadowSummary?: string;
+  /** Resultado da sombra em R$; só ele tem cor (a regra da plataforma: cor = sinal/placar). */
+  shadowPnl?: number;
+  shadowDetail?: string;
+  onOpenShadowWindow?: () => void;
+  shadowWindowOpen?: boolean;
+  onShadowWindowClose?: () => void;
+  /** Escolhas da sombra (estratégia/escala/ligar) viram patch do config — quem persiste é o App. */
+  onPatchShadowConfig?: (patch: Partial<AutomationConfig>) => void;
   /** Níveis relevantes do pregão (utils/priceLevels), desenhados como tracejado cinza discreto. */
   priceLevels?: PriceLevel[];
   /** VWAP acumulada do dia amostrada nos tijolos — a curva laranja. */
@@ -162,6 +190,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   chartSeries = 'renko',
   onSeriesChange,
   renkoBoxPoints = 50,
+  onRenkoBoxPointsChange,
+  onOpenRenkoParam,
   rangePoints = 50,
   onRangePointsChange,
   timeframeSec = 30,
@@ -170,6 +200,14 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   onDadosWindowClose,
   boxWindowOpen = false,
   onBoxWindowClose,
+  shadowEnabled = false,
+  shadowSummary,
+  shadowPnl,
+  shadowDetail,
+  onOpenShadowWindow,
+  shadowWindowOpen = false,
+  onShadowWindowClose,
+  onPatchShadowConfig,
   priceLevels = [],
   vwapCurve,
   asset = ASSETS[DEFAULT_ASSET_ID],
@@ -559,7 +597,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   }, [activeBox, allBoxes]);
 
   // =========================================================================
-  // RENDERIZAÇÃO DO CANVAS: RENKO 10R & FLUXO HEIKIN-ASHI
+  // RENDERIZAÇÃO DO CANVAS: RENKO (escala da config) & FLUXO HEIKIN-ASHI
   // =========================================================================
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -656,11 +694,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.fillStyle = 'rgba(255,255,255,0.1)';
       ctx.font = `${Math.max(8, wmSub - 1)}px "JetBrains Mono", monospace`;
       // Spec sem vencimento declarado não pode assinar "vigente" atrás de um código que não existe:
-      // a linha diz o que sabe e marca o resto como a confirmar.
+      // a linha diz o papel que o registro realmente confirma. Um código só: listar a série
+      // contínua aqui era texto de teste no meio da tela do operador.
       ctx.fillText(
-        asset.activeContract
-          ? `${asset.primarySymbol} série · ${asset.activeContract} vigente`
-          : `${asset.primarySymbol} série · vencimento a confirmar`,
+        `${chartSymbolFor(asset)} · ${asset.activeContract ? 'vigente' : 'vencimento a confirmar'}`,
         wmCx,
         wmCy + wmMonogram * 0.3 + wmSub * 1.6
       );
@@ -739,7 +776,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.textAlign = 'center';
       ctx.fillText(
         `Aguardando ticks para formar ${
-          chartSeries === 'range' ? `Range ${rangePoints} pts` : chartSeries === 'tempo' ? `candles de ${formatTimeframe(timeframeSec)}` : 'Renko 10R'
+          chartSeries === 'range' ? `Range ${rangePoints} pts` : chartSeries === 'tempo' ? `candles de ${formatTimeframe(timeframeSec)}` : `Renko ${renkoScaleLabel(renkoBoxPoints, asset)}`
         }...`,
         width / 2,
         height / 2
@@ -1520,7 +1557,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.stroke();
 
     // =======================================================================
-    // DESENHO DOS TIJOLOS RENKO 10R (PAINEL SUPERIOR)
+    // DESENHO DOS TIJOLOS RENKO (PAINEL SUPERIOR)
     // =======================================================================
     let lastBuySignalX = -999;
     let lastSellSignalX = -999;
@@ -2980,6 +3017,29 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     contracts,
     onManualOrder,
     onClosePositions,
+    // A janela "Dados" anuncia a escala dos blocos que ela mesma conta: nunca um "10R" fixo.
+    blockScaleLabel:
+      chartSeries === 'renko'
+        ? renkoScaleLabel(renkoBoxPoints, asset)
+        : chartSeries === 'range'
+        ? `Range ${rangePoints}pts`
+        : `${formatTimeframe(timeframeSec)}`,
+  };
+
+  // ── Escala do box (R) editável na engrenagem ──
+  // O operador pensa em R e o terminal mede em pontos: as duas conversões abaixo são a ponte,
+  // sempre encaixada na variação mínima do ativo (WIN: 1R = 5 pts).
+  const renkoR = renkoRFromBoxPoints(renkoBoxPoints, asset);
+  const boxScaleLabel = renkoScaleLabel(renkoBoxPoints, asset);
+  const applyRenkoR = (r: number) => {
+    const clamped = clampRenkoR(r);
+    onRenkoBoxPointsChange?.(boxPointsForR(clamped, asset));
+  };
+  const stepRenkoR = (delta: number) => applyRenkoR(renkoR + delta);
+  const cycleRenkoR = () => {
+    const ladder = renkoRChoices(asset, renkoR);
+    const i = ladder.indexOf(renkoR);
+    applyRenkoR(ladder[(i + 1) % ladder.length] ?? ladder[0]);
   };
 
   return (
@@ -3003,7 +3063,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           </button>
 
           {/* Seletor da série: Pontos (Renko) x Range, com escala editável (Tempo saiu do gráfico) */}
-          <div className="flex items-center gap-1.5 shrink-0 rounded-md border border-zinc-600/70 bg-zinc-950/60 px-1.5 py-0.5" title="Escolha o tipo de gráfico e a escala">
+          <div className="flex items-center gap-1.5 shrink-0 rounded-md border border-zinc-600/70 bg-zinc-950/60 px-1.5 py-0" title="Escolha o tipo de gráfico e a escala">
             <span className="text-[9.5px] text-zinc-400 font-sans uppercase tracking-wide hidden sm:inline">Gráfico</span>
             <select
               value={chartSeries}
@@ -3015,9 +3075,22 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               <option value="range">Range</option>
             </select>
             {chartSeries === 'renko' && (
-              <span className="text-zinc-400 text-[10.5px]" title="Escala do Renko definida no Painel do EA">
+              <button
+                type="button"
+                onClick={() => onOpenRenkoParam?.()}
+                className={`text-[10.5px] transition-colors whitespace-nowrap ${
+                  onOpenRenkoParam
+                    ? 'text-zinc-300 hover:text-emerald-300 cursor-pointer underline decoration-zinc-700 underline-offset-2 hover:decoration-emerald-400'
+                    : 'text-zinc-400'
+                }`}
+                title={
+                  onOpenRenkoParam
+                    ? 'Escala do Renko definida no painel de Parâmetros — clique para abrir o bloco do box'
+                    : 'Escala do Renko definida no Painel do EA'
+                }
+              >
                 {renkoScaleLabel(renkoBoxPoints, asset)}
-              </span>
+              </button>
             )}
             {chartSeries === 'range' && (
               <select
@@ -3035,6 +3108,30 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             )}
           </div>
           <span className="text-emerald-400 font-semibold tabular-nums">{boxes.length} blk</span>
+
+          {/* ROBÔ 2 (sombra): atalho para a janela do segundo robô de papel. Sem sombra ligada,
+              o chip é só o "+" — clicar abre a janela, onde se escolhe estratégia e escala. */}
+          {onOpenShadowWindow && (
+            <button
+              onClick={() => onOpenShadowWindow()}
+              className="flex items-center gap-1 px-1.5 h-[22px] rounded border font-sans text-[10px] cursor-pointer transition-colors whitespace-nowrap max-w-[190px] overflow-hidden text-ellipsis"
+              title={shadowDetail || 'Robô 2 (sombra) — segundo robô em papel, com estratégia e escala próprias'}
+            >
+              <span className={shadowEnabled ? 'text-zinc-200' : 'text-zinc-500'}>
+                {shadowEnabled ? shadowSummary || 'Robô 2' : '+ Sombra'}
+              </span>
+              {shadowEnabled && shadowPnl !== undefined && (
+                <span
+                  className={`font-mono tabular-nums ${
+                    shadowPnl > 0 ? 'text-emerald-400' : shadowPnl < 0 ? 'text-rose-400' : 'text-zinc-400'
+                  }`}
+                >
+                  {shadowPnl > 0 ? '+' : ''}
+                  {shadowPnl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              )}
+            </button>
+          )}
 
           {/* O chip de PnL flutuante saiu da tira: o número vivo agora mora no painel Hedge da boleta. */}
         </div>
@@ -3089,7 +3186,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         {boxWindowOpen && activeBox && (
           <div className="hidden sm:contents">
             <DadosPanelWindow
-              title="Box Renko — 10R"
+              title={`Box Renko — ${renkoScaleLabel(renkoBoxPoints, asset)}`}
               onClose={() => onBoxWindowClose?.()}
               initialPos={{ x: dadosWindowOpen ? 262 : 10, y: 10 }}
             >
@@ -3098,10 +3195,22 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 haState={activeBoxHaState}
                 isInspection={Boolean(hoveredBox)}
                 bounds={canvasSize}
+                scaleLabel={boxScaleLabel}
                 variant="window"
               />
             </DadosPanelWindow>
           </div>
+        )}
+
+        {/* Janela do Robô 2 (sombra): terceira da pilha, à direita das outras duas */}
+        {shadowWindowOpen && (
+          <DadosPanelWindow
+            title="Robô 2 (sombra)"
+            onClose={() => onShadowWindowClose?.()}
+            initialPos={{ x: dadosWindowOpen ? 514 : boxWindowOpen ? 302 : 10, y: 10 }}
+          >
+            <ShadowRobotPanel onPatchConfig={onPatchShadowConfig} />
+          </DadosPanelWindow>
         )}
 
         {/* ====================================================================== */}
@@ -3190,6 +3299,63 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         {/* ========================================================================= */}
         {chartToolsOpen && (
           <div className="absolute bottom-11 right-2 z-30 w-[252px] rounded-lg bg-zinc-900/96 backdrop-blur-md border border-zinc-700/80 p-2.5 shadow-2xl pointer-events-auto select-none space-y-2.5">
+            {/* ESCALA DO BOX (R) — a definição mora aqui. Trocar o R redesenha a história inteira
+                na escala nova (o App reprocessa os ticks guardados), então o teste é imediato. */}
+            {chartSeries === 'renko' && onRenkoBoxPointsChange && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-semibold text-zinc-400">Box Renko (tijolo)</span>
+                  <span className="text-[10px] font-mono text-zinc-500 tabular-nums">
+                    1R = {asset.tickSize} pts
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => stepRenkoR(-1)}
+                    className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 text-sm font-bold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
+                    title={`Diminuir 1R (box ${renkoR - 1}R = ${boxPointsForR(renkoR - 1, asset)} pts)`}
+                  >
+                    −
+                  </button>
+                  <button
+                    onClick={cycleRenkoR}
+                    className="flex-1 h-7 rounded bg-zinc-800 text-[11px] font-mono font-bold text-zinc-100 hover:bg-zinc-700 cursor-pointer tabular-nums"
+                    title="Clique para percorrer a escada de testes (5R → 8R → 9R → 10R → 15R → 20R → 25R → 29R → 30R)"
+                  >
+                    {renkoR}R · {renkoBoxPoints} pts
+                  </button>
+                  <button
+                    onClick={() => stepRenkoR(1)}
+                    className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 text-sm font-bold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
+                    title={`Aumentar 1R (box ${renkoR + 1}R = ${boxPointsForR(renkoR + 1, asset)} pts)`}
+                  >
+                    +
+                  </button>
+                </div>
+                {/* Escada de testes: um toque por escala, sem precisar clicar 19 vezes no +. */}
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {renkoRChoices(asset, renkoR).map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => applyRenkoR(r)}
+                      className={`px-1.5 h-[22px] rounded text-[10px] font-mono font-bold cursor-pointer border transition-colors ${
+                        r === renkoR
+                          ? 'bg-zinc-700 text-zinc-100 border-zinc-500'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white'
+                      }`}
+                      title={`Box de ${r}R = ${boxPointsForR(r, asset)} pts`}
+                    >
+                      {r}R
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[9px] leading-snug text-zinc-500 mt-1">
+                  Esta é a escala do tijolo: o gráfico redesenha na hora e robôs, boleta, auditoria e
+                  script Python passam a usar este box.
+                </p>
+              </div>
+            )}
+
             {/* Tijolos na tela (eixo X) */}
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -3320,10 +3486,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             {/* Legenda (antes no rodapé, agora dentro do painel) */}
             <div className="border-t border-zinc-800 pt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[9.5px] text-zinc-400">
               <div className="flex items-center gap-1">
-                <span className="w-2 h-3 bg-emerald-500 rounded-xs" /> <span>10R Alta</span>
+                <span className="w-2 h-3 bg-emerald-500 rounded-xs" /> <span>{boxScaleLabel} Alta</span>
               </div>
               <div className="flex items-center gap-1">
-                <span className="w-2 h-3 bg-rose-500 rounded-xs" /> <span>10R Baixa</span>
+                <span className="w-2 h-3 bg-rose-500 rounded-xs" /> <span>{boxScaleLabel} Baixa</span>
               </div>
               <div className="flex items-center gap-1">
                 <span className="w-2 h-2.5 bg-emerald-500 rounded-xs" /> <span>HA Subida</span>
@@ -3351,6 +3517,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               haState={activeBoxHaState}
               isInspection={Boolean(hoveredBox)}
               bounds={canvasSize}
+              scaleLabel={boxScaleLabel}
               variant="mobile"
               mobileOpen={isMobileDetailsOpen}
               onToggleMobile={setIsMobileDetailsOpen}

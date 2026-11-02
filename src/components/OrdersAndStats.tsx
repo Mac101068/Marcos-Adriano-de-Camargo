@@ -31,10 +31,12 @@ interface OrdersAndStatsProps {
   currentPrice: number;
   /** Ativo das ordens: valor do ponto para o PnL flutuante da tabela. */
   asset?: AssetSpec;
+  /** Escala do tijolo definida no gráfico ("10R", "8R"...) — o rótulo nunca é fixo. */
+  boxScaleLabel?: string;
   onNavigateToAudit?: () => void;
 }
 
-export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, currentPrice, asset = ASSETS[DEFAULT_ASSET_ID], onNavigateToAudit }) => {
+export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, currentPrice, asset = ASSETS[DEFAULT_ASSET_ID], boxScaleLabel = 'Renko', onNavigateToAudit }) => {
   const [chartMetric, setChartMetric] = useState<'FINANCIAL' | 'POINTS'>('FINANCIAL');
 
   // Prepara os dados cronológicos da Curva de Patrimônio (Equity Curve)
@@ -230,7 +232,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
             {stats.convergencesDetected}
           </div>
           <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-            Preço 10R + Fluxo MT5
+            Preço {boxScaleLabel} + Fluxo MT5
           </div>
         </div>
 
@@ -276,7 +278,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
                 Curva de Patrimônio Acumulado (Equity Curve)
               </h3>
               <p className="text-[11px] text-slate-400">
-                Evolução do saldo financeiro trade-a-trade disparado por convergência de fluxo 10R
+                Evolução do saldo financeiro trade-a-trade disparado por convergência de fluxo no box {boxScaleLabel}
               </p>
             </div>
           </div>
@@ -521,7 +523,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
               {orders.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-10 text-center text-slate-500">
-                    Nenhuma ordem executada ainda. O robô aguarda convergência de fluxo (Delta ≥ Limiar) com o box 10R.
+                    Nenhuma ordem executada ainda. O robô aguarda convergência de fluxo (Delta ≥ Limiar) com o box {boxScaleLabel}.
                   </td>
                 </tr>
               ) : (

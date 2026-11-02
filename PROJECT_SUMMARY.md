@@ -229,6 +229,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 - **Continuidade contábil**: os **acumulados contínuos** (`PaperCounters`) são persistidos separadamente da lista de trades (limitada a 1200 por série), para que um F5 nunca encolha win rate, fator de lucro ou expectativa.
 - **Dado real × replay sintético**: o coletor marca o dia com `real` no primeiro tick vindo do MT5 (`markRealData()` / `hasRealData()`). Essa marca é o **portão** que impede o replay automático de abertura de apagar um pregão verdadeiro já coletado.
 - **Aba Comparativo**: mesmas métricas lado a lado por série, para decidir qual escala merece ordem real.
+- **Robô 2 (sombra) (`src/services/shadowRobotService.ts`, Ciclo 10)**: segundo robô em **papel** com identidade própria — estratégia da biblioteca, **escala Renko em R (15R/20R/25R)** convertida em pontos pelo tick do ativo, motor de barras/CVD/medidor de regime **exclusivos**, livro, curva de capital e CSV próprios. Roda ao vivo, no replay e com o robô principal desligado; persistência diária em `fluxo_shadow_robot_v1` com as mesmas regras do coletor (batch no replay, dia `real` protegido, marcação a mercado). Vive na tira do gráfico (chip `+ Sombra` + janela flutuante), no Comparativo, em Parâmetros e no menu mobile. **Blindagem por estrutura**: não tem socket, não tem `setOrders`, não tem callback de dispatch — nenhum caminho para ordem real.
 - **Aba Avaliação Técnica (`TechnicalEvaluationView.tsx`)**: 100% leitura do MESMO snapshot do coletor — win rate, fator de lucro e expectativa decompostos por **motivo de saída** (quanto é liquidação forçada de fim de pregão?), **papel** (MAIN × Pirâmide), **direção** e **faixa de horário de entrada**, mais a seção **Regime do Mercado** (estatísticas por hora lidas direto dos medidores vivos via `registerRegimeMeter`/`getRegimeReading`). Nada aqui dispara ordem.
 - **CSV do coletor** com coluna **FATOR REGIME** por trade (`PaperTrade.regimeFactor`), para provar no Excel a qualidade das entradas por momento de pregão.
 - **Simulador**: visão do feed (preço, ritmo, buffer, robô), cartões dos motores e replay.
@@ -382,8 +383,11 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ├── PROJECT_SUMMARY.md                # Estado atual consolidado (este arquivo)
 ├── PROJECT_CONSOLIDATION_CHAT_SEED.md# Ponteiro/índice — o prompt real de continuidade é `CHAT_SEED.md`
 ├── CHAT_SEED.md                      # Prompt de retomada para colar inteiro em conversa nova
+├── CHAT_SEED_CICLO_10.md             # Seed do Ciclo 10: evolução recente + tarefas da próxima conversa
 ├── scripts/
 │   ├── strategyLab.ts                # Laboratório headless: variações das duas estratégias no mesmo motor do coletor
+│   ├── renkoBoxScaleAssert.ts        # Assert: escala do box × rótulo anunciado (nunca "10R" soldado)
+│   ├── chartContractAssert.ts        # Assert: migração de contrato do gráfico (contínua → vigente)
 │   └── strategy_lab_results.csv      # Veredito por expectativa/fator de lucro/consistência (5 réplicas × 10 dias)
 └── src/
     ├── main.tsx                      # Bootstrap (sem StrictMode, para não duplicar loops de tick)
@@ -394,8 +398,9 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     │   │                             #   e da taxonomia de símbolos: série contínua × contrato vigente (`assetSymbols`)
     │   ├── assetMigration.ts         # Migração do preço-base (flag `fluxo_asset_base_171500_v1`): quita/expira ordem presa no preço antigo
     │   └── assetSelectionMigration.ts # Migração da seleção de ativo (flag `fluxo_asset_selection_v1`): config, biblioteca e livro de auditoria
+    │   └── chartContractMigration.ts  # Migração do contrato do gráfico (flag `fluxo_chart_vigente_v1`): contínua gravada → vigente do pregão
     ├── types/
-    │   ├── trading.ts                # RenkoBox (regimeFactor, isStaticContext), Tick, TradeOrder (role MAIN/PYRAMID, PENDING_LIMIT), AuditEvent, AutomationConfig (`assetId`, `scriptSymbol`)
+    │   ├── trading.ts                # RenkoBox (regimeFactor, isStaticContext), Tick, TradeOrder (role MAIN/PYRAMID, PENDING_LIMIT), AuditEvent, AutomationConfig (`assetId`, `scriptSymbol`, `shadowRobot`) + `ShadowScaleR`/`ShadowRobotConfig`
     │   ├── strategy.ts               # SavedStrategy: snapshot versionado do AutomationConfig para o Estúdio
     │   ├── auth.ts                   # Usuários, licenças e transações SaaS
     │   └── drawing.ts                # Formas desenhadas no canvas (linha, retângulo, fibra, zona)
@@ -406,6 +411,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     │   ├── orderAuditService.ts      # Livro de auditoria intraday **por ativo** (`auditKeyForAsset`), métricas e CSV padrão BR
     │   ├── marketHistoryService.ts   # Pedido de histórico real: reqId, chunks, dedupe, timeout, `dispose` e suficiência de volume
     │   └── seriesCollectorService.ts # Coletor multi-série: seis motores, marcas real/replay e snapshot persistido
+    │   └── shadowRobotService.ts     # **Robô 2 (sombra)**: runner em papel com escala própria (15R/20R/25R), livro, CSV e persistência diária — sem socket/setOrders/dispatch
     ├── utils/
     │   ├── renkoCalculator.ts        # Construção dos boxes Renko + CVD/delta por box e Heikin-Ashi de fluxo (com `setAsset`)
     │   ├── barEngines.ts             # Motores de barra das séries (Renko 10R, Renko 15R, Range, Tempo…)
@@ -415,7 +421,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     │   ├── tradingGates.ts           # Portões de entrada compartilhados (janela na hora do tick, trava financeira), puros
     │   ├── tradingWindowMigration.ts # Migração da trava de horário (flag `fluxo_trading_window_08_55_17_30_v2`)
     │   ├── marketSimulator.ts        # Feed autônomo de ticks do ativo escolhido (dias equilibrados alta/baixa/lateral)
-    │   ├── paperStrategyBot.ts       # Robô sombra: espelho fiel das regras do terminal (mesma proteção da mãe)
+    │   ├── paperStrategyBot.ts       # Robô sombra: espelho fiel das regras do terminal (mesma proteção da mãe); `BotKey = SeriesKey | 'shadow'` (Ciclo 10)
     │   ├── sessionRules.ts           # Trava de fim de pregão lendo `tradingCloseAllTime` da estratégia
     │   ├── bridgeSecurity.ts         # Token da ponte (gerar, ler, rotacionar, mascarar) em fluxo_bridge_token_v1
     │   └── pythonScriptGenerator.ts  # Gera o .py da ponte: AUTH/ARM/tetos + REQUEST_HISTORY (copy_ticks_range, 10 dias, fallback M1)
@@ -424,7 +430,8 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
         │                             #   `WINZ26 vigente` com o código vivo destacado)**, selo MT5 (· ARMADO / · SEGURO), badge do EA, PDF
         ├── StrategyStudio.tsx        # Aba Estúdio: biblioteca de estratégias, editor por blocos, ativar/duplicar/exportar, "Puxar da boleta"
         ├── RenkoFlowChart.tsx        # ≈3.0k linhas de canvas: séries, 2 divisores arrastáveis, níveis de preço + VWAP, zoom multidia,
-        │                             #   linhas de ordens, desenho e **marca d'água do ativo** atrás dos tijolos (opcional, persistida)
+        │                             #   linhas de ordens, **marca d'água do ativo** atrás dos tijolos (opcional, persistida) e
+        │                             #   **chip `+ Sombra` + janela flutuante do Robô 2** na tira de status (Ciclo 10)
         ├── ChartControlSidebar.tsx   # Controles de série, escala, preset de janela e reset
         ├── DadosPanelWindow.tsx      # Janela flutuante arrastável que hospeda o painel de dados
         ├── RenkoBoxCard.tsx          # Quadro do box (fixo no canto, HUD mobile e variante `window`)
@@ -433,9 +440,11 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
         │                             #   caixa recolhível sempre visível (título âmbar, sem selo SIM/MT5)
         ├── DrawingOverlay.tsx / DrawingToolbar.tsx # Camada e barra de rabiscos técnicos sobre o gráfico
         ├── TimesAndTrades.tsx        # Fita de negócios ao vivo
-        ├── AutomationPanel.tsx       # Ajustes: blocos por estratégia, proteção da mãe, limites da ponte, perfis
+        ├── AutomationPanel.tsx       # Ajustes: blocos por estratégia, proteção da mãe, limites da ponte, perfis e **bloco do Robô 2 (sombra)**
+        ├── ShadowRobotPanel.tsx      # Painel do Robô 2: identidade da corrida, métricas e controles (liga/estratégia/15R-20R-25R/CSV/zerar), variantes `window` e `page`
         ├── SimulatorView.tsx         # Aba Simulador: feed, cartões dos motores, replay e modo OPERA
-        ├── SeriesComparisonView.tsx  # Aba Comparativo: métricas lado a lado por série
+        ├── SeriesComparisonView.tsx  # Aba Comparativo: métricas lado a lado por série + **seção e curva de capital do Robô 2 (sombra)**
+        ├── MiniSelect.tsx            # Caixa compacta de escolha (velocidade do simulador, dias do replay) com `aria-label` e título explicativo
         ├── TechnicalEvaluationView.tsx # Aba Avaliação Técnica: recortes por saída/papel/direção/horário + Regime do Mercado
         ├── EquityCurveView.tsx       # Curva de patrimônio, High-Water Mark e underwater drawdown
         ├── OrdersAndStats.tsx        # Posições fechadas e cartões de métricas
@@ -453,6 +462,39 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ## 🆕 9. Resumo dos últimos ciclos
 
 > Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+### Ciclo 10 (02/11/2026) — Robô 2 na sombra (escala própria 15R/20R/25R) e o pente-fino da escala
+
+- ✅ **`shadowRobotService.ts` — o segundo robô**: um `PaperStrategyBot('shadow')` com estratégia da
+  biblioteca, escala própria em **R** (15R/20R/25R → `boxPointsForR(scaleR, asset)`), motor de barras
+  (`RenkoFlowEngine` exclusivo), CVD, medidor de regime, livro, curva e CSV. Usa o **mesmo**
+  `evaluateBoxConvergence` do terminal. Blindagem **por estrutura**: sem socket, sem `setOrders`, sem
+  dispatch — impossível virar ordem real por refactor. Ignora `config.active` de propósito: a
+  contabilidade roda até com o robô principal OFF.
+- ✅ **Wiring no `App.tsx`**: `feedShadowEngine` chamado ao vivo (após o loop das escalas
+  alternativas), no `ingestSilent` do replay e no boot; replay faz `resetBook()` + `beginBatch()` /
+  `endBatch()` e marca a mercado por tick; efeito de `configure()` reage a
+  `shadowRobot.{enabled,strategyId,scaleR}`, ativo e biblioteca; guarda de âncora (>90 s sem tick
+  recria o engine no preço vivo). `BotKey = SeriesKey | 'shadow'` ampliou a identidade do robô de
+  papel sem quebrar os mapas do coletor.
+- ✅ **Superfície na tela**: chip `+ Sombra` na 3ª linha da tira de status (PnL colorido; hover com
+  escala em pts/ativo/trades/win rate/DD) + janela flutuante com `ShadowRobotPanel` (liga/desliga,
+  estratégia, 15R/20R/25R, CSV, zerar); seção **"Robô 2 (sombra)"** com curva de capital no
+  Comparativo; bloco dedicado em Parâmetros; botão **"Robô 2"** no menu mobile.
+- ✅ **Config defensivo**: `ShadowRobotConfig` opcional no `AutomationConfig`,
+  `DEFAULT_SHADOW_ROBOT` desligado em 20R e **`normalizeShadowRobot()`** na leitura — config velho
+  ou escala impossível cai no padrão (regra dos merge sites, sem migração uma-vez).
+- ✅ **Pente-fino da escala**: `RenkoBoxCard`, `OrdersAndStats`, `IntradayOrderAudit`, dossiê PDF,
+  `PythonScriptView` e o script gerado passaram a ler `renkoScaleLabel(config.boxPoints, asset)` —
+  nenhum "10R" soldado anunciando box de outra escala. Novo `MiniSelect` substituiu os 5 chips de
+  velocidade e a escolha de dias na tira. Migração `fluxo_chart_vigente_v1`: o gráfico abre o
+  **contrato vigente**; só reescreve `symbol` exatamente igual à contínua; vencimento manual e
+  ativos sem vigente confirmado intactos.
+- ✅/🧪 **Verificado**: espelho sombra×coletor com 271 boxes / 269 trades **idênticos** (zero
+  divergência), persistência F5 com corrida/contabilidade/box derivado sobrevivendo, sanidade do
+  `normalizeShadowRobot`, troca WIN→WDO rederivando 20R de 100 para 10 pts, asserts permanentes
+  passando, tsc + build limpos. 🧪 **Não conferido no navegador**: espelhamento visual do replay,
+  F5 com principal OFF, overflow do chip no celular.
 
 ### Ciclo 9 (01/11/2026) — refino visual: boleta em camadas, os dois códigos do ativo e marca d'água
 
@@ -597,8 +639,11 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 | `fluxo_asset_last_price_v1` | Último preço REAL visto por ativo (régua do eixo Y, partida do sintético e tolerância do sanitizador; válido por 7 dias) |
 | `fluxo_asset_base_171500_v1` | Flag da migração do preço-base (Fase 1) — apague para rodar de novo |
 | `fluxo_asset_selection_v1` | Flag da migração da seleção de ativo (Fase 2) — apague para rodar de novo |
+| `fluxo_chart_vigente_v1` | Flag da migração do contrato do gráfico (Ciclo 10): contínua gravada → vigente — apague para rodar de novo |
 | `fluxo_trading_window_08_55_17_30_v2` | Flag da migração da trava de horário |
 | `fluxo_series_collector_v1` | Snapshot do coletor multi-série (com marca `real` por dia) |
+| `fluxo_shadow_robot_v1` | **Robô 2 (sombra)**: corrida (enabled/estratégia/escala/ativo), livro, curva e marca `real` por dia |
+| `fluxo_shadow_window_open_v1` | Janela flutuante do Robô 2 aberta/fechada |
 | `fluxo_renko_hud_pos_v1` | Posição do quadro HUD/Box Renko |
 | `fluxo_chart_series_v1` / `fluxo_chart_range_pts_v1` / `fluxo_chart_time_sec_v1` | Série ativa do gráfico e escalas de Range/Tempo |
 | `fluxo_dados_window_v1` / `fluxo_renko_box_window_v1` | Posição das janelas flutuantes (Dados e Box Renko) |

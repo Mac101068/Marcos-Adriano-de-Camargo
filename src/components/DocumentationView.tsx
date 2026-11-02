@@ -474,10 +474,12 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
             </p>
             <div className="ml-7 p-2.5 bg-slate-950 rounded border border-slate-800 text-[11px] text-slate-300 space-y-1">
               <div>
-                • Para <b>Mini-Índice Contínuo</b>: certifique-se de que <code className="text-emerald-300 font-bold">WIN$N</code> ou <code className="text-emerald-300 font-bold">WIN$</code> está adicionado.
+                • Para o <b>contrato vigente</b> (o que o terminal abre): adicione o código do vencimento atual que
+                aparece no cabeçalho do ativo (ex: <code className="text-emerald-300 font-bold">WINZ26</code>).
               </div>
               <div>
-                • Para o <b>Contrato Vigente</b>: adicione o código do vencimento atual (ex: <code className="text-neutral-300">WINZ24</code>, <code className="text-neutral-300">WING25</code>, etc.).
+                • A <b>série contínua</b> <code className="text-neutral-300">WIN$N</code> só é necessária nos testes longos
+                de histórico (replay de dias e coletor); o pregão ao vivo roda no vigente.
               </div>
               <div>
                 • Pressione <kbd className="font-mono bg-slate-800 px-1 py-0.5 rounded">Ctrl + U</kbd> no MT5, busque pelo ativo e clique em <b>"Exibir"</b> se ele não estiver visível.

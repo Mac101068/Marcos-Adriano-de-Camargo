@@ -126,7 +126,7 @@ export interface AutomationConfig {
    */
   assetId?: AssetId;
   symbol: string; // Ex: WIN$N ou WINFUT
-  boxPoints: number; // 50 pontos (10R no Mini-Índice)
+  boxPoints: number; // FONTE ÚNICA da escala do tijolo (WIN: 50 pts = 10R; editável na engrenagem do gráfico)
   contracts: number; // Lote (ex: 1, 2, 5 contratos)
   minDeltaThreshold: number; // Delta mínimo para validar convergência (ex: 200 contratos)
   adaptiveThresholdEnabled: boolean; // Limiar adaptativo: ±minDeltaThreshold × fator de regime do momento
@@ -138,7 +138,7 @@ export interface AutomationConfig {
   
   // Realização Parcial e Breakeven
   enablePartialExit: boolean; // Habilitar ordem parcial
-  partialPoints: number; // Pontos para a parcial (ex: 50 pontos = 1 box 10R)
+  partialPoints: number; // Pontos para a parcial (ex: 1 box do tamanho definido em boxPoints)
   partialContracts: number; // Quantidade de contratos na parcial (ex: 1)
   moveStopToBreakevenOnPartial: boolean; // Mover Stop Loss para Breakeven ao bater a parcial
   breakevenOffsetPoints: number; // Offset além da entrada (ex: +5 pontos para pagar taxas)
@@ -195,9 +195,31 @@ export interface AutomationConfig {
   closeAllOnFlowFlip: boolean; // Zerar a entrada principal e qualquer ordem da pirâmide aberta na virada do fluxo
   noFixedStopLoss: boolean; // Elimina stops fixos: saídas 100% governadas por inversão do mercado
 
+  /**
+   * ROBÔ 2 (SOMBRA) — segundo robô rodando em PAPEL, com estratégia própria da biblioteca e
+   * escala Renko alternativa. Opcional de propósito: config antigas recebem o default do
+   * eaConfigService. NUNCA dispara ordem real — a blindagem é a ausência de wiring (o runner
+   * não recebe socket nem o setOrders do App).
+   */
+  shadowRobot?: ShadowRobotConfig;
+
   // Metadados de Persistência e Perfil do Operador
   profileName?: string; // Nome do setup selecionado (ex: "Institucional 10R")
   lastSavedTimestamp?: number; // Data/Hora em que a configuração foi salva
+}
+
+/**
+ * Escala do Robô 2 PEDIDA EM R, nunca em pontos: pontos dependem do tick do ativo
+ * (15R = 75 pts no WIN, 7,5 pts no WDO). Guardar R é o que mantém o relatório comparável
+ * depois de trocar de mercado.
+ */
+export type ShadowScaleR = 15 | 20 | 25;
+
+export interface ShadowRobotConfig {
+  enabled: boolean;
+  /** id da estratégia na biblioteca (StrategyLibraryService). null = ainda sem estratégia escolhida. */
+  strategyId: string | null;
+  scaleR: ShadowScaleR;
 }
 
 export interface ConfigPreset {

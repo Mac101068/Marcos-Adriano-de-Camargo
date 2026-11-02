@@ -1,6 +1,6 @@
 import { AutomationConfig } from '../types/trading';
 import { getBridgeToken } from './bridgeSecurity';
-import { resolveAsset } from '../assets/assetRegistry';
+import { resolveAsset, renkoScaleLabel } from '../assets/assetRegistry';
 
 export function generatePythonMT5Script(config: AutomationConfig): string {
   const isPyramidMode = config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE';
@@ -8,12 +8,15 @@ export function generatePythonMT5Script(config: AutomationConfig): string {
   // print, tick para a deduplicação do histórico e R$/ponto para os tetos em dinheiro. Sem o MT5
   // conectado o único caminho possível continuam sendo os ticks sintéticos do próprio app.
   const asset = resolveAsset(config.symbol, config.assetId);
+  // Escala do tijolo lida da mesma fonte do app (`config.boxPoints`): o script nunca pode anunciar
+  // um "10R" que não é o box que o operador definiu no gráfico.
+  const boxLabel = renkoScaleLabel(config.boxPoints || 50, asset);
   // O mesmo segredo que o app vai enviar no frame AUTH (criado e guardado no navegador)
   const bridgeToken = getBridgeToken();
 
   return `"""
 ========================================================================================
-ROBÔ QUANTITATIVO MT5: ${isPyramidMode ? 'PIRÂMIDE & CONFLUÊNCIA DE FLUXO RENKO 10R (TP 50p + SURFE)' : 'RENKO 10R COM ENTRADA NO RETESTE / PULLBACK'}
+ROBÔ QUANTITATIVO MT5: ${isPyramidMode ? `PIRÂMIDE & CONFLUÊNCIA DE FLUXO RENKO ${boxLabel} (TP 50p + SURFE)` : `RENKO ${boxLabel} COM ENTRADA NO RETESTE / PULLBACK`}
 ========================================================================================
 Ativo: ${config.symbol || asset.primarySymbol} (${asset.label})${asset.status === 'a_confirmar' ? ' — SPEC A CONFIRMAR NA CORRETORA' : ''}
 Estratégia: ${isPyramidMode ? 'PIRÂMIDE EM CADA BOX VERDE/VERMELHO (TP 50p) + ORDEM MÃE ABERTA ATÉ INVERSÃO' : 'PULLBACK / RETESTE DA ABERTURA DO BOX'}
@@ -69,7 +72,7 @@ import websockets
 # ==============================================================================
 # CONFIGURAÇÕES DA ESTRATÉGIA E MODO DE OPERAÇÃO
 # ==============================================================================
-SYMBOL = "${config.symbol || asset.primarySymbol}"                  # Código do ativo transmitido (ex: WIN$N, WDO$N)
+SYMBOL = "${config.symbol || asset.primarySymbol}"                  # Contrato em operação: o vigente do pregão (ex: WINZ26)
 ASSET_LABEL = "${asset.label}"
 ASSET_DECIMALS = ${asset.decimals}                    # Casas decimais do preço deste contrato
 ASSET_TICK_SIZE = ${asset.tickSize}                   # Variação mínima em pontos
@@ -97,7 +100,7 @@ PULLBACK_TARGET = "${config.pullbackTarget || 'BOX_OPEN'}"
 PULLBACK_CUSTOM_POINTS = ${config.pullbackCustomPoints || 25}
 PULLBACK_MAX_BOXES_WAIT = ${config.pullbackMaxBoxesWait || 2}
 
-BOX_POINTS = ${config.boxPoints || asset.renkoDefaults[Math.floor(asset.renkoDefaults.length / 2)]}                 # Tamanho do box em pontos (${asset.id})
+BOX_POINTS = ${config.boxPoints || asset.renkoDefaults[Math.floor(asset.renkoDefaults.length / 2)]}                 # Tamanho do box em pontos (${asset.id} · ${boxLabel} · 1R = ${asset.tickSize} pts)
 MIN_DELTA_THRESHOLD = ${config.minDeltaThreshold || 0}   # Delta mínimo de agressão
 REQUIRE_CVD_EXTREME = ${config.requireCvdNewExtreme ? 'True' : 'False'}
 
@@ -303,7 +306,7 @@ class RegimeMeter:
 
 
 # ==============================================================================
-# MOTOR RENKO 10R E FLUXO ATEMPORAL
+# MOTOR RENKO ${boxLabel} E FLUXO ATEMPORAL
 # ==============================================================================
 class RenkoFlowEngine:
     def __init__(self, box_points=50):
@@ -314,7 +317,7 @@ class RenkoFlowEngine:
         self.regime_meter = RegimeMeter(REGIME_LOOKBACK_BOXES)
 
     def init_engine(self, initial_price, timestamp):
-        base_price = round(initial_price / 5.0) * 5.0
+        base_price = round(initial_price / ASSET_TICK_SIZE) * ASSET_TICK_SIZE
         self.current_box = {
             "index": 0,
             "direction": "UP",
@@ -329,7 +332,7 @@ class RenkoFlowEngine:
             "delta": 0,
             "cvd_at_close": 0
         }
-        print(f"[RENKO 10R] Inicializado em {base_price:.1f} pts")
+        print(f"[RENKO ${boxLabel}] Inicializado em {base_price:.1f} pts")
 
     def process_tick(self, price, volume, aggressor, timestamp):
         tick_delta = volume if aggressor == "BUY" else (-volume if aggressor == "SELL" else 0)
@@ -431,10 +434,10 @@ class RenkoFlowEngine:
                 return "SELL", f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']} (Δ {delta} vs limiar {-limit_sell}{factor_lbl})"
 
         if direction == "UP" and delta >= limit_buy:
-            reason = f"Convergência COMPRA: Box 10R Alta + Delta +{delta} ctros (limiar {limit_buy}{factor_lbl})"
+            reason = f"Convergência COMPRA: Box ${boxLabel} Alta + Delta +{delta} ctros (limiar {limit_buy}{factor_lbl})"
             return "BUY", reason
         elif direction == "DOWN" and delta <= -limit_sell:
-            reason = f"Convergência VENDA: Box 10R Baixa + Delta {delta} ctros (limiar {-limit_sell}{factor_lbl})"
+            reason = f"Convergência VENDA: Box ${boxLabel} Baixa + Delta {delta} ctros (limiar {-limit_sell}{factor_lbl})"
             return "SELL", reason
 
         return None, ""
@@ -762,7 +765,7 @@ class MT5OrderManager:
 
     def execute_pyramid_confluence(self, signal, box):
         """
-        Executa a Estratégia de Pirâmide com Confluência 10R:
+        Executa a Estratégia de Pirâmide com Confluência ${boxLabel}:
         - Na virada de fluxo: zera todas as posições opostas e abre ORDEM MÃE (surfe sem TP fixo).
         - Em cada box consecutivo da mesma cor: abre PIRÂMIDE com TP de +50 pontos.
         - Stop Loss: Sem stops em pontos, tudo é encerrado na inversão do mercado.
@@ -1279,7 +1282,7 @@ async def mt5_stream_loop():
                 new_box, signal, reason = RENKO_ENGINE.process_tick(price, volume, aggressor, tick_msc)
 
                 if new_box:
-                    print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box 10R #{new_box['index']}: {new_box['direction']} | Abertura: {new_box['open']} -> Fech: {new_box['close']}")
+                    print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box ${boxLabel} #{new_box['index']}: {new_box['direction']} | Abertura: {new_box['open']} -> Fech: {new_box['close']}")
                     await broadcast_to_web({"type": "BOX_CLOSED", "data": new_box})
 
                     # Limpa ordens de pullback/limit antigas que expiraram

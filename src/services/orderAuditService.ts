@@ -178,7 +178,7 @@ export class OrderAuditService {
   /**
    * Exporta a auditoria completa para CSV com delimitador ';' e BOM UTF-8 (compatível 100% com Excel e Planilhas Google no Brasil)
    */
-  static exportToCSV(orders: TradeOrder[], assetSymbol: string = 'WIN$N'): void {
+  static exportToCSV(orders: TradeOrder[], assetSymbol: string = 'WIN$N', boxLabel: string = '10R'): void {
     const todayStr = new Date().toISOString().split('T')[0];
     const headers = [
       'Ticket',
@@ -215,7 +215,7 @@ export class OrderAuditService {
           ? 'MT5 Real B3'
           : o.source === 'MANUAL'
           ? 'Manual Terminal'
-          : 'Robô EA 10R Automático';
+          : `Robô EA ${boxLabel} Automático`;
 
       const statusMap: Record<string, string> = {
         OPEN: 'ABERTO',
@@ -289,7 +289,7 @@ export class OrderAuditService {
   /**
    * Gera texto sumarizado para cópia rápida na área de transferência (Diário de Bordo de Auditoria)
    */
-  static generateClipboardAuditReport(orders: TradeOrder[], assetSymbol: string = 'WIN$N'): string {
+  static generateClipboardAuditReport(orders: TradeOrder[], assetSymbol: string = 'WIN$N', boxLabel: string = '10R'): string {
     const summary = this.computeSummary(orders);
     const now = new Date();
     const dateFormatted = now.toLocaleDateString('pt-BR');
@@ -299,7 +299,7 @@ export class OrderAuditService {
       `=======================================================`,
       `📊 RELATÓRIO DE AUDITORIA INTRADAY - ${assetSymbol}`,
       `Data: ${dateFormatted} às ${timeFormatted}`,
-      `Motor: Robô Fluxo & Renko 10R Institucional B3`,
+      `Motor: Robô Fluxo & Renko ${boxLabel} B3`,
       `=======================================================`,
       ``,
       `📋 RESUMO EXECUTIVO DO PREGÃO:`,

@@ -1,7 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AutomationConfig, ConfigPreset } from '../types/trading';
-import { pointsToBRL, renkoScaleLabel, resolveAsset } from '../assets/assetRegistry';
+import {
+  chartSymbolFor,
+  pointsToBRL,
+  renkoScaleLabel,
+  renkoRFromBoxPoints,
+  boxPointsForR,
+  clampBoxPoints,
+  clampRenkoR,
+  RENKO_R_MAX,
+  RENKO_R_MIN,
+  resolveAsset,
+} from '../assets/assetRegistry';
 import { EaConfigService } from '../services/eaConfigService';
+import { ShadowRobotPanel } from './ShadowRobotPanel';
+import { SHADOW_LABEL } from '../services/shadowRobotService';
 import {
   Sliders,
   Shield,
@@ -26,7 +39,8 @@ import {
   FileText,
   SlidersHorizontal,
   DollarSign,
-  AlertCircle
+  AlertCircle,
+  Cpu
 } from 'lucide-react';
 
 interface AutomationPanelProps {
@@ -37,6 +51,18 @@ interface AutomationPanelProps {
   onStepTick: () => void;
   onInjectLargeAggression: (type: 'BUY' | 'SELL') => void;
   onResetData: () => void;
+  /**
+   * Atalho vindo de outra tela (o chip da escala no gráfico): ao receber 'renkoBox' a página
+   * rola até o campo do box e ele pisca. É um token de uso único — o painel consome e avisa.
+   */
+  focusParam?: 'renkoBox' | null;
+  onFocusParamConsumed?: () => void;
+}
+
+/** Quantos tijolos cabem em N pontos (com o box editável, a conta nunca é mais "÷ 50"). */
+function formatBoxes(points: number, boxPoints: number): string {
+  const box = boxPoints > 0 ? boxPoints : 50;
+  return String(Math.round((points / box) * 100) / 100);
 }
 
 export const AutomationPanel: React.FC<AutomationPanelProps> = ({
@@ -47,6 +73,8 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
   onStepTick,
   onInjectLargeAggression,
   onResetData,
+  focusParam,
+  onFocusParamConsumed,
 }) => {
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [customProfiles, setCustomProfiles] = useState<ConfigPreset[]>(() =>
@@ -55,6 +83,34 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
   const [showSaveProfileModal, setShowSaveProfileModal] = useState<boolean>(false);
   const [newProfileName, setNewProfileName] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Escala do box: caixa editável (o slider de 25 em 25 pts não alcançava 8R/9R/29R) ──
+  // R em curso no teclado (null = refletir a config). A derivação dos dois campos vive logo após
+  // o `asset`, porque é a variação mínima dele que encaixa o valor digitado.
+  const [boxRDraft, setBoxRDraft] = useState<string | null>(null);
+  const [boxPtsDraft, setBoxPtsDraft] = useState<string | null>(null);
+
+  // ── Atalho do gráfico (focusParam === 'renkoBox') ──
+  const renkoFieldRef = useRef<HTMLDivElement>(null);
+  const [renkoFlash, setRenkoFlash] = useState<boolean>(false);
+  useEffect(() => {
+    if (focusParam !== 'renkoBox') return;
+    // Consome ANTES de qualquer outra coisa: o token some do estado do App no mesmo commit, senão
+    // cada tick do feed re-renderizaria o painel e religaria o efeito (rolagem brigando com o usuário).
+    onFocusParamConsumed?.();
+    const el = renkoFieldRef.current;
+    if (!el) return;
+    // Um frame de espera: o painel acabou de montar com a troca de aba, o layout ainda não fechou.
+    const raf = window.requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setRenkoFlash(true);
+    });
+    const timer = window.setTimeout(() => setRenkoFlash(false), 1800);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [focusParam, onFocusParamConsumed]);
 
   const builtInPresets = EaConfigService.getBuiltInPresets();
 
@@ -173,6 +229,35 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
   const asset = resolveAsset(config.symbol, config.assetId);
   const slFinancial = pointsToBRL(config.stopLossPoints, config.contracts, asset).toFixed(2);
   const tpFinancial = pointsToBRL(config.takeProfitPoints, config.contracts, asset).toFixed(2);
+
+  // O operador digita em R (a língua dele) ou nos pontos (a unidade do motor); a config guarda
+  // sempre pontos, encaixados na variação mínima do ativo. Os dois campos se acompanham.
+  const currentRenkoR = renkoRFromBoxPoints(config.boxPoints, asset);
+  const tick = asset.tickSize > 0 ? asset.tickSize : 1;
+  const pendingR = (() => {
+    if (boxRDraft === null || boxRDraft.trim() === '') return null;
+    const n = Number(boxRDraft);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return clampRenkoR(n);
+  })();
+  const pendingPts = (() => {
+    if (boxPtsDraft === null || boxPtsDraft.trim() === '') return null;
+    const n = Number(boxPtsDraft);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return clampBoxPoints(n, asset);
+  })();
+  // enquanto um dos campos está sendo digitado, o outro mostra o resultado que vai sair
+  const targetPts = pendingPts ?? (pendingR !== null ? boxPointsForR(pendingR, asset) : null);
+  const displayedR = boxRDraft ?? String(targetPts !== null ? renkoRFromBoxPoints(targetPts, asset) : currentRenkoR);
+  const displayedPts = boxPtsDraft ?? String(targetPts !== null ? targetPts : config.boxPoints);
+  const hasPendingBox = targetPts !== null && targetPts !== config.boxPoints;
+
+  const applyRenkoBox = (fromR: boolean) => {
+    if (fromR && pendingR !== null) handleConfigChange('boxPoints', boxPointsForR(pendingR, asset));
+    if (!fromR && pendingPts !== null) handleConfigChange('boxPoints', pendingPts);
+    setBoxRDraft(null);
+    setBoxPtsDraft(null);
+  };
 
   const formattedSavedDate = config.lastSavedTimestamp
     ? new Date(config.lastSavedTimestamp).toLocaleString('pt-BR', {
@@ -903,31 +988,83 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
               />
               <span className="text-[10px] text-slate-500 mt-0.5 block">
-                Ex: WIN$N, WINFUT, WINZ24, WING25
+                O gráfico opera o vigente ({chartSymbolFor(asset)}) — vire o vencimento aqui quando ele
+                rolar. A série contínua ({asset.primarySymbol}) é código de teste de histórico, não de operação.
               </span>
             </div>
 
-            <div>
+            <div
+              ref={renkoFieldRef}
+              id="ea-param-renko-box"
+              // O brilho é só o aviso visual de "é aqui" — sai sozinho depois do piscar
+              className={`rounded-lg transition-shadow duration-300 ${
+                renkoFlash ? 'ring-2 ring-emerald-400/70 bg-emerald-400/5 -mx-2 px-2 py-1' : ''
+              }`}
+            >
               <div className="flex items-center justify-between mb-1">
-                <label className="text-slate-400">Tamanho do Renko</label>
+                <label className="text-slate-400">Tamanho do Renko (box)</label>
                 <span className="font-mono text-emerald-400 font-semibold">
                   {config.boxPoints} pts ({renkoScaleLabel(config.boxPoints, asset)})
                 </span>
               </div>
-              <input
-                type="range"
-                min="25"
-                max="150"
-                step="25"
-                value={config.boxPoints}
-                onChange={(e) => handleConfigChange('boxPoints', Number(e.target.value))}
-                className="w-full accent-emerald-500"
-              />
-              <div className="flex justify-between text-[10px] text-slate-500">
-                <span>5R (25 pts)</span>
-                <span className="font-semibold text-emerald-400">10R (50 pts - Padrão)</span>
-                <span>20R (100 pts)</span>
+              {/* CAIXA EDITÁVEL: R (a língua do operador) e pts (a unidade do motor) lado a lado.
+                  O slider antigo andava de 25 em 25 pts e era matematicamente incapaz de chegar em
+                  8R (40), 9R (45) ou 29R (145) — por isso saiu. */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="relative">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={RENKO_R_MIN}
+                    max={RENKO_R_MAX}
+                    step={1}
+                    value={displayedR}
+                    onChange={(e) => {
+                      setBoxRDraft(e.target.value);
+                      setBoxPtsDraft(null);
+                    }}
+                    onBlur={() => applyRenkoBox(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') applyRenkoBox(true);
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 pr-8 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    title={`Box em R. 1R = ${tick} pts; faixa de ${RENKO_R_MIN}R a ${RENKO_R_MAX}R.`}
+                  />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 pointer-events-none">
+                    R
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={tick}
+                    max={RENKO_R_MAX * tick}
+                    step={tick}
+                    value={displayedPts}
+                    onChange={(e) => {
+                      setBoxPtsDraft(e.target.value);
+                      setBoxRDraft(null);
+                    }}
+                    onBlur={() => applyRenkoBox(false)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') applyRenkoBox(false);
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 pr-11 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    title={`Box em pontos (o que o motor mede), encaixado em múltiplos de ${tick} pts.`}
+                  />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 pointer-events-none">
+                    pts
+                  </span>
+                </div>
               </div>
+              <span
+                className={`text-[10px] mt-1 block ${hasPendingBox ? 'text-amber-400' : 'text-slate-500'}`}
+              >
+                {hasPendingBox && targetPts !== null
+                  ? `Pendente: ${renkoScaleLabel(targetPts, asset)} = ${targetPts} pts — Enter (ou sair do campo) aplica`
+                  : `1R = ${tick} pts no ${asset.label} · faixa de ${RENKO_R_MIN}R a ${RENKO_R_MAX}R. Aplicar redesenha todo o histórico na escala nova.`}
+              </span>
             </div>
 
             <div>
@@ -957,6 +1094,19 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               />
             </div>
           </div>
+        </div>
+
+        {/* BLOCO 1.5: ROBÔ 2 (SOMBRA) — segundo robô em papel, ao lado do box Renko, para quem
+            procura a configuração no lugar de sempre. Só leitura + escolha: nada daqui dispara ordem. */}
+        <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-4 shadow-sm">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 border-b border-slate-800 pb-2">
+            <span className="flex items-center gap-1.5">
+              <Cpu className="w-4 h-4 text-emerald-400" />
+              {SHADOW_LABEL}
+            </span>
+            <span className="text-[10px] font-mono text-slate-500">PAPEL · SEM ORDEM REAL</span>
+          </div>
+          <ShadowRobotPanel onPatchConfig={(patch) => handleConfigChange('shadowRobot', patch.shadowRobot)} variant="page" />
         </div>
 
         {/* BLOCO 2: GATILHO DE DISPARO & MODO DE ENTRADA (PULLBACK OU MERCADO) */}
@@ -1300,7 +1450,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                     className="w-full accent-neutral-500"
                   />
                   <span className="text-[10px] text-slate-500">
-                    Recomendado: 50 pontos = 1 Box 10R a favor.
+                    Recomendado: {config.boxPoints} pontos = 1 Box {renkoScaleLabel(config.boxPoints, asset)} a favor.
                   </span>
                 </div>
 
@@ -1389,7 +1539,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-slate-400">Distância de Proteção (Dist. da Máxima):</span>
                     <span className="font-mono text-amber-400 font-semibold">
-                      {config.trailingDistancePoints} pts ({config.trailingDistancePoints / 50} box 10R)
+                      {config.trailingDistancePoints} pts ({formatBoxes(config.trailingDistancePoints, config.boxPoints)} box {renkoScaleLabel(config.boxPoints, asset)})
                     </span>
                   </div>
                   <input

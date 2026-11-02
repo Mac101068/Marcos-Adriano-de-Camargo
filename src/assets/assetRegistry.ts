@@ -41,7 +41,9 @@ export interface AssetSpec {
   label: string;
   /**
    * SÉRIE CONTÍNUA do MT5 ('WIN$N', 'WDO$N'): emenda vencimentos, então é o código que serve
-   * para TESTE LONGO (replay de dias, coletor de eficiência). É também o padrão do config.
+   * para TESTE LONGO (replay de dias, coletor de eficiência). Não é mais o padrão do config —
+   * o gráfico opera o vigente (ver `chartSymbolFor`); a contínua continua sendo o símbolo pedido
+   * ao MT5 nos testes de histórico.
    */
   primarySymbol: string;
   /**
@@ -212,43 +214,41 @@ export const SYMBOL_ROLE_LABEL: Record<SymbolRole, string> = {
 };
 
 /**
- * Os dois códigos que determinam o gráfico aberto, sempre lado a lado e sempre rotulados.
- * `live` é o que a ponte subscreve de verdade (o config manda, com fallback na contínua);
- * `series` e `active` são os papéis declarados no registro — `active` pode estar vazio num
- * spec ainda não homologado, e aí a tela diz "a confirmar" em vez de inventar vencimento.
- * `tokens` é a lista completa (a série, o vigente e — quando o config estiver num código que
- * não é nenhum dos dois — esse código na frente); `others` é a mesma lista sem o vivo, para
- * onde só interessa o outro caminho. Um símbolo nunca aparece duas vezes na mesma linha.
+ * CÓDIGO DO GRÁFICO — o terminal abre SEMPRE o contrato vigente (o papel que a corretora tem na
+ * conta). A série contínua não desapareceu do produto: ela é o símbolo que o pedido de histórico
+ * real usa para os testes longos, e por isso continua no registro — só não é mais escolha do
+ * operador na tela. Sem vencimento confirmado (specs 'a_confirmar'), a contínua é o único código
+ * honesto possível.
  */
-export interface SymbolToken {
-  sym: string;
-  role: SymbolRole;
+export function chartSymbolFor(asset: AssetSpec): string {
+  return asset.activeContract || asset.primarySymbol;
 }
 
+/**
+ * O que a tela diz sobre o contrato aberto. Uma função só, lida pelo cabeçalho e pelo App, para
+ * os dois lados nunca poderem discordar:
+ * - `chart`: o código do gráfico (o vigente do registro; a contínua quando não há vencimento
+ *   confirmado) — é o ÚNICO que o operador vê em condição normal;
+ * - `live`: o símbolo que a ponte subscreve de verdade (o config manda);
+ * - `offPattern` / `liveRole`: existem porque o config PODE estar noutro código — teste longo na
+ *   contínua ou vencimento digitado à mão em Parâmetros. Aí a tela mostra o `live` com o papel
+ *   dele e se marca em âmbar: o terminal nunca pode anunciar um contrato e desenhar outro.
+ */
 export function assetSymbols(asset: AssetSpec, configSymbol?: string | null): {
   live: string;
   liveRole: SymbolRole;
-  series: string;
-  active: string | null;
-  tokens: SymbolToken[];
-  others: SymbolToken[];
+  chart: string;
+  chartRole: SymbolRole;
+  offPattern: boolean;
 } {
-  const live = (configSymbol || '').trim() || asset.primarySymbol;
-  const liveUpper = live.toUpperCase();
-  const tokens: SymbolToken[] = [
-    { sym: asset.primarySymbol, role: 'serie' },
-    ...(asset.activeContract ? [{ sym: asset.activeContract, role: 'vigente' as SymbolRole }] : []),
-  ];
-  if (!tokens.some((t) => t.sym.toUpperCase() === liveUpper)) {
-    tokens.unshift({ sym: live, role: symbolRole(asset, live) });
-  }
+  const chart = chartSymbolFor(asset);
+  const live = (configSymbol || '').trim() || chart;
   return {
     live,
     liveRole: symbolRole(asset, live),
-    series: asset.primarySymbol,
-    active: asset.activeContract ?? null,
-    tokens,
-    others: tokens.filter((t) => t.sym.toUpperCase() !== liveUpper),
+    chart,
+    chartRole: symbolRole(asset, chart),
+    offPattern: live.toUpperCase() !== chart.toUpperCase(),
   };
 }
 
@@ -275,6 +275,51 @@ export function formatPrice(price: number, asset: AssetSpec): string {
 export function renkoScaleLabel(boxPoints: number, asset: AssetSpec): string {
   const tick = asset.tickSize > 0 ? asset.tickSize : 1;
   return `${Math.max(1, Math.round(boxPoints / tick))}R`;
+}
+
+/** Leitura numérica do rótulo acima: quantos "R" tem um box de N pontos (WIN: 50 pts = 10). */
+export function renkoRFromBoxPoints(boxPoints: number, asset: AssetSpec): number {
+  const tick = asset.tickSize > 0 ? asset.tickSize : 1;
+  return Math.max(1, Math.round(boxPoints / tick));
+}
+
+/**
+ * R → pontos, já encaixado na variação mínima do ativo. O operador pensa em "R" (8R, 9R, 29R),
+ * mas tudo no terminal é medido em PONTOS: esta é a única conversão de volta para a escala.
+ */
+export function boxPointsForR(r: number, asset: AssetSpec): number {
+  const tick = asset.tickSize > 0 ? asset.tickSize : 1;
+  return snapToTick(Math.max(1, Math.round(r)) * tick, asset);
+}
+
+/** Piso e teto da escala de Renko em R — 1R (um tick) até 60R, faixa de teste realista. */
+export const RENKO_R_MIN = 1;
+export const RENKO_R_MAX = 60;
+
+/** R digitado/percorrido → R aplicável dentro da faixa (a caixa editável e o gráfico usam o mesmo corte). */
+export function clampRenkoR(r: number): number {
+  return Math.min(RENKO_R_MAX, Math.max(RENKO_R_MIN, Math.round(r)));
+}
+
+/**
+ * Pontos digitados → pontos aplicáveis: presos na faixa de teste e encaixados na variação
+ * mínima, porque um tijolo que não fecha no tick do ativo mentira na contagem do motor.
+ */
+export function clampBoxPoints(points: number, asset: AssetSpec): number {
+  const tick = asset.tickSize > 0 ? asset.tickSize : 1;
+  return snapToTick(Math.min(RENKO_R_MAX * tick, Math.max(tick, points)), asset);
+}
+
+/**
+ * Escada de testes do box: os R que merecem chip de clique direto no gráfico, somados os
+ * sugeridos pelo próprio ativo (`renkoDefaults`) e a medida atual — assim o controle nunca
+ * "perde" um valor que já está em uso só porque ele não está na escada padrão.
+ */
+export function renkoRChoices(asset: AssetSpec, currentR: number): number[] {
+  const ladder = [5, 8, 9, 10, 15, 20, 25, 29, 30];
+  const fromDefaults = asset.renkoDefaults.map((pts) => renkoRFromBoxPoints(pts, asset));
+  const set = new Set([...ladder, ...fromDefaults, currentR].filter((r) => r >= RENKO_R_MIN && r <= RENKO_R_MAX));
+  return [...set].sort((a, b) => a - b);
 }
 
 /**

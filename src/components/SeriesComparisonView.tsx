@@ -11,11 +11,14 @@ import {
 } from 'recharts';
 import { Download, RotateCcw, Database, History } from 'lucide-react';
 import { seriesCollectorService, SERIES_LABEL } from '../services/seriesCollectorService';
+import { shadowRobotService, SHADOW_LABEL } from '../services/shadowRobotService';
+import { ShadowRobotPanel } from './ShadowRobotPanel';
+import type { AutomationConfig } from '../types/trading';
 import { SeriesKey } from '../utils/paperStrategyBot';
 
 /**
  * Comparativo de Eficiência — dois experimentos lado a lado:
- * 1. Séries de gráfico: Pontos (Renko 10R) x Range x Tempo
+ * 1. Séries de gráfico: Pontos (Renko, escala do box da config) x Range x Tempo
  * 2. Escalas Renko: 15R x 20R x 25R (motores extras só para medição)
  * Todos os robôs sombra rodam a MESMA estratégia/config do EA sobre o mesmo mercado.
  * Nenhum número aqui mexe nas ordens reais — é contabilidade paralela.
@@ -24,7 +27,7 @@ import { SeriesKey } from '../utils/paperStrategyBot';
 const GROUPS: { title: string; subtitle: string; keys: SeriesKey[] }[] = [
   {
     title: 'Séries de gráfico',
-    subtitle: 'Pontos (Renko 10R) x Range x Tempo — mesma estratégia, três leituras do mercado',
+    subtitle: 'Pontos (Renko) x Range x Tempo — mesma estratégia, três leituras do mercado',
     keys: ['renko', 'range', 'tempo'],
   },
   {
@@ -202,13 +205,73 @@ const GroupChart: React.FC<{ keys: SeriesKey[]; data: Record<string, number | un
   );
 };
 
+/**
+ * Curva de capital do ROBÔ 2 — uma linha só, no mesmo formato dos gráficos de grupo, mas
+ * alimentada pelo service da sombra (o livro dela não passa pelo coletor).
+ */
+const ShadowEquityChart: React.FC<{ curve: { t: number; v: number }[] }> = ({ curve }) => {
+  const multiDay = curve.length > 1 && curve[curve.length - 1].t - curve[0].t > 30 * 3600 * 1000;
+  return (
+    <div className="h-44 sm:h-48 w-full">
+      {curve.length === 0 ? (
+        <div className="h-full flex items-center justify-center text-[11px] text-slate-500 px-4 text-center">
+          Aguardando os primeiros trades do Robô 2...
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={curve} margin={{ top: 6, right: 10, bottom: 2, left: -8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis
+              dataKey="t"
+              type="number"
+              domain={['dataMin', 'dataMax']}
+              tickFormatter={(t: number) =>
+                multiDay
+                  ? new Date(t).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+                  : new Date(t).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+              }
+              stroke="#64748b"
+              fontSize={10}
+              tickCount={6}
+            />
+            <YAxis stroke="#64748b" fontSize={10} tickFormatter={(v: number) => `R$${v.toFixed(0)}`} width={60} />
+            <Tooltip
+              contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+              labelFormatter={(t) =>
+                multiDay
+                  ? new Date(Number(t)).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                  : new Date(Number(t)).toLocaleTimeString('pt-BR')
+              }
+              formatter={(value) => [fmtR$(Number(value)), SHADOW_LABEL]}
+            />
+            <Line
+              type="stepAfter"
+              dataKey="v"
+              stroke="#a78bfa"
+              strokeWidth={2}
+              dot={false}
+              isAnimationActive={false}
+              name="shadow"
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+};
+
 export const SeriesComparisonView: React.FC<{
   onReplayHistory?: (days: number) => void;
   isReplaying?: boolean;
-}> = ({ onReplayHistory, isReplaying }) => {
+  /** Escolhas do Robô 2 (estratégia/escala/ligar) viram patch do config — quem persiste é o App. */
+  onPatchConfig?: (patch: Partial<AutomationConfig>) => void;
+}> = ({ onReplayHistory, isReplaying, onPatchConfig }) => {
   // Re-render a cada barra fechada ingerida pelo coletor
   useSyncExternalStore(seriesCollectorService.subscribe, seriesCollectorService.getVersion);
   const snap = seriesCollectorService.getSnapshot();
+  // Robô 2 (sombra): corrida independente, lida direto do service dela (não do coletor)
+  useSyncExternalStore(shadowRobotService.subscribe, shadowRobotService.getVersion);
+  const shadowSnap = shadowRobotService.getSnapshot();
 
   // Uma única linha do tempo com todas as séries (cada gráfico filtra suas linhas)
   const chartData = useMemo(() => {
@@ -310,6 +373,27 @@ export const SeriesComparisonView: React.FC<{
             <GroupChart keys={group.keys} data={chartData} />
           </section>
         ))}
+
+        {/* ROBÔ 2 (SOMBRA): não é uma série do coletor — é outra estratégia, em outra escala,
+            com motor e livro próprios. Por isso o card é mais estreito e tem os controles dele. */}
+        <section>
+          <div className="mb-2">
+            <h3 className="text-xs sm:text-sm font-bold text-slate-100 uppercase tracking-wide">{SHADOW_LABEL}</h3>
+            <p className="text-[10px] sm:text-[11px] text-slate-500">
+              {shadowSnap.run.enabled
+                ? `Estratégia "${shadowSnap.run.strategyName || '—'}" na escala ${shadowSnap.run.scaleR}R (${shadowSnap.run.boxPoints} pts) · ${shadowSnap.run.assetId} — independente do robô principal`
+                : 'Segundo robô em papel, com estratégia da biblioteca e escala própria. Ligue no painel abaixo para ele começar a registrar.'}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+            <div className="rounded-lg border border-violet-500/40 bg-slate-900/50 px-3 py-2.5 flex flex-col max-h-[420px] overflow-hidden">
+              <ShadowRobotPanel onPatchConfig={onPatchConfig} variant="window" />
+            </div>
+            <div className="md:col-span-2 rounded-lg border border-slate-800 bg-slate-900/40 p-2">
+              <ShadowEquityChart curve={shadowSnap.equityCurve} />
+            </div>
+          </div>
+        </section>
       </div>
 
       {/* Rodapé explicativo */}
