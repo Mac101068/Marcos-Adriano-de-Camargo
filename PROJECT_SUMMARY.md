@@ -727,7 +727,19 @@ Favor ler a documentação, alinhar o contexto e me avisar quando estiver pronto
 ```
 
 ### Pendências conhecidas (para não redescobrir)
-- 📍 **Onde estamos (02/11/2026, fim do Ciclo 12)**: terminal confiável — acorda **parado e vazio**
+- 📍 **Onde estamos (02/11/2026, fim do Ciclo 13)**: refino de leitura pedido de dentro da tela —
+  (1) a **régua de tempo do eixo X** mora agora **no divisor Renko ↔ Heikin-Ashi** (faixa de 24 px,
+  clicável e arrastável — `TIME_AXIS_BAND_H`), (2) os **três ZERAR** da boleta estão **agrupados**
+  abaixo de COMPRA/VENDA (ZERAR C | ZERAR V lado a lado + ZERAR TUDO em `col-span-2`), (3) a
+  **Sombra acorda zerada** como a boleta — `shadowRobotService.resetBook()` no boot effect e no
+  clique do replay (as somas dos replays anteriores não sobrevivem mais ao F5; escolhas — ligada,
+  estratégia, escala, ativo — continuam persistindo), (4) **▲ C / ▼ V padronizados** nos dois
+  navegadores — a palavra "MÃE" desapareceu do canvas; o papel continua legível pelos prefixos
+  P1/P2/RET. Verificado com tsc + build 2,36 s + bancada headless `_tmp_shadowZeroAssert.ts`
+  (58·58·58·0·escolha mantida). **Voltar por**: (1) 🧪 conferir em tela os quatro pontos acima;
+  (2) opcional: exceção para manter `hadRealData` no F5; (3) opcional: padronizar "mãe" também na
+  boleta / auditoria / Python.
+- 📍 **Posição anterior (02/11/2026, fim do Ciclo 12 — superada pelo ponto acima, mantida como histórico)**: terminal confiável — acorda **parado e vazio**
   (auto-runners do boot deletados; On do Robô liga o feed SIM), limiar de sinal é o **P60 calculado
   do pregão**, o relógio do pregão só bloqueia **ordens reais e replay** (simulador ao vivo roda
   24h — `setEnforceTimeGates`), o balão ⚠ explica qualquer inação sem piscar, os dois navegadores

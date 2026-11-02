@@ -3,11 +3,13 @@
 Você está assumindo o projeto **Fluxo & Renko 10R - MT5 Quant Terminal**: aplicação web de trading
 quantitativo que hoje roda no Mini-Índice B3 (`WIN$`) e está preparada para multi-mercado (WDO e BTC
 já têm linha no registro, mas seguem **`a_confirmar`**), enviando ordens automatizadas ao MetaTrader 5
-por uma ponte WebSocket em Python. **Fase atual: Ciclo 12 consolidado — o terminal agora acorda
+por uma ponte WebSocket em Python. **Fase atual: Ciclo 13 consolidado — o terminal acorda
 parado e vazio (regra do operador), o limiar de sinal é calculado do próprio pregão (P60), o relógio
 do pregão só bloqueia ordens reais e replay (simulador ao vivo roda 24h), o balão ⚠ explica qualquer
-inação sem piscar, os navegadores interno/externo se sincronizam por um JSON e estratégia removida
-limpa as referências órfãs dos dois robôs** (a ponte ainda nunca rodou contra a corretora de verdade
+inação sem piscar, os navegadores interno/externo se sincronizam por um JSON, estratégia removida
+limpa as referências órfãs dos dois robôs, a Sombra (Robô 2) acorda ZERADA como a boleta, a régua X
+mora no divisor Renko ↔ Heikin-Ashi, os três ZERAR estão agrupados e os sinais são sempre ▲ C / ▼ V**
+(a ponte ainda nunca rodou contra a corretora de verdade
 — validação na demo XP segue o próximo marco).
 
 ## 0. QUEM É O USUÁRIO E COMO TRABALHAR
@@ -33,10 +35,13 @@ limpa as referências órfãs dos dois robôs** (a ponte ainda nunca rodou contr
   9. **Marca d'água é contexto, não dado** (Ciclo 9): desenhada depois do fundo e antes da grade/tijolos,
      dentro do `clip()` do painel de preço (não pode sangrar para a régua nem para o vão da boleta), e é
      anexo opcional do operador. Dados do gráfico continuam tendo legenda própria.
-  10. **O terminal acorda PARADO e VAZIO** (Ciclo 12): nada pode se auto-iniciar no mount — nem feed
-     sintético, nem replay, nem "semeadura" de ticks no gráfico. Mercado só anda por comando manual
-     (▶ SIM, seta do replay, conectar MT5, bot demo) — e **ligar o Robô (On) conta como comando e liga
-     o feed SIM**. Ao mexer em effects de mount, auditar se algo dispara sozinho.
+  10. **O terminal acorda PARADO e VAZIO** (Ciclo 12, estendido à Sombra no Ciclo 13): nada pode se
+     auto-iniciar no mount — nem feed sintético, nem replay, nem "semeadura" de ticks no gráfico.
+     Mercado só anda por comando manual (▶ SIM, seta do replay, conectar MT5, bot demo) — e **ligar o
+     Robô (On) conta como comando e liga o feed SIM**. **A Sombra (Robô 2) obedece a mesma regra**:
+     `shadowRobotService.resetBook()` roda no boot effect e junto com o clique do replay, então a
+     contabilidade acorda zerada como a boleta (só as ESCOLHAS — ligada, estratégia, escala, ativo —
+     persistem entre sessões). Ao mexer em effects de mount, auditar se algo dispara sozinho.
   11. **Relógio do pregão só bloqueia ordens REAIS e replay** (Ciclo 12): janela 08:55–17:30 e zeragem
      17:30 valem para MT5 conectado e para a sessão simulada do replay; o **simulador ao vivo roda 24h**
      sem portão de horário. A chave única é `setEnforceTimeGates` (`sessionRules.ts`), virada pelo App
@@ -51,6 +56,13 @@ limpa as referências órfãs dos dois robôs** (a ponte ainda nunca rodou contr
      só em jejum ≥5 dos últimos 6 boxes). Estratégia removida limpa referências órfãs (Robô 1 por nome,
      Robô 2 por id) e o modal de exclusão diz quem está rodando aquilo. Sincronismo entre navegadores é
      o pacote `fluxo_terminal_sync` do Estúdio (upsert por id, config aplicado com `active: false`).
+  14. **Sinal é direção, papel é etiqueta** (Ciclo 13): no canvas, compra/venda é sempre **▲ C / ▼ V** —
+     "mãe" foi abolida do gráfico (poluía a tela quando a Pirâmide despachava ordem-mãe) e o papel
+     continua legível pelos prefixos **P1/P2/RET** que só aparecem em pirâmide/reteste. Log interno
+     (App, auditoria, script Python) mantém "ORDEM MÃE" porque ali é semântica de gestão. A régua de
+     tempo mora na faixa `TIME_AXIS_BAND_H = 24` entre o painel de preço e o painel de fluxo
+     (clique/arraste na própria faixa move o eixo X); os três ZERAR ficam agrupados abaixo dos botões
+     COMPRA/VENDA — nunca depois do livro de hedge.
 
 ## 1. PILARES DA ESTRATÉGIA
 1. **Renko 10R = 50 pontos** por box; reversão exige 2 boxes (100 pts); corpo 100% sólido
@@ -282,7 +294,24 @@ npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migraç
 ```
 
 ## 6. PENDÊNCIAS ABERTAS
-- 📍 **PONTO DE RETOMADA (fim do Ciclo 12, 02/11/2026)**: **terminal confiável por construção** —
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 13, 02/11/2026)**: **refino de leitura** — quatro ajustes
+  pedidos de dentro da tela, sem tocar matemática de sinal nem portões. (1) régua de tempo do
+  eixo X mora **no divisor Renko ↔ Heikin-Ashi** (faixa de 24 px clicável/arrastável —
+  `TIME_AXIS_BAND_H = 24`, `TIME_AXIS_BASELINE = 17`); (2) os **três ZERAR** da boleta estão
+  **agrupados** abaixo de COMPRA/VENDA (ZERAR C | ZERAR V lado a lado + ZERAR TUDO em
+  `col-span-2`); (3) a **Sombra acorda zerada** como a boleta — `shadowRobotService.resetBook()`
+  no boot effect e junto com o clique do replay (antes só corria dentro do `await` do
+  `resolveReplayTicks`, deixando as somas do replay anterior à mostra; e o F5 restaurava o
+  livro do dia inteiro via `ensureLoaded`); escolhas continuam persistindo; (4) **▲ C / ▼ V
+  padronizados** — a palavra "MÃE" desapareceu do canvas (some do rótulo sobre o tijolo e da
+  placa da linha de entrada); papel legível pelos prefixos P1/P2/RET. Verificado com tsc limpo,
+  `npx vite build` OK 2,36 s e bancada headless `_tmp_shadowZeroAssert.ts` (**58·58·58·0·escolha
+  mantida**). **Voltar por**: (1) 🧪 conferir no navegador — F5 da sombra após um replay deve
+  mostrar 0 trades com estratégia/escala preservadas; régua X clicável; três ZERAR agrupados;
+  ▲C/▼V nos dois navegadores com a mesma estratégia ativa; (2) opcional: exceção para manter
+  `hadRealData` no F5 se um dia o operador pedir; (3) opcional: padronizar "mãe" também na
+  boleta, auditoria intraday e script Python; (4) todas as pendências herdadas do Ciclo 12.
+- 📍 **PONTO DE RETOMADA anterior (fim do Ciclo 12, 02/11/2026 — superado pelo ponto acima, mantido como histórico)**: **terminal confiável por construção** —
   acorda parado e vazio (boot de 350 ticks e replay automático deletados; On do Robô liga o feed SIM),
   limiar **P60 calculado do pregão** (`getPercentileLimit` em `sessionRegime.ts`, ligado no
   `convergenceEvaluator.ts` com `SESSION_PERCENTILE=0.6`), **interruptor de regime** `setEnforceTimeGates`

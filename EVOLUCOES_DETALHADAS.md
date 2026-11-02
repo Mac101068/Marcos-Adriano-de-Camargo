@@ -8,6 +8,73 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 13 — 02/11/2026 · Refino de leitura: régua X no divisor, ZERAR agrupado, sombra acorda zerada e ▲C/▼V em todos os navegadores
+
+Ciclo de **conferência visual e semântica** pedido de dentro da tela, não por bug novo — cada ponto
+nasceu de um incômodo do operador ao usar o terminal no dia-a-dia. Nada mexe na matemática de sinal,
+na ponte ou nos portões; só rearranja onde a informação aparece e o que a Sombra guarda entre sessões.
+
+### 13.1 ✅ Régua de tempo do eixo X no divisor Renko ↔ Heikin-Ashi (`RenkoFlowChart.tsx`)
+
+A escala de horários vivia no rodapé do canvas (em `height - 14`) e ficava longe dos dois painéis.
+Agora mora numa **faixa de 24 px entre o fim do painel de preço e o começo do painel de fluxo** — o
+operador lê o horário logo acima do candle Heikin-Ashi correspondente. Constantes novas:
+`TIME_AXIS_BAND_H = 24`, `TIME_AXIS_BASELINE = 17` (y do texto, medido a partir do divisor). O layout
+empurrou `flowTopMargin` de `pricePaneHeight + 12` para `pricePaneHeight + TIME_AXIS_BAND_H + 4`, e
+o `getFlowDividerLayout` passou a descontar a faixa no cálculo do `usableFlowH`. Tolerância dos
+divisores apertada de 8 → 5 px para a faixa nova continuar clicável (arrastar o X com o mouse ainda
+funciona); `handleMouseDown`, `handleDoubleClick` e `getCursorClass` deixaram de tratar
+`canvasH - 24` e agora usam a banda da própria régua. Rótulo `FLUXO` reancorado em
+`pricePaneHeight + TIME_AXIS_BAND_H + 4`.
+
+### 13.2 ✅ ZERAR TUDO agrupado com ZERAR C / ZERAR V (`BoletaTicket.tsx`)
+
+O botão ZERAR TUDO estava no fim da boleta, depois do livro de hedge, fora do contexto dos dois
+botões por lado. Reorganizado em **um só bloco de três botões** logo abaixo da linha COMPRA/VENDA:
+ZERAR C e ZERAR V lado a lado (`grid-cols-2`), ZERAR TUDO ocupando as duas colunas embaixo
+(`col-span-2`). Bordas condicionais ajustadas: quando não há hedge nem botões por lado visíveis, o
+bloco inteiro ganha `pt-1.5 border-t` para não encostar no seletor de lado; quando o livro de hedge
+vem depois, ele continua sendo a última camada — ações primeiro, referência depois.
+
+### 13.3 ✅ Sombra (Robô 2) acorda zerada como a boleta (`App.tsx`)
+
+Bug relatado: *"ele soma os vários replays feitos"*. Causa raiz em duas camadas: (a) `resetBook` só
+era chamado **depois** do `await resolveReplayTicks` — no intervalo/aborto, o painel ainda mostrava
+as somas do replay anterior; (b) no F5, `ensureLoaded` do service hidrata o **livro do dia** do
+localStorage (`fluxo_shadow_robot_v1` persiste `data.book`), então a sombra acordava com todas as
+trades acumuladas desde a meia-noite enquanto a boleta acordava vazia. Correções: (i) `resetBook()`
+no **boot effect** do App — sombra acorda zerada, igual à boleta; (ii) `resetBook()` **junto com o
+clique** do replay (ao lado do `setOrders([])` da boleta), não mais só dentro do bloco assíncrono;
+(iii) dentro do `await` só ficam `beginBatch/endBatch` — o livro já foi zerado no clique. Escolhas
+continuam persistindo entre sessões (ligada, estratégia, escala, ativo); só a **contabilidade**
+acorda zerada. Se um dia o operador quiser manter dias com `hadRealData` (ticks reais da corretora)
+no F5, a flag já mora no storage e dá para tratar como exceção. **Decisão registrada em memória de
+projeto** (`ee56b070`): "terminal acordando parado e vazio" agora vale também para a Sombra.
+
+### 13.4 ✅ Sinais ▲ C / ▼ V padronizados em todos os navegadores (`RenkoFlowChart.tsx`)
+
+Dessincronismo visual relatado: no navegador que rodava só convergência, os sinais apareciam como
+`▲ C` / `▼ V`; no navegador com Pirâmide & Confluência despachando ordem-mãe, aparecia `▲ MÃE` /
+`▼ MÃE` sobre o tijolo e `MÃE C 1ct` na placa da linha de entrada. Não era bug entre navegadores —
+era a MESMA codificação respondendo a estados diferentes (a etiqueta só mudava quando
+`b.orderDispatched`). Como "mãe" é papel, não sinal, e poluía a tela, o gráfico padroniza: **a
+palavra "MÃE" desaparece do canvas**. O `if (shouldDrawBuy)` e o `if (shouldDrawSell)` agora
+escrevem sempre `▲ C` / `▼ V`, e a `side` da placa da linha passou de `'C'/'V'` para `'▲ C'/'▼ V'` —
+ordem-mãe e ordem comum ficam idênticas na etiqueta, e o papel continua legível pelos prefixos
+**P1/P2/RET** que só aparecem em pirâmide e reteste Limit. Log interno (App, auditoria, script
+Python) mantém "ORDEM MÃE" — ali é semântica de gestão, não leitura visual.
+
+### Verificação do Ciclo 13
+
+`npx tsc --noEmit` limpo nas quatro entregas · `npx vite build` OK (2,36 s na última) · bancada
+headless `_tmp_shadowZeroAssert.ts` (`npx tsx`) provou **REPLAY 1: 58 · REPLAY 2: 58 · pós-F5
+(restauração do storage): 58 · pós-boot (resetBook no mount): 0 · escolha mantida = true**, com as
+duas correções juntas (bot + clique). Conferência pendente no navegador: F5 da sombra após um replay
+— o painel deve mostrar 0 trades e manter estratégia/escala escolhidas; a régua de tempo clicável
+no divisor; os três ZERAR agrupados; ▲C/▼V nos dois navegadores.
+
+---
+
 ## 📆 Ciclo 12 — 02/11/2026 · O terminal acorda parado, o limiar nasce do pregão e o relógio só vale para ordens reais
 
 Ciclo da **confiança do operador na tela**: vários episódios de "robô ligado e nada acontece" sem
@@ -1253,7 +1320,22 @@ localStorage, paywall/admin maquette em localStorage e simulador B3 autônomo.
 
 ## 🧭 Pendências e próximos passos conhecidos
 
-- 📍 **PONTO DE RETOMADA — 02/11/2026 (fim do Ciclo 12, terminal confiável)**: o app **acorda parado
+- 📍 **PONTO DE RETOMADA — 02/11/2026 (fim do Ciclo 13, refino de leitura)**: quatro ajustes pedidos
+  de dentro da tela, sem tocar matemática de sinal nem portões. (1) régua de tempo do eixo X agora
+  mora **no divisor Renko ↔ Heikin-Ashi** (`TIME_AXIS_BAND_H = 24`, clicável, arrastável); (2) os
+  três ZERAR da boleta estão **agrupados** abaixo de COMPRA/VENDA (ZERAR C | ZERAR V lado a lado +
+  ZERAR TUDO em `col-span-2`); (3) a **Sombra acorda zerada** como a boleta — `shadowRobotService.resetBook()`
+  no boot effect e no clique do replay (antes só rodava dentro do `await`, deixando as somas dos
+  replays anteriores à mostra; e o F5 hidrata o livro do dia inteiro), escolhas continuam
+  persistindo; (4) **▲ C / ▼ V padronizados** — a palavra "MÃE" saiu do canvas (some do rótulo sobre
+  o tijolo e da placa da linha de entrada), o papel continua legível pelos prefixos P1/P2/RET.
+  Verificado com tsc + build (2,36 s) + bancada headless (`_tmp_shadowZeroAssert.ts`: 58·58·58·0·
+  escolha mantida). **Voltar por**: (1) 🧪 conferir no navegador — F5 da sombra após um replay deve
+  mostrar 0 trades com estratégia/escala preservadas; régua X clicável; três ZERAR agrupados; ▲C/▼V
+  nos dois navegadores (interno ↔ externo) com a mesma estratégia ativa; (2) opcional: exceção para
+  manter `hadRealData` no F5 se um dia o operador pedir; (3) opcional: padronizar "mãe" na boleta,
+  auditoria intraday e script Python se a decisão se estender para fora do gráfico.
+- 📍 **PONTO DE RETOMADA anterior — 02/11/2026 (fim do Ciclo 12, terminal confiável)**: o app **acorda parado
   e vazio** (boot de 350 ticks e replay automático deletados; On do Robô liga o feed SIM), o limiar
   de sinal é o **P60 calculado do próprio pregão** (`getPercentileLimit`), o relógio do pregão só
   bloqueia **ordens reais e replay** (interruptor `setEnforceTimeGates`; simulador ao vivo roda 24h),

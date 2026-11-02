@@ -850,6 +850,11 @@ export default function App() {
       const sEng = ensureShadowEngine();
       if (sEng) sEng.initialize(reference);
     }
+    // A SOMBRA ACORDA ZERADA como a boleta: o livro do dia anterior (replays + simulação) não
+    // reabre no F5 — quem persiste entre sessões são só as ESCOLHAS (ligada, estratégia, escala,
+    // ativo). Sem isto o Robô 2 acordava somando os trades de todas as corridas de hoje enquanto
+    // a boleta e o gráfico acordavam vazios (regra do operador, Ciclo 12).
+    shadowRobotService.resetBook();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2680,6 +2685,11 @@ export default function App() {
       OrderAuditService.clearIntradayAudit(asset.id);
       setOrders([]);
     }
+    // A sombra zera JUNTO com a boleta, no clique — não só quando o primeiro tick da corrida
+    // chega. Antes o reset vivia depois da geração/pedido dos ticks: com MT5 conectado (histórico
+    // real, que demora segundos) ou corrida abortada sem ticks, o painel do Robô 2 ficava
+    // exibindo a soma das corridas anteriores enquanto a tela já tinha "zerado para o replay".
+    shadowRobotService.resetBook();
     // Modo "opera": o replay dispara estratégia/ordens/PnL na tela. Só vale em simulação —
     // com a ponte do MT5 ativa o replay alimenta apenas o coletor, para jamais enviar ordem real
     const operate = replayOperates && zeroedOrders;
@@ -2745,9 +2755,9 @@ export default function App() {
       }
       seriesCollectorService.reset();
       seriesCollectorService.beginBatch();
-      // A sombra reinicia o próprio livro junto: uma corrida de replay é UMA corrida por robô
-      // (resetBook preserva a escolha de estratégia/escala — só zera a contabilidade)
-      shadowRobotService.resetBook();
+      // O livro da sombra já foi zerado no clique (junto com a boleta, em handleReplayHistory);
+      // aqui só entra no modo lote — resetBook de novo jogaria fora os trades deste trecho inicial
+      // nos segundos entre o clique e o começo da reprodução.
       shadowRobotService.beginBatch();
       allTicksRef.current = [];
 

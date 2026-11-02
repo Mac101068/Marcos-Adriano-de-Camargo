@@ -511,27 +511,38 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           <span>VENDA</span>
         </button>
       </div>
-      {/* Zerar por lado, juntos logo abaixo de COMPRA/VENDA (padrão de boleta: ações primeiro,
-          livro depois). Cada botão fecha só o seu lado do hedge. */}
-      {onClosePositionsSide && (
-        <div className={`px-2 pb-1.5 grid grid-cols-2 gap-1.5 ${hedgeBook ? '' : 'pt-1.5 border-t border-zinc-800/80'}`}>
+      {/* ZERAR TUDO em cima dos ZERAR por lado, sem borda entre eles: os três zerar formam
+          um bloco só, logo abaixo de COMPRA/VENDA. Fecha os dois lados de uma vez. */}
+      {onClosePositions && (
+        <div className={`px-2 pb-1.5 grid grid-cols-2 gap-1.5 ${hedgeBook || onClosePositionsSide ? '' : 'pt-1.5 border-t border-zinc-800/80'}`}>
+          <div className={`grid grid-cols-2 gap-1.5 col-span-2 ${onClosePositionsSide ? '' : 'hidden'}`}>
+            <button
+              onClick={() => onClosePositionsSide?.('BUY')}
+              disabled={!hedgeBook || hedgeBook.buy.filled === 0}
+              className="h-[24px] rounded text-[9.5px] font-bold bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-35 disabled:hover:bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1"
+              title="Zerar só as COMPRAS — as VENDAS do hedge continuam abertas"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span>ZERAR C{hedgeBook ? ` (${hedgeBook.buy.contracts}ct)` : ''}</span>
+            </button>
+            <button
+              onClick={() => onClosePositionsSide?.('SELL')}
+              disabled={!hedgeBook || hedgeBook.sell.filled === 0}
+              className="h-[24px] rounded text-[9.5px] font-bold bg-rose-500/15 hover:bg-rose-500/25 disabled:opacity-35 disabled:hover:bg-rose-500/15 text-rose-300 border border-rose-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1"
+              title="Zerar só as VENDAS — as COMPRAS do hedge continuam abertas"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
+              <span>ZERAR V{hedgeBook ? ` (${hedgeBook.sell.contracts}ct)` : ''}</span>
+            </button>
+          </div>
           <button
-            onClick={() => onClosePositionsSide('BUY')}
-            disabled={!hedgeBook || hedgeBook.buy.filled === 0}
-            className="h-[24px] rounded text-[9.5px] font-bold bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-35 disabled:hover:bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1"
-            title="Zerar só as COMPRAS — as VENDAS do hedge continuam abertas"
+            onClick={onClosePositions}
+            disabled={openOrders.length === 0}
+            className="col-span-2 h-[26px] rounded text-[10px] font-bold bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-35 disabled:hover:bg-amber-500/15 text-amber-300 border border-amber-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1.5"
+            title="Zerar TUDO — fecha COMPRAS e VENDAS de uma vez"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-            <span>ZERAR C{hedgeBook ? ` (${hedgeBook.buy.contracts}ct)` : ''}</span>
-          </button>
-          <button
-            onClick={() => onClosePositionsSide('SELL')}
-            disabled={!hedgeBook || hedgeBook.sell.filled === 0}
-            className="h-[24px] rounded text-[9.5px] font-bold bg-rose-500/15 hover:bg-rose-500/25 disabled:opacity-35 disabled:hover:bg-rose-500/15 text-rose-300 border border-rose-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1"
-            title="Zerar só as VENDAS — as COMPRAS do hedge continuam abertas"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
-            <span>ZERAR V{hedgeBook ? ` (${hedgeBook.sell.contracts}ct)` : ''}</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            <span>ZERAR TUDO ({openOrders.length})</span>
           </button>
         </div>
       )}
@@ -573,20 +584,6 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
             <Row label="Venda hoje" value={`${hedgeBook.sellContractsToday} ct`} tone="rose" />
             <Row label="Total dia" value={`${hedgeBook.contractsTodayTotal} ct`} tone="sky" />
           </div>
-        </div>
-      )}
-      {/* ZERAR TUDO por último, abaixo de tudo: fecha os dois lados de uma vez. */}
-      {onClosePositions && (
-        <div className={`px-2 pb-2 ${hedgeBook ? '' : 'pt-1.5 border-t border-zinc-800/80'}`}>
-          <button
-            onClick={onClosePositions}
-            disabled={openOrders.length === 0}
-            className="w-full h-[26px] rounded text-[10px] font-bold bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-35 disabled:hover:bg-amber-500/15 text-amber-300 border border-amber-500/40 active:scale-95 transition-all cursor-pointer disabled:cursor-default flex items-center justify-center gap-1.5"
-            title="Zerar TUDO — fecha COMPRAS e VENDAS de uma vez"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            <span>ZERAR TUDO ({openOrders.length})</span>
-          </button>
         </div>
       )}
     </div>
