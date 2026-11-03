@@ -3,7 +3,7 @@
 Você está assumindo o projeto **Fluxo & Renko 10R - MT5 Quant Terminal**: aplicação web de trading
 quantitativo que hoje roda no Mini-Índice B3 (`WIN$`) e está preparada para multi-mercado (WDO e BTC
 já têm linha no registro, mas seguem **`a_confirmar`**), enviando ordens automatizadas ao MetaTrader 5
-por uma ponte WebSocket em Python. **Fase atual: Ciclo 13 consolidado — o terminal acorda
+por uma ponte WebSocket em Python. **Fase atual: Ciclo 13 + hotfix d9e3824 — o terminal acorda
 parado e vazio (regra do operador), o limiar de sinal é calculado do próprio pregão (P60), o relógio
 do pregão só bloqueia ordens reais e replay (simulador ao vivo roda 24h), o balão ⚠ explica qualquer
 inação sem piscar, os navegadores interno/externo se sincronizam por um JSON, estratégia removida
@@ -294,23 +294,24 @@ npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migraç
 ```
 
 ## 6. PENDÊNCIAS ABERTAS
-- 📍 **PONTO DE RETOMADA (fim do Ciclo 13, 02/11/2026)**: **refino de leitura** — quatro ajustes
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 13, 02/11/2026 — hotfix d9e3824)**: **refino de leitura + sombra reset visível** — quatro ajustes
   pedidos de dentro da tela, sem tocar matemática de sinal nem portões. (1) régua de tempo do
   eixo X mora **no divisor Renko ↔ Heikin-Ashi** (faixa de 24 px clicável/arrastável —
   `TIME_AXIS_BAND_H = 24`, `TIME_AXIS_BASELINE = 17`); (2) os **três ZERAR** da boleta estão
-  **agrupados** abaixo de COMPRA/VENDA (ZERAR C | ZERAR V lado a lado + ZERAR TUDO em
-  `col-span-2`); (3) a **Sombra acorda zerada** como a boleta — `shadowRobotService.resetBook()`
-  no boot effect e junto com o clique do replay (antes só corria dentro do `await` do
-  `resolveReplayTicks`, deixando as somas do replay anterior à mostra; e o F5 restaurava o
-  livro do dia inteiro via `ensureLoaded`); escolhas continuam persistindo; (4) **▲ C / ▼ V
-  padronizados** — a palavra "MÃE" desapareceu do canvas (some do rótulo sobre o tijolo e da
-  placa da linha de entrada); papel legível pelos prefixos P1/P2/RET. Verificado com tsc limpo,
-  `npx vite build` OK 2,36 s e bancada headless `_tmp_shadowZeroAssert.ts` (**58·58·58·0·escolha
-  mantida**). **Voltar por**: (1) 🧪 conferir no navegador — F5 da sombra após um replay deve
-  mostrar 0 trades com estratégia/escala preservadas; régua X clicável; três ZERAR agrupados;
-  ▲C/▼V nos dois navegadores com a mesma estratégia ativa; (2) opcional: exceção para manter
-  `hadRealData` no F5 se um dia o operador pedir; (3) opcional: padronizar "mãe" também na
-  boleta, auditoria intraday e script Python; (4) todas as pendências herdadas do Ciclo 12.
+  **agrupados** abaixo de COMPRA/VENDA; (3) a **Sombra acorda zerada** como a boleta — `shadowRobotService.resetBook()`
+  no boot effect e junto com o clique do replay; **(novo d9e3824)**: resetBook agora exibe
+  warning **“Livro zerado — aguardando ticks.”** no painel, e `processClosedBox()` limpa no 1º box
+  (prova visual de que o livro resetou entre replays); **(novo)**: dropdown de estratégia mostra
+  **“— biblioteca vazia — salve no Estúdio”** quando `StrategyLibraryService.list()` retorna `[]`
+  (elimina a dúvida “hora aparece, hora não”); (4) **▲ C / ▼ V
+  padronizados** — a palavra “MÃE” desapareceu do canvas. **Hotfix extra**: typo `cdimport` em
+  `SubscriptionStatusBadge.tsx` corrigido (8 erros TS derivados resolvidos). **Avaliação de
+  estratégia hedge com cesta**: bench sintético multi-dia provou que cesta hedge sem flip-close
+  NÃO supera flip-close ON nos 4 cenários testados; código foi revertido (não commitado).
+  **Voltar por**: (1) 🧫 conectar MT5 demo XP e coletar 5 dias reais pela ponte; (2) 🧪 testar as 5
+  estratégias “Pirâmide 3/4/5/6/7 ctros” (snippet console) na sombra com replay 5d OPERA; (3)
+  comparar Boleta (Range 50pts) vs. Sombra (Renko 15R/75pts) no mesmo seed; (4) padronizar “mãe”
+  na boleta/auditoria/Python; (5) todas as pendências herdadas do Ciclo 12.
 - 📍 **PONTO DE RETOMADA anterior (fim do Ciclo 12, 02/11/2026 — superado pelo ponto acima, mantido como histórico)**: **terminal confiável por construção** —
   acorda parado e vazio (boot de 350 ticks e replay automático deletados; On do Robô liga o feed SIM),
   limiar **P60 calculado do pregão** (`getPercentileLimit` em `sessionRegime.ts`, ligado no
