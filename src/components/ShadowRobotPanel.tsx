@@ -146,7 +146,7 @@ export const ShadowRobotPanel: React.FC<ShadowRobotPanelProps> = ({ onPatchConfi
             className="w-full h-7 mt-0.5 rounded bg-slate-950 border border-slate-700 text-slate-100 text-[11px] px-1.5 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
             title="O Robô 2 roda o snapshot salvo desta estratégia, só que na escala escolhida aqui"
           >
-            <option value="">— escolher —</option>
+            <option value="">{strategies.length === 0 ? '— biblioteca vazia — salve no Estúdio' : '— escolher —'}</option>
             {/* Estado órfão honesto: a estratégia apontada não está mais na biblioteca */}
             {staleStrategyId && run.strategyId && (
               <option value={run.strategyId} disabled>

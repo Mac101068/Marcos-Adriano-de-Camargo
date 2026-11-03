@@ -333,6 +333,10 @@ class ShadowRobotService {
     meter?: SessionRegimeMeter
   ) {
     this.ensureLoaded();
+    // Primeiro box da corrida nova: limpa o aviso “Livro zerado — aguardando ticks.”
+    if (this.run.warning === 'Livro zerado — aguardando ticks.') {
+      this.run.warning = null;
+    }
     const pts = Math.max(1, Math.round(Math.abs(closedBox.close - closedBox.open)));
     const conv = evaluateBoxConvergence(
       closedBox,
@@ -388,6 +392,9 @@ class ShadowRobotService {
     this.bot.reset();
     this.hadRealData = false;
     this.sessionStarted = Date.now();
+    // Warning visível: o operador vê que o livro foi zerado (e não que “está herdando” da corrida
+    // anterior). O primeiro box processado limpa a mensagem.
+    if (this.run.enabled) this.run.warning = 'Livro zerado — aguardando ticks.';
     this.persist();
     this.notify();
   }
