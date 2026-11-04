@@ -46,7 +46,7 @@ ORDER_COMMENT = "Renko10R_Flow"
 #   20R = 100 pontos (Tendência longa, menos ruído)
 #   25R = 125 pontos (Filtro anti-ruído)
 # ==============================================================================
-RENKO_R = 20                     # Valor R do Renko (10, 15, 20, etc.)
+RENKO_R = 10                     # Valor R do Renko (10, 15, 20, etc.)
 BOX_POINTS = RENKO_R * 5         # Calculado automaticamente a partir do R
 PYRAMID_TP_POINTS = BOX_POINTS   # Alvo de cada pirâmide (+1 box do Renko selecionado)
 PYRAMID_CONTRACTS = 1.0         # Lote das ordens de pirâmide
@@ -115,7 +115,7 @@ def check_accumulation(boxes, box_to_check, window_size=6, max_alternations=3, m
 
 # PARÂMETROS DE TRAILING STOP E LIMITES DIÁRIOS
 MAE_TRAILING_STOP_ENABLED = True
-DAILY_LIMITS_ENABLED = True
+DAILY_LIMITS_ENABLED = False
 DAILY_PROFIT_TARGET = 1000.0
 DAILY_STOP_LOSS = 800.0
 DAILY_TRAILING_ENABLED = True
@@ -123,26 +123,36 @@ DAILY_TRAILING_TRIGGER = 800.0
 DAILY_TRAILING_GIVEBACK = 250.0
 DAILY_TARGET_HIT = False
 DAILY_MAX_PROFIT_PEAK = 0.0
+STRICT_FLOW_REGIME_ENABLED = True
+HOLD_MAIN_UNTIL_FLOW_FLIP = True
+LAST_CONFIG_MTIME = 0.0
 
 def load_renko_config():
-    global RENKO_R, BOX_POINTS, PYRAMID_TP_POINTS, MIN_DELTA_THRESHOLD, MIN_REVERSAL_DELTA
+    global RENKO_R, BOX_POINTS, PYRAMID_TP_POINTS, STOP_LOSS_POINTS, MIN_DELTA_THRESHOLD, MIN_REVERSAL_DELTA
     global ACCUMULATION_FILTER_ENABLED, ACCUMULATION_WINDOW_BOXES, ACCUMULATION_MAX_ALTERNATIONS, ACCUMULATION_MIN_RANGE_MULT
     global MAE_TRAILING_STOP_ENABLED, DAILY_LIMITS_ENABLED, DAILY_PROFIT_TARGET, DAILY_STOP_LOSS
-    global DAILY_TRAILING_ENABLED, DAILY_TRAILING_TRIGGER, DAILY_TRAILING_GIVEBACK
+    global DAILY_TRAILING_ENABLED, DAILY_TRAILING_TRIGGER, DAILY_TRAILING_GIVEBACK, LAST_CONFIG_MTIME
+    global STRICT_FLOW_REGIME_ENABLED, HOLD_MAIN_UNTIL_FLOW_FLIP
     cfg_file = os.path.join(os.path.dirname(__file__), "renko_config.json")
     if os.path.exists(cfg_file):
         try:
+            mtime = os.path.getmtime(cfg_file)
+            LAST_CONFIG_MTIME = mtime
             with open(cfg_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                old_pts = BOX_POINTS if 'BOX_POINTS' in globals() else 100
                 if "renko_r" in data:
                     RENKO_R = int(data["renko_r"])
                     BOX_POINTS = RENKO_R * 5
                 elif "box_points" in data:
                     BOX_POINTS = int(data["box_points"])
                     RENKO_R = max(1, BOX_POINTS // 5)
-                PYRAMID_TP_POINTS = int(data.get("pyramid_tp_points", BOX_POINTS))
-                MIN_DELTA_THRESHOLD = float(data.get("min_delta_threshold", 100.0))
+                PYRAMID_TP_POINTS = int(data.get("pyramid_tp_points", 50))
+                STOP_LOSS_POINTS = int(data.get("stop_loss_points", 100))
+                MIN_DELTA_THRESHOLD = float(data.get("min_delta_threshold", 250.0))
                 MIN_REVERSAL_DELTA = float(data.get("min_reversal_delta", 75.0))
+                STRICT_FLOW_REGIME_ENABLED = bool(data.get("strict_flow_regime_enabled", True))
+                HOLD_MAIN_UNTIL_FLOW_FLIP = bool(data.get("hold_main_until_flow_flip", True))
                 ACCUMULATION_FILTER_ENABLED = bool(data.get("accumulation_filter_enabled", True))
                 ACCUMULATION_WINDOW_BOXES = int(data.get("accumulation_window_boxes", 6))
                 ACCUMULATION_MAX_ALTERNATIONS = int(data.get("accumulation_max_alternations", 3))
@@ -154,9 +164,26 @@ def load_renko_config():
                 DAILY_TRAILING_ENABLED = bool(data.get("daily_trailing_enabled", True))
                 DAILY_TRAILING_TRIGGER = float(data.get("daily_trailing_trigger", 800.0))
                 DAILY_TRAILING_GIVEBACK = float(data.get("daily_trailing_giveback", 250.0))
-                print(f"⚙️ [CONFIG CARREGADA] Renko: {RENKO_R}R ({BOX_POINTS} pts) | Trailing Stop Mãe: {'ATIVO' if MAE_TRAILING_STOP_ENABLED else 'OFF'} | Meta Diária: R$ {DAILY_PROFIT_TARGET:.0f} | Stop Diário: R$ {DAILY_STOP_LOSS:.0f}")
+
+                if 'RENKO_ENGINE' in globals() and RENKO_ENGINE and old_pts != BOX_POINTS:
+                    RENKO_ENGINE.set_box_points(BOX_POINTS)
+
+                regime_str = "ATIVO (Opção 1: Bloqueio Contra o Fluxo)" if STRICT_FLOW_REGIME_ENABLED else "OFF"
+                print(f"⚙️ [CONFIG CARREGADA] Renko: {RENKO_R}R ({BOX_POINTS} pts) | TP Pirâmide: {PYRAMID_TP_POINTS} pts | Regime Fluxo: {regime_str} | Meta: R$ {DAILY_PROFIT_TARGET:.0f} | Stop: R$ {DAILY_STOP_LOSS:.0f}")
         except Exception as e:
             print(f"Erro ao carregar renko_config.json: {e}")
+
+def check_config_reload():
+    global LAST_CONFIG_MTIME
+    cfg_file = os.path.join(os.path.dirname(__file__), "renko_config.json")
+    if os.path.exists(cfg_file):
+        try:
+            mtime = os.path.getmtime(cfg_file)
+            if mtime > LAST_CONFIG_MTIME:
+                print(f"\n🔄 [HOT RELOAD] Alteração detectada em renko_config.json via Web! Sincronizando parâmetros...")
+                load_renko_config()
+        except Exception:
+            pass
 
 load_renko_config()
 
@@ -179,12 +206,48 @@ ORDER_MANAGER = None
 # ==============================================================================
 # MOTOR RENKO E FLUXO ATEMPORAL (DELTA E CVD)
 # ==============================================================================
+def normalizar_box_para_web(b):
+    if not isinstance(b, dict):
+        return b
+    cvd = b.get("cvdAtClose", b.get("cvd_at_close", 0))
+    ts = b.get("timeStart", b.get("time_start", b.get("timestamp", int(time.time() * 1000))))
+    te = b.get("timeEnd", b.get("timestamp", ts))
+    tc = b.get("ticksCount", b.get("ticks_count", 0))
+    bv = b.get("buyVolume", b.get("buy_volume", 0))
+    sv = b.get("sellVolume", b.get("sell_volume", 0))
+    op = b.get("open", 0)
+    cl = b.get("close", 0)
+    hi = b.get("high", max(op, cl))
+    lo = b.get("low", min(op, cl))
+    delta = b.get("delta", bv - sv)
+    return {
+        **b,
+        "open": op,
+        "close": cl,
+        "high": hi,
+        "low": lo,
+        "delta": delta,
+        "cvdAtClose": cvd,
+        "cvd_at_close": cvd,
+        "timeStart": ts,
+        "timeEnd": te,
+        "timestamp": te,
+        "ticksCount": tc,
+        "ticks_count": tc,
+        "totalVolume": b.get("totalVolume", bv + sv),
+        "buyVolume": bv,
+        "buy_volume": bv,
+        "sellVolume": sv,
+        "sell_volume": sv,
+    }
+
 class RenkoFlowEngine:
     def __init__(self, box_points=50):
         self.box_points = box_points
         self.boxes = []
         self.current_box = None
         self.cvd = 0.0
+        self.last_flow_ha = None
 
     def set_box_points(self, points):
         old_points = self.box_points
@@ -207,7 +270,84 @@ class RenkoFlowEngine:
             "delta": 0,
             "cvd_at_close": 0
         }
+        self.last_flow_ha = None
         print(f"[RENKO 10R] Inicializado no preço base: {base_price:.0f} pts")
+
+    def _calc_flow_ha(self, box):
+        cvd_val = float(box.get("cvd_at_close", box.get("cvdAtClose", self.cvd)))
+        delta_val = float(box.get("delta", 0))
+        buy_vol = float(box.get("buy_volume", box.get("buyVolume", 0)))
+        sell_vol = float(box.get("sell_volume", box.get("sellVolume", 0)))
+
+        raw_open = cvd_val - delta_val
+        raw_close = cvd_val
+        extra_buy = max(0.0, buy_vol - sell_vol) * 0.35
+        extra_sell = max(0.0, sell_vol - buy_vol) * 0.35
+        raw_high = max(raw_open, raw_close) + extra_buy
+        raw_low = min(raw_open, raw_close) - extra_sell
+
+        ha_close = (raw_open + raw_high + raw_low + raw_close) / 4.0
+        if self.last_flow_ha is None:
+            ha_open = (raw_open + raw_close) / 2.0
+        else:
+            ha_open = (self.last_flow_ha["open"] + self.last_flow_ha["close"]) / 2.0
+
+        is_up = ha_close >= ha_open
+        self.last_flow_ha = {"open": ha_open, "close": ha_close, "is_up": is_up}
+        return "BUY" if is_up else "SELL"
+
+    def get_flow_regime(self) -> str:
+        """
+        Determina o regime institucional de fluxo com base no saldo acumulado (CVD)
+        e na persistência da direção do fluxo Heikin-Ashi.
+        Evita falsos sinais causados por pullbacks ou ruídos de um único box.
+        """
+        if self.cvd > 2000:
+            return "BUY"
+        elif self.cvd < -2000:
+            return "SELL"
+
+        if len(self.boxes) >= 3:
+            recent_boxes = self.boxes[-3:]
+            recent_deltas = sum(b.get("delta", 0) for b in recent_boxes)
+            up_count = sum(1 for b in recent_boxes if b.get("direction") == "UP")
+            down_count = sum(1 for b in recent_boxes if b.get("direction") == "DOWN")
+            if up_count >= 2 and recent_deltas > 0:
+                return "BUY"
+            elif down_count >= 2 and recent_deltas < 0:
+                return "SELL"
+
+        if self.last_flow_ha is not None:
+            return "BUY" if self.last_flow_ha.get("is_up", True) else "SELL"
+        return "BUY" if self.cvd >= 0 else "SELL"
+
+    def load_history(self, boxes):
+        if not boxes:
+            return
+        self.boxes = list(boxes)
+        self.last_flow_ha = None
+        for b in self.boxes:
+            reg = self._calc_flow_ha(b)
+            b["flow_regime"] = reg
+
+        last_b = boxes[-1]
+        self.current_box = {
+            "index": len(self.boxes),
+            "direction": last_b["direction"],
+            "open": last_b["close"],
+            "close": last_b["close"],
+            "high": last_b["close"],
+            "low": last_b["close"],
+            "time_start": last_b.get("timeEnd", int(time.time() * 1000)),
+            "ticks_count": 0,
+            "buy_volume": 0,
+            "sell_volume": 0,
+            "delta": 0,
+            "cvd_at_close": last_b.get("cvdAtClose", 0)
+        }
+        self.cvd = float(last_b.get("cvdAtClose", 0.0))
+        reg_atual = self.get_flow_regime()
+        print(f"📦 [MOTOR RENKO] {len(boxes)} boxes históricos ativos. Ponto: {last_b['close']:.0f} pts | Regime de Fluxo Atual: {reg_atual}")
 
     def process_tick(self, price, volume, aggressor, timestamp):
         tick_delta = volume if aggressor == "BUY" else (-volume if aggressor == "SELL" else 0)
@@ -249,6 +389,8 @@ class RenkoFlowEngine:
                 new_box = self._create_closed_box("UP", prev_open, prev_open + self.box_points, curr, timestamp)
 
         if new_box:
+            reg = self._calc_flow_ha(new_box)
+            new_box["flow_regime"] = reg
             self.boxes.append(new_box)
             signal, reason = self.check_convergence(new_box)
 
@@ -270,19 +412,34 @@ class RenkoFlowEngine:
         return new_box, signal, reason
 
     def _create_closed_box(self, direction, box_open, box_close, curr, timestamp):
+        t_start = curr.get("time_start", curr.get("timeStart", timestamp))
+        ticks = curr.get("ticks_count", curr.get("ticksCount", 0))
+        b_vol = curr.get("buy_volume", curr.get("buyVolume", 0))
+        s_vol = curr.get("sell_volume", curr.get("sellVolume", 0))
+        d_val = curr.get("delta", b_vol - s_vol)
+        hi = max(curr.get("high", box_open), box_close if direction == "UP" else box_open)
+        lo = min(curr.get("low", box_open), box_open if direction == "UP" else box_close)
         return {
             "index": len(self.boxes),
             "direction": direction,
             "open": box_open,
             "close": box_close,
-            "high": max(curr["high"], box_close if direction == "UP" else box_open),
-            "low": min(curr["low"], box_open if direction == "UP" else box_close),
-            "ticks_count": curr["ticks_count"],
-            "buy_volume": curr["buy_volume"],
-            "sell_volume": curr["sell_volume"],
-            "delta": curr["delta"],
+            "high": hi,
+            "low": lo,
+            "ticksCount": ticks,
+            "ticks_count": ticks,
+            "totalVolume": b_vol + s_vol,
+            "buyVolume": b_vol,
+            "buy_volume": b_vol,
+            "sellVolume": s_vol,
+            "sell_volume": s_vol,
+            "delta": d_val,
+            "cvdAtClose": self.cvd,
             "cvd_at_close": self.cvd,
-            "timestamp": timestamp
+            "timeStart": t_start,
+            "timeEnd": timestamp,
+            "timestamp": timestamp,
+            "isConvergence": False
         }
 
     def check_convergence(self, box):
@@ -395,7 +552,7 @@ class MT5OrderManager:
         elif signal in ["SELL", "DOWN", "VENDA"]:
             current_dir = "SELL"
         else:
-            return False, 0, "NONE"
+            return False, 0, "NONE", "Sinal inválido ou sem direção"
 
         positions = mt5.positions_get(symbol=self.symbol)
         active_positions = [p for p in positions if p.magic == self.magic_number] if positions else []
@@ -407,20 +564,38 @@ class MT5OrderManager:
                 has_opposite = True
                 break
 
-        # 1. Se o fluxo inverteu, aplica o FILTRO DE DELTA MÍNIMO NA REVERSÃO (Anti-Whipsaw)
+        flow_regime = RENKO_ENGINE.get_flow_regime() if RENKO_ENGINE else current_dir
+
+        # 1. Se o fluxo inverteu, aplica o FILTRO DE REGIME ESTREITO (Opção 1)
         if has_opposite:
+            # Se a posição atual for a favor do fluxo institucional e o box for apenas um pullback contrário:
+            if STRICT_FLOW_REGIME_ENABLED and HOLD_MAIN_UNTIL_FLOW_FLIP and current_dir != flow_regime:
+                print(f"🛡️ [PULLBACK NO FLUXO] Box virou {current_dir}, mas o Fluxo Institucional (CVD) continua {flow_regime}. Posição Mãe mantida surfando sem zeragem prematura!")
+                return False, 0, "HOLD_MAIN_PULLBACK", f"Pullback no fluxo: CVD continua {flow_regime}. Ordem Mãe preservada!"
+
             box_delta = box.get("delta", 0)
             if current_dir == "BUY" and box_delta < MIN_REVERSAL_DELTA:
                 print(f"🛡️ [FILTRO REVERSÃO] Box virou ALTA, mas Delta ({box_delta}) < +{MIN_REVERSAL_DELTA}. Reversão bloqueada (ruído/pullback evitado)!")
-                return False, 0, "BLOCKED_DELTA"
+                return False, 0, "BLOCKED_DELTA", f"Reversão fraca: Delta ({box_delta}) abaixo do mínimo ({MIN_REVERSAL_DELTA})"
             elif current_dir == "SELL" and box_delta > -MIN_REVERSAL_DELTA:
                 print(f"🛡️ [FILTRO REVERSÃO] Box virou BAIXA, mas Delta ({box_delta}) > -{MIN_REVERSAL_DELTA}. Reversão bloqueada (ruído/pullback evitado)!")
-                return False, 0, "BLOCKED_DELTA"
+                return False, 0, "BLOCKED_DELTA", f"Reversão fraca: Delta ({box_delta}) abaixo do mínimo ({MIN_REVERSAL_DELTA})"
 
-            print(f"\n🔄 [INVERSÃO DE FLUXO CONFIRMADA] Delta ({box_delta}) confirmou virada! Zerando posições anteriores para virar a mão para {current_dir}!")
+            print(f"\n🔄 [INVERSÃO DE FLUXO CONFIRMADA] Delta ({box_delta}) e Regime ({flow_regime}) confirmaram virada! Zerando posições anteriores para virar a mão para {current_dir}!")
             self.close_all_positions()
             time.sleep(0.05)
             active_positions = []
+
+        # 1.1 FILTRO DE REGIME DE FLUXO (Opção 1: Bloqueia compras no fluxo vendedor e vendas no fluxo comprador)
+        if STRICT_FLOW_REGIME_ENABLED and current_dir != flow_regime:
+            print(f"🛡️ [FILTRO REGIME DE FLUXO] Entrada de {current_dir} BLOQUEADA: Janela de Fluxo Institucional (CVD) está em modo {flow_regime}! Proibido operar contra a maré.")
+            return False, 0, "BLOCKED_FLOW_REGIME", f"Contra a maré: Janela institucional de CVD está em modo {flow_regime}!"
+
+        # 1.1 FILTRO DE GAP DE ABERTURA (Anti-Leilão / Anti-Salto)
+        if box.get("isGap", False) or box.get("is_gap", False):
+            gap_pts = box.get("gapPoints", box.get("gap_points", 0))
+            print(f"🛡️ [FILTRO GAP DE ABERTURA] Entrada de {current_dir} BLOQUEADA: Salto de {gap_pts:+.0f} pts na abertura do pregão. Preservando capital até formação de range real!")
+            return False, 0, "BLOCKED_GAP", f"Salto/GAP na abertura ({gap_pts:+.0f} pts). Aguardando range estável!"
 
         # 2. FILTRO DE ACUMULAÇÃO / CONSOLIDAÇÃO (Anti-Whipsaw / Caixote)
         if ACCUMULATION_FILTER_ENABLED and RENKO_ENGINE and len(RENKO_ENGINE.boxes) >= ACCUMULATION_WINDOW_BOXES:
@@ -434,7 +609,7 @@ class MT5OrderManager:
             )
             if is_acc:
                 print(f"🛡️ [FILTRO ACUMULAÇÃO] Entrada de {current_dir} BLOQUEADA: {acc_reason}. Preservando capital contra falso rompimento!")
-                return False, 0, "BLOCKED_ACCUMULATION"
+                return False, 0, "BLOCKED_ACCUMULATION", f"Caixote/Acumulação: {acc_reason}"
             elif is_break:
                 print(f"🚀 [ROMPIMENTO CONFIRMADO] {acc_reason}! Entrada autorizada na explosão do caixote!")
 
@@ -452,7 +627,7 @@ class MT5OrderManager:
             raw_delta = box.get("delta", 0)
             if (current_dir == "BUY" and raw_delta < MIN_DELTA_THRESHOLD) or (current_dir == "SELL" and raw_delta > -MIN_DELTA_THRESHOLD):
                 print(f"🛡️ [FILTRO DELTA PRIMÁRIO] Entrada de {current_dir} pausada: Delta ({raw_delta:.0f}) abaixo do gatilho institucional ({MIN_DELTA_THRESHOLD:.0f} ctros).")
-                return False, 0, "BLOCKED_DELTA_PRIMARY"
+                return False, 0, "BLOCKED_DELTA_PRIMARY", f"Delta primário ({raw_delta:.0f}) abaixo do gatilho ({MIN_DELTA_THRESHOLD:.0f} ctros)"
 
             # Dispara Ordem Mãe de Surfe
             print(f"🟢 [ORDEM MÃE] Disparando {current_dir} ({MAIN_CONTRACTS} ct) no Box #{box['index']} | Delta: {raw_delta:+.0f} | Surfe com Trailing Stop")
@@ -460,10 +635,10 @@ class MT5OrderManager:
                 order_type=current_dir,
                 comment=f"MAE_{box['index']}",
                 volume=MAIN_CONTRACTS,
-                sl_points=0,
+                sl_points=STOP_LOSS_POINTS,
                 tp_points=0
             )
-            return success, ticket, "MAIN"
+            return success, ticket, "MAIN", f"Entrada Mãe {current_dir} executada a mercado! Delta: {raw_delta:+.0f}"
         elif pyramid_count < MAX_POSITIONS:
             # Dispara Pirâmide: saída exclusivamente no TP de +1 box ou na Inversão Total
             pyramid_num = pyramid_count + 1
@@ -472,11 +647,27 @@ class MT5OrderManager:
                 order_type=current_dir,
                 comment=f"PIR_{pyramid_num}_{box['index']}",
                 volume=PYRAMID_CONTRACTS,
-                sl_points=0,
+                sl_points=STOP_LOSS_POINTS,
                 tp_points=PYRAMID_TP_POINTS
             )
-            return success, ticket, "PYRAMID"
-        return False, 0, "NONE"
+            return success, ticket, "PYRAMID", f"Pirâmide #{pyramid_num} {current_dir} executada (+{PYRAMID_TP_POINTS} pts TP)!"
+        return False, 0, "NONE", "Sinal inválido ou sem direção"
+
+    def check_hard_stop_loss(self, current_price):
+        if STOP_LOSS_POINTS <= 0:
+            return False
+        positions = mt5.positions_get(symbol=self.symbol)
+        if not positions:
+            return False
+        for pos in positions:
+            if pos.magic == self.magic_number:
+                is_buy = pos.type == mt5.ORDER_TYPE_BUY
+                pts = (current_price - pos.price_open) if is_buy else (pos.price_open - current_price)
+                if pts <= -STOP_LOSS_POINTS:
+                    print(f"\n🚨 [STOP LOSS WATCHDOG] Posição #{pos.ticket} ({pos.comment}) bateu {pts:.0f} pts (SL Limite: -{STOP_LOSS_POINTS} pts)! Executando corte de risco a mercado!")
+                    self.close_all_positions()
+                    return True
+        return False
 
     def close_all_positions(self):
         positions = mt5.positions_get(symbol=self.symbol)
@@ -615,11 +806,253 @@ class MT5OrderManager:
         return True, ""
 
 
+
+def carregar_ticks_recentes(symbol="WINZ26", count=150):
+    """
+    Busca os últimos N ticks reais registrados no Times & Trades do MetaTrader 5
+    """
+    try:
+        ref = mt5.symbol_info_tick(symbol)
+        ref_time = int(ref.time) if ref else int(time.time())
+        raw_ticks = mt5.copy_ticks_from(symbol, ref_time - (86400 * 3), count, mt5.COPY_TICKS_ALL)
+        if raw_ticks is None or len(raw_ticks) == 0:
+            return []
+        out = []
+        for t in raw_ticks[-count:]:
+            p = float(t['last'] if t['last'] > 0 else (t['bid'] if t['bid'] > 0 else 0))
+            if p <= 0:
+                continue
+            flags = int(t['flags'])
+            aggr = "BUY" if (flags & mt5.TICK_FLAG_BUY) else ("SELL" if (flags & mt5.TICK_FLAG_SELL) else "CROSS")
+            msc = int(t['time_msc'])
+            out.append({
+                "id": f"mt5-{msc}",
+                "timestamp": msc,
+                "timeStr": datetime.utcfromtimestamp(int(t['time'])).strftime("%H:%M:%S"),
+                "price": p,
+                "volume": int(t['volume'] if t['volume'] > 0 else 1),
+                "aggressor": aggr,
+                "buyerBroker": "XP Investimentos" if aggr == "BUY" else "Institucional B3",
+                "sellerBroker": "Institucional B3" if aggr == "BUY" else "XP Investimentos",
+                "isReal": True,
+                "source": "MT5_REAL"
+            })
+        return out
+    except Exception as e:
+        print(f"Erro ao carregar ticks recentes do MT5: {e}")
+        return []
+
+def carregar_ordens_reais_mt5(dias=1):
+    """
+    Carrega as operações reais executadas no MetaTrader 5 agrupadas por posição (round-trip)
+    """
+    try:
+        now = datetime.now()
+        if dias <= 1:
+            start_date = datetime(now.year, now.month, now.day)
+        else:
+            start_date = now - timedelta(days=dias)
+
+        deals = mt5.history_deals_get(start_date, now)
+        if not deals:
+            return []
+
+        positions_dict = {}
+        for d in deals:
+            pos_id = d.position_id
+            if pos_id not in positions_dict:
+                positions_dict[pos_id] = []
+            positions_dict[pos_id].append(d)
+
+        completed_trades = []
+        for pos_id, d_list in positions_dict.items():
+            entries = [d for d in d_list if d.entry == 0]
+            exits = [d for d in d_list if d.entry in [1, 2]]
+            if entries and exits:
+                e = entries[0]
+                x = exits[-1]
+                pnl = sum(d.profit + getattr(d, 'commission', 0.0) + getattr(d, 'swap', 0.0) for d in exits)
+                side = "BUY" if e.type == 0 else "SELL"
+                pts = (x.price - e.price) if side == "BUY" else (e.price - x.price)
+                t_entry = datetime.utcfromtimestamp(e.time).strftime("%H:%M:%S")
+                t_exit = datetime.utcfromtimestamp(x.time).strftime("%H:%M:%S")
+                completed_trades.append({
+                    "id": f"ord-mt5-{pos_id}",
+                    "ticket": pos_id,
+                    "timestamp": int(e.time) * 1000,
+                    "timeStr": t_entry,
+                    "fillTimestamp": int(e.time) * 1000,
+                    "fillTimeStr": t_entry,
+                    "type": side,
+                    "role": "MAIN",
+                    "entryPrice": float(e.price),
+                    "exitPrice": float(x.price),
+                    "exitTimestamp": int(x.time) * 1000,
+                    "exitTimeStr": t_exit,
+                    "status": "CLOSED_PROFIT" if pnl >= 0 else "CLOSED_LOSS",
+                    "exitReason": "TAKE_PROFIT" if pnl >= 0 else "STOP_LOSS",
+                    "contracts": int(e.volume),
+                    "pointsResult": round(pts, 0),
+                    "financialResult": round(pnl, 2),
+                    "triggerReason": f"Executado no MetaTrader 5 (Deal #{x.ticket})",
+                    "source": "MT5_LIVE",
+                    "isRealMT5": True
+                })
+
+        completed_trades.sort(key=lambda t: t["timestamp"], reverse=True)
+        return completed_trades
+    except Exception as e:
+        print(f"Erro ao carregar ordens reais do MT5: {e}")
+        return []
+
+def carregar_historico_renko(symbol="WINZ26", box_pts=50, max_dias=2):
+    """
+    Carrega o histórico dos últimos N pregões a partir de barras M1 do MT5 em menos de 0.05s.
+    Identifica gaps de abertura entre pregões, anota os saltos sem criar boxes fictícios
+    e reconstrói a sequência contínua para exibir no gráfico e proteger contra saltos de leilão.
+    """
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, max(1500, max_dias * 600))
+    if rates is None or len(rates) == 0:
+        return []
+
+    dias = {}
+    for r in rates:
+        d = datetime.fromtimestamp(r["time"]).strftime("%Y-%m-%d")
+        if d not in dias:
+            dias[d] = []
+        dias[d].append(r)
+
+    dias_ordenados = sorted(dias.keys())[-max_dias:]
+    todos_boxes = []
+    prev_close = None
+    cvd_acc = 0.0
+
+    for d in dias_ordenados:
+        r_list = dias[d]
+        open_day = round(r_list[0]["open"] / 5.0) * 5.0
+        gap_pts = 0.0
+        is_gap = False
+        if prev_close is not None:
+            gap_pts = open_day - prev_close
+            if abs(gap_pts) >= (box_pts * 1.5):
+                is_gap = True
+
+        curr_dir = "UP"
+        last_close = open_day
+        day_boxes = []
+        d_formatado = datetime.strptime(d, "%Y-%m-%d").strftime("%d/%m")
+
+        for r in r_list:
+            o, h, l, c = r["open"], r["high"], r["low"], r["close"]
+            vol = float(r["tick_volume"])
+            t_ms = int(r["time"]) * 1000
+            delta_bar = vol * 0.4 if c > o else (-vol * 0.4 if c < o else 0.0)
+
+            pts_seq = [o, l, h, c] if c >= o else [o, h, l, c]
+            for p in pts_seq:
+                if curr_dir == "UP":
+                    if p >= last_close + box_pts:
+                        cvd_acc += delta_bar
+                        day_boxes.append({
+                            "index": len(todos_boxes) + len(day_boxes),
+                            "direction": "UP",
+                            "open": last_close,
+                            "close": last_close + box_pts,
+                            "high": last_close + box_pts,
+                            "low": last_close,
+                            "timeStart": t_ms,
+                            "timeEnd": t_ms,
+                            "ticksCount": int(vol),
+                            "totalVolume": int(vol),
+                            "buyVolume": int(vol * 0.7 if delta_bar > 0 else vol * 0.3),
+                            "sellVolume": int(vol * 0.3 if delta_bar > 0 else vol * 0.7),
+                            "delta": round(delta_bar),
+                            "cvdAtClose": round(cvd_acc),
+                            "isConvergence": False
+                        })
+                        last_close += box_pts
+                    elif p <= last_close - (box_pts * 2):
+                        curr_dir = "DOWN"
+                        prev_o = last_close - box_pts
+                        cvd_acc += delta_bar
+                        day_boxes.append({
+                            "index": len(todos_boxes) + len(day_boxes),
+                            "direction": "DOWN",
+                            "open": prev_o,
+                            "close": prev_o - box_pts,
+                            "high": prev_o,
+                            "low": prev_o - box_pts,
+                            "timeStart": t_ms,
+                            "timeEnd": t_ms,
+                            "ticksCount": int(vol),
+                            "totalVolume": int(vol),
+                            "buyVolume": int(vol * 0.3),
+                            "sellVolume": int(vol * 0.7),
+                            "delta": round(delta_bar),
+                            "cvdAtClose": round(cvd_acc),
+                            "isConvergence": False
+                        })
+                        last_close = prev_o - box_pts
+                else:
+                    if p <= last_close - box_pts:
+                        cvd_acc += delta_bar
+                        day_boxes.append({
+                            "index": len(todos_boxes) + len(day_boxes),
+                            "direction": "DOWN",
+                            "open": last_close,
+                            "close": last_close - box_pts,
+                            "high": last_close,
+                            "low": last_close - box_pts,
+                            "timeStart": t_ms,
+                            "timeEnd": t_ms,
+                            "ticksCount": int(vol),
+                            "totalVolume": int(vol),
+                            "buyVolume": int(vol * 0.3),
+                            "sellVolume": int(vol * 0.7),
+                            "delta": round(delta_bar),
+                            "cvdAtClose": round(cvd_acc),
+                            "isConvergence": False
+                        })
+                        last_close -= box_pts
+                    elif p >= last_close + (box_pts * 2):
+                        curr_dir = "UP"
+                        prev_o = last_close + box_pts
+                        cvd_acc += delta_bar
+                        day_boxes.append({
+                            "index": len(todos_boxes) + len(day_boxes),
+                            "direction": "UP",
+                            "open": prev_o,
+                            "close": prev_o + box_pts,
+                            "high": prev_o + box_pts,
+                            "low": prev_o,
+                            "timeStart": t_ms,
+                            "timeEnd": t_ms,
+                            "ticksCount": int(vol),
+                            "totalVolume": int(vol),
+                            "buyVolume": int(vol * 0.7),
+                            "sellVolume": int(vol * 0.3),
+                            "delta": round(delta_bar),
+                            "cvdAtClose": round(cvd_acc),
+                            "isConvergence": False
+                        })
+                        last_close = prev_o + box_pts
+
+        if day_boxes:
+            day_boxes[0]["isDayStart"] = True
+            day_boxes[0]["dayLabel"] = d_formatado
+            if is_gap:
+                day_boxes[0]["isGap"] = True
+                day_boxes[0]["gapPoints"] = gap_pts
+            prev_close = day_boxes[-1]["close"]
+            todos_boxes.extend(day_boxes)
+
+    return todos_boxes
+
 # ==============================================================================
 # WEBSOCKET SERVER & STREAM EM TEMPO REAL
 # ==============================================================================
 async def ws_handler(websocket):
-    global RENKO_R, BOX_POINTS, PYRAMID_TP_POINTS
+    global RENKO_R, BOX_POINTS, PYRAMID_TP_POINTS, STOP_LOSS_POINTS, HOLD_MAIN_UNTIL_FLOW_FLIP, MIN_DELTA_THRESHOLD
     CONNECTED_CLIENTS.add(websocket)
     try:
         acc = mt5.account_info()
@@ -648,8 +1081,10 @@ async def ws_handler(websocket):
                 "renko_r": RENKO_R,
                 "box_points": BOX_POINTS,
                 "pyramid_tp": PYRAMID_TP_POINTS,
-                "boxes": RENKO_ENGINE.boxes[-50:] if (RENKO_ENGINE and RENKO_ENGINE.boxes) else [],
+                "boxes": [normalizar_box_para_web(b) for b in RENKO_ENGINE.boxes[-5000:]] if (RENKO_ENGINE and RENKO_ENGINE.boxes) else [],
                 "currentBox": RENKO_ENGINE.current_box if RENKO_ENGINE else None,
+                "ticks": carregar_ticks_recentes(SYMBOL, 120),
+                "orders": carregar_ordens_reais_mt5(1),
             }
         }
         await websocket.send(json.dumps(market_data_msg))
@@ -667,6 +1102,77 @@ async def ws_handler(websocket):
                 )
             elif action == "CLOSE_POSITIONS":
                 ORDER_MANAGER.close_all_positions()
+            elif action == "UPDATE_CONFIG":
+                cfg_data = data.get("config", {})
+                if "stop_loss_points" in cfg_data or "stopLossPoints" in cfg_data:
+                    STOP_LOSS_POINTS = int(cfg_data.get("stop_loss_points", cfg_data.get("stopLossPoints", STOP_LOSS_POINTS)))
+                if "pyramid_tp_points" in cfg_data or "pyramidTpPoints" in cfg_data:
+                    PYRAMID_TP_POINTS = int(cfg_data.get("pyramid_tp_points", cfg_data.get("pyramidTpPoints", PYRAMID_TP_POINTS)))
+                if "hold_main_until_flow_flip" in cfg_data or "holdMainUntilFlip" in cfg_data:
+                    HOLD_MAIN_UNTIL_FLOW_FLIP = bool(cfg_data.get("hold_main_until_flow_flip", cfg_data.get("holdMainUntilFlip", HOLD_MAIN_UNTIL_FLOW_FLIP)))
+                if "min_delta_threshold" in cfg_data or "minDeltaThreshold" in cfg_data:
+                    MIN_DELTA_THRESHOLD = float(cfg_data.get("min_delta_threshold", cfg_data.get("minDeltaThreshold", MIN_DELTA_THRESHOLD)))
+
+                # Salva permanentemente no arquivo renko_config.json
+                try:
+                    cfg_file = os.path.join(os.path.dirname(__file__), "renko_config.json")
+                    if os.path.exists(cfg_file):
+                        with open(cfg_file, "r", encoding="utf-8") as f:
+                            saved_cfg = json.load(f)
+                        saved_cfg["stop_loss_points"] = STOP_LOSS_POINTS
+                        saved_cfg["pyramid_tp_points"] = PYRAMID_TP_POINTS
+                        saved_cfg["hold_main_until_flow_flip"] = HOLD_MAIN_UNTIL_FLOW_FLIP
+                        saved_cfg["min_delta_threshold"] = MIN_DELTA_THRESHOLD
+                        saved_cfg["last_updated"] = datetime.now().isoformat()
+                        with open(cfg_file, "w", encoding="utf-8") as f:
+                            json.dump(saved_cfg, f, indent=4)
+                except Exception as err:
+                    print(f"Erro ao salvar renko_config.json: {err}")
+
+                print(f"⚡ [CONFIG WEBSOCKET] Parâmetros sincronizados e gravados em renko_config.json: SL={STOP_LOSS_POINTS}p | TP Pir={PYRAMID_TP_POINTS}p | Limiar Delta={MIN_DELTA_THRESHOLD} | Flip={HOLD_MAIN_UNTIL_FLOW_FLIP}")
+                
+                # Confirmação imediata para a interface web
+                await broadcast_to_web({
+                    "type": "CONFIG_SAVED",
+                    "data": {
+                        "success": True,
+                        "stopLossPoints": STOP_LOSS_POINTS,
+                        "pyramidTpPoints": PYRAMID_TP_POINTS,
+                        "minDeltaThreshold": MIN_DELTA_THRESHOLD,
+                        "holdMainUntilFlip": HOLD_MAIN_UNTIL_FLOW_FLIP,
+                        "timestamp": int(time.time() * 1000)
+                    }
+                })
+            elif action == "UNLOCK_DAILY_LIMITS":
+                global DAILY_TARGET_HIT, DAILY_LIMITS_ENABLED
+                DAILY_TARGET_HIT = False
+                DAILY_LIMITS_ENABLED = False
+                print("🔓 [DESTRAVAMENTO MANUAL] Trava diária de capital desativada via Web!")
+                await broadcast_to_web({
+                    "type": "DAILY_LIMIT_STATUS",
+                    "data": { "locked": False, "reason": "Destravado pelo operador via interface" }
+                })
+            elif action == "GET_HISTORY":
+                max_d = int(data.get("maxDias", 2))
+                print(f"[REQUISICAO HISTORICO] Solicitado periodo de {max_d} pregoes...")
+                reloaded = carregar_historico_renko(SYMBOL, BOX_POINTS, max_dias=max_d)
+                if reloaded and RENKO_ENGINE:
+                    RENKO_ENGINE.load_history(reloaded)
+                curr_tick = mt5.symbol_info_tick(SYMBOL)
+                curr_p = curr_tick.last if curr_tick else (reloaded[-1]["close"] if reloaded else 0)
+                resp = {
+                    "type": "INITIAL_DATA",
+                    "data": {
+                        "symbol": SYMBOL,
+                        "currentPrice": curr_p,
+                        "boxes": [normalizar_box_para_web(b) for b in (RENKO_ENGINE.boxes[-5000:] if RENKO_ENGINE else (reloaded or []))],
+                        "cvd": RENKO_ENGINE.cvd if RENKO_ENGINE else 0.0,
+                        "currentBox": RENKO_ENGINE.current_box if RENKO_ENGINE else None,
+                        "ticks": carregar_ticks_recentes(SYMBOL, 120),
+                        "orders": carregar_ordens_reais_mt5(max_d),
+                    }
+                }
+                await websocket.send(json.dumps(resp))
             elif action == "SET_RENKO_CONFIG":
                 if "renko_r" in data:
                     RENKO_R = int(data["renko_r"])
@@ -690,7 +1196,7 @@ async def ws_handler(websocket):
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
-        CONNECTED_CLIENTS.remove(websocket)
+        CONNECTED_CLIENTS.discard(websocket)
 
 async def broadcast_to_web(msg_dict):
     if not CONNECTED_CLIENTS:
@@ -711,7 +1217,8 @@ async def mt5_stream_loop():
     if ref_tick:
         last_tick_time_msc = ref_tick.time_msc
         price = ref_tick.last if ref_tick.last > 0 else ref_tick.bid
-        RENKO_ENGINE.init_engine(price, ref_tick.time_msc)
+        if not RENKO_ENGINE.boxes:
+            RENKO_ENGINE.init_engine(price, ref_tick.time_msc)
         print(f"📡 Monitorando Times & Trades ao vivo em '{SYMBOL}' a partir de {price:.0f} pts...")
 
     last_mirror_broadcast = 0.0
@@ -745,18 +1252,34 @@ async def mt5_stream_loop():
                         "type": "TICK",
                         "data": {
                             "id": f"mt5-{tick_msc}",
+                            "isReal": True,
+                            "source": "MT5_REAL",
                             "timestamp": tick_msc,
-                            "timeStr": datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S.%f')[:-3],
+                            "timeStr": datetime.utcfromtimestamp(tick_msc/1000).strftime('%H:%M:%S.%f')[:-3],
                             "price": price,
                             "volume": vol,
                             "aggressor": aggressor
                         }
                     })
 
+                    # Monitor de Stop Loss Imediato (Watchdog de Segurança)
+                    if ORDER_MANAGER and ORDER_MANAGER.check_hard_stop_loss(price):
+                        await broadcast_to_web({
+                            "type": "AUDIT_EVENT",
+                            "data": {
+                                "timestamp": int(tick_msc),
+                                "status": "STOP_LOSS",
+                                "action": "STOP_LOSS_TRIGGERED",
+                                "signal": "EXIT",
+                                "boxPrice": price,
+                                "reason": f"Stop Loss acionado a {price:.0f} pts (-{STOP_LOSS_POINTS} pts de perda máxima atingida)!"
+                            }
+                        })
+
                     new_box, signal, reason = RENKO_ENGINE.process_tick(price, vol, aggressor, tick_msc)
 
                     if new_box:
-                        print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box {RENKO_R}R #{new_box['index']}: {new_box['direction']} | {new_box['open']:.0f} -> {new_box['close']:.0f} | Delta: {new_box['delta']}")
+                        print(f"[{datetime.utcfromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box {RENKO_R}R #{new_box['index']}: {new_box['direction']} | {new_box['open']:.0f} -> {new_box['close']:.0f} | Delta: {new_box['delta']}")
                         await broadcast_to_web({"type": "BOX_CLOSED", "data": new_box})
 
                         # FASE 1: Trailing Stop & Breakeven dinâmico na Ordem Mãe
@@ -766,20 +1289,59 @@ async def mt5_stream_loop():
                         # FASE 2: Gestor Financeiro Diário (Meta de Ganho & Stop Diário)
                         can_trade, limit_reason = ORDER_MANAGER.check_daily_limits()
 
-                        if signal and can_trade:
-                            success, ticket, role = ORDER_MANAGER.execute_pyramid_confluence(signal, new_box)
-                            if success:
+                        if signal:
+                            if not can_trade:
+                                print(f"🛑 [TRAVA DIÁRIA] Entrada de {signal} BLOQUEADA: {limit_reason}")
                                 await broadcast_to_web({
-                                    "type": "ORDER_RESULT",
-                                    "ticket": ticket,
-                                    "role": role,
-                                    "orderType": signal,
-                                    "status": "DONE"
+                                    "type": "AUDIT_EVENT",
+                                    "data": {
+                                        "timestamp": int(tick_msc),
+                                        "status": "BLOCKED",
+                                        "action": "BLOCKED_DAILY_LIMIT",
+                                        "signal": signal,
+                                        "boxIndex": new_box.get("index"),
+                                        "boxPrice": new_box.get("close"),
+                                        "delta": new_box.get("delta"),
+                                        "reason": f"Trava Diária: {limit_reason}",
+                                        "ticket": 0
+                                    }
                                 })
+                            else:
+                                ret = ORDER_MANAGER.execute_pyramid_confluence(signal, new_box)
+                                if len(ret) == 4:
+                                    success, ticket, role, reason_text = ret
+                                else:
+                                    success, ticket, role = ret[:3]
+                                    reason_text = "Executado" if success else "Bloqueado"
+
+                                await broadcast_to_web({
+                                    "type": "AUDIT_EVENT",
+                                    "data": {
+                                        "timestamp": int(tick_msc),
+                                        "status": "EXECUTED" if success else "BLOCKED",
+                                        "action": role,
+                                        "signal": signal,
+                                        "boxIndex": new_box.get("index"),
+                                        "boxPrice": new_box.get("close"),
+                                        "delta": new_box.get("delta"),
+                                        "reason": reason_text,
+                                        "ticket": ticket if success else 0
+                                    }
+                                })
+
+                                if success:
+                                    await broadcast_to_web({
+                                        "type": "ORDER_RESULT",
+                                        "ticket": ticket,
+                                        "role": role,
+                                        "orderType": signal,
+                                        "status": "DONE"
+                                    })
             # Espelhamento em tempo real das posições MT5 ao vivo para o terminal web (a cada 1 segundo)
             now_sec = time.time()
             if now_sec - last_mirror_broadcast > 1.0:
                 last_mirror_broadcast = now_sec
+                check_config_reload()
                 positions = mt5.positions_get(symbol=SYMBOL)
                 pos_list = []
                 if positions:
@@ -796,11 +1358,14 @@ async def mt5_stream_loop():
                                 "points": round(pts, 0),
                                 "comment": p.comment
                             })
+                real_orders = carregar_ordens_reais_mt5(1)
                 await broadcast_to_web({
                     "type": "LIVE_MIRROR",
                     "data": {
                         "positions": pos_list,
-                        "openCount": len(pos_list)
+                        "openCount": len(pos_list),
+                        "orders": real_orders,
+                        "todayPnL": round(sum(o["financialResult"] for o in real_orders), 2)
                     }
                 })
 
@@ -830,11 +1395,20 @@ async def main():
     print("=" * 65)
     print(f"🤖 ROBÔ FLUXO B3 CONECTADO AO METATRADER 5")
     print(f"Conta: {acc.login} | Servidor: {acc.server} | Nome: {acc.name}")
-    print(f"Ativo Alvo: {SYMBOL} | Box Renko: 10R ({BOX_POINTS} pts)")
+    print(f"Ativo Alvo: {SYMBOL} | Box Renko: {RENKO_R}R ({BOX_POINTS} pts)")
     print(f"Modo: Conta Demo/Simulador XP Investimentos")
     print("=" * 65)
 
     RENKO_ENGINE = RenkoFlowEngine(box_points=BOX_POINTS)
+    print("📚 Carregando histórico dos últimos 2 pregões para detecção de GAPs e continuidade de gráfico...")
+    hist_boxes = carregar_historico_renko(SYMBOL, BOX_POINTS, max_dias=2)
+    if hist_boxes:
+        RENKO_ENGINE.load_history(hist_boxes)
+        gaps_count = sum(1 for b in hist_boxes if b.get("isGap"))
+        print(f"✅ Histórico carregado com sucesso: {len(hist_boxes)} boxes ativos | {gaps_count} GAPs identificados e filtrados!")
+    else:
+        print("ℹ️ Nenhum histórico prévio encontrado. O motor iniciará a partir do primeiro tick ao vivo.")
+
     ORDER_MANAGER = MT5OrderManager(symbol=SYMBOL, contracts=MAIN_CONTRACTS, magic_number=MAGIC_NUMBER)
 
     server = await websockets.serve(ws_handler, WS_HOST, WS_PORT)

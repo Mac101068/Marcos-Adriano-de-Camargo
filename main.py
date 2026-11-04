@@ -48,6 +48,20 @@ class StartRequest(BaseModel):
 class RenkoConfigRequest(BaseModel):
     renko_r: Optional[int] = None
     box_points: Optional[int] = None
+    min_delta_threshold: Optional[float] = None
+    min_reversal_delta: Optional[float] = None
+    pyramid_tp_points: Optional[int] = None
+    accumulation_filter_enabled: Optional[bool] = None
+    accumulation_window_boxes: Optional[int] = None
+    accumulation_max_alternations: Optional[int] = None
+    accumulation_min_range_mult: Optional[float] = None
+    mae_trailing_stop_enabled: Optional[bool] = None
+    daily_limits_enabled: Optional[bool] = None
+    daily_profit_target: Optional[float] = None
+    daily_stop_loss: Optional[float] = None
+    daily_trailing_enabled: Optional[bool] = None
+    daily_trailing_trigger: Optional[float] = None
+    daily_trailing_giveback: Optional[float] = None
 
 class SimulationRequest(BaseModel):
     ativo: str = "WINZ26"
@@ -94,22 +108,7 @@ async def renko_config(req: RenkoConfigRequest):
     import json
     from datetime import datetime
     from web_app import state
-    if req.box_points is not None:
-        pts = int(req.box_points)
-        r = max(1, pts // 5)
-    elif req.renko_r is not None:
-        r = int(req.renko_r)
-        pts = r * 5
-    else:
-        return JSONResponse(content={"success": False, "message": "Parâmetro inválido"})
 
-    state.renko_r = r
-    state.renko_box_pts = pts
-    if state.renko_engine:
-        state.renko_engine.box_points = pts
-    state.log(f"Parâmetro Renko ajustado para {r}R ({pts} pontos)")
-
-    # Salva em renko_config.json preservando todas as configurações avançadas
     config_path = os.path.join(os.path.dirname(__file__), "renko_config.json")
     cfg = {}
     if os.path.exists(config_path):
@@ -118,23 +117,74 @@ async def renko_config(req: RenkoConfigRequest):
                 cfg = json.load(f)
         except Exception:
             cfg = {}
-    cfg.update({
-        "renko_r": r,
-        "box_points": pts,
-        "pyramid_tp_points": pts,
-        "last_updated": datetime.now().isoformat()
-    })
+
+    r = None
+    pts = None
+    if req.box_points is not None:
+        pts = int(req.box_points)
+        r = max(1, pts // 5)
+    elif req.renko_r is not None:
+        r = int(req.renko_r)
+        pts = r * 5
+
+    if r is not None and pts is not None:
+        state.renko_r = r
+        state.renko_box_pts = pts
+        if state.renko_engine:
+            state.renko_engine.box_points = pts
+        cfg["renko_r"] = r
+        cfg["box_points"] = pts
+        if req.pyramid_tp_points is None:
+            cfg["pyramid_tp_points"] = pts
+        state.log(f"Parâmetro Renko ajustado para {r}R ({pts} pontos)")
+
+    # Atualiza outros parâmetros caso fornecidos
+    if req.pyramid_tp_points is not None:
+        cfg["pyramid_tp_points"] = int(req.pyramid_tp_points)
+    if req.min_delta_threshold is not None:
+        cfg["min_delta_threshold"] = float(req.min_delta_threshold)
+    if req.min_reversal_delta is not None:
+        cfg["min_reversal_delta"] = float(req.min_reversal_delta)
+    if req.accumulation_filter_enabled is not None:
+        cfg["accumulation_filter_enabled"] = bool(req.accumulation_filter_enabled)
+    if req.accumulation_window_boxes is not None:
+        cfg["accumulation_window_boxes"] = int(req.accumulation_window_boxes)
+    if req.accumulation_max_alternations is not None:
+        cfg["accumulation_max_alternations"] = int(req.accumulation_max_alternations)
+    if req.accumulation_min_range_mult is not None:
+        cfg["accumulation_min_range_mult"] = float(req.accumulation_min_range_mult)
+    if req.mae_trailing_stop_enabled is not None:
+        cfg["mae_trailing_stop_enabled"] = bool(req.mae_trailing_stop_enabled)
+    if req.daily_limits_enabled is not None:
+        cfg["daily_limits_enabled"] = bool(req.daily_limits_enabled)
+    if req.daily_profit_target is not None:
+        cfg["daily_profit_target"] = float(req.daily_profit_target)
+    if req.daily_stop_loss is not None:
+        cfg["daily_stop_loss"] = float(req.daily_stop_loss)
+    if req.daily_trailing_enabled is not None:
+        cfg["daily_trailing_enabled"] = bool(req.daily_trailing_enabled)
+    if req.daily_trailing_trigger is not None:
+        cfg["daily_trailing_trigger"] = float(req.daily_trailing_trigger)
+    if req.daily_trailing_giveback is not None:
+        cfg["daily_trailing_giveback"] = float(req.daily_trailing_giveback)
+
+    cfg["last_updated"] = datetime.now().isoformat()
+
     try:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
     except Exception as e:
         print(f"Erro ao salvar renko_config.json: {e}")
+        return JSONResponse(content={"success": False, "message": f"Erro ao salvar arquivo: {e}"})
+
+    msg = f"Configurações e Parâmetros B3 salvos com sucesso!"
+    if r is not None:
+        msg = f"Renko ajustado para {r}R ({pts} pontos) e parâmetros atualizados!"
 
     return JSONResponse(content={
         "success": True,
-        "message": f"Renko ajustado com sucesso para {r}R ({pts} pontos) e salvo na estratégia!",
-        "renko_r": r,
-        "box_points": pts
+        "message": msg,
+        "config": cfg
     })
 
 @app.get("/api/deals/today")
@@ -159,23 +209,15 @@ async def get_deals_today():
         wins = 0
         losses = 0
 
-        # Calcula o offset de fuso horário entre o relógio local (Brasília) e o servidor da corretora MT5
-        now_local = datetime.now()
-        ref_tick = mt5.symbol_info_tick("WINZ26")
-        if ref_tick and ref_tick.time > 0:
-            offset_seconds = round((now_local.timestamp() - ref_tick.time) / 3600.0) * 3600
-        else:
-            offset_seconds = 3 * 3600  # Default 3 horas
-
         # Filtra saídas (entry == 1 ou entry == 2)
         for d in reversed(deals):
             if d.entry in [1, 2]:  # Saída ou Inversão
-                profit = float(d.profit)
-                if profit > 0:
-                    gross_profit += profit
+                pnl_liq = float(d.profit) + float(getattr(d, 'commission', 0.0)) + float(getattr(d, 'swap', 0.0))
+                if pnl_liq > 0:
+                    gross_profit += pnl_liq
                     wins += 1
-                elif profit < 0:
-                    gross_loss += abs(profit)
+                elif pnl_liq < 0:
+                    gross_loss += abs(pnl_liq)
                     losses += 1
 
                 # Formata comentário
@@ -189,10 +231,12 @@ async def get_deals_today():
                 else:
                     tag = comm or "ORDEM MT5"
 
-                tipo_str = "COMPRA" if d.type == 0 else ("VENDA" if d.type == 1 else "SAÍDA")
-                pts = (profit / (0.20 * d.volume)) if d.volume > 0 else 0
+                # No MT5, no fechamento (entry 1 ou 2): deal.type == 1 (DEAL_TYPE_SELL) fecha COMPRA, deal.type == 0 fecha VENDA
+                tipo_str = "COMPRA" if d.type == 1 else ("VENDA" if d.type == 0 else "SAÍDA")
+                pts = (float(d.profit) / (0.20 * d.volume)) if d.volume > 0 else 0
 
-                deal_local_time = datetime.fromtimestamp(d.time + offset_seconds).strftime("%H:%M:%S")
+                # Timestamp direto em horário de Brasília (broker XP)
+                deal_local_time = datetime.utcfromtimestamp(d.time).strftime("%H:%M:%S")
 
                 deals_list.append({
                     "ticket": d.ticket,
@@ -203,10 +247,10 @@ async def get_deals_today():
                     "type": tipo_str,
                     "volume": int(d.volume),
                     "price": float(d.price),
-                    "profit": round(profit, 2),
+                    "profit": round(pnl_liq, 2),
                     "points": round(pts, 0),
                     "comment": tag,
-                    "is_win": profit > 0
+                    "is_win": pnl_liq > 0
                 })
 
         total_trades = wins + losses

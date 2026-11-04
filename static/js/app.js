@@ -456,6 +456,9 @@ function fetchChartData() {
 // ═══════════════════════════════════════════════════════════════
 // STATUS UPDATE
 // ═══════════════════════════════════════════════════════════════
+let isSimulationMode = false;
+let mt5LiveSummary = null;
+
 function updateStatus() {
     fetch('/api/status')
         .then(response => response.json())
@@ -571,13 +574,14 @@ function updateStatus() {
             }
 
             // Metrics
+            isSimulationMode = !!data.simulation_mode;
             document.getElementById('metric-signals').textContent = data.signals_count || 0;
-            document.getElementById('metric-orders').textContent = data.orders_count || 0;
             const qEl = document.getElementById('metric-queue');
             if (qEl) qEl.textContent = data.queue_size || 0;
 
-            // P&L e Estatísticas Renko / Simulação
-            if (data.sim_resultado) {
+            if (isSimulationMode && data.sim_resultado) {
+                // Modo Simulação: exibe dados da simulação
+                document.getElementById('metric-orders').textContent = data.orders_count || 0;
                 const res = data.sim_resultado;
                 const pts = res.pts || 0;
                 const reais = res.reais || (pts * 0.20);
@@ -593,54 +597,91 @@ function updateStatus() {
                 }
                 const winrateEl = document.getElementById('metric-winrate');
                 const ddEl = document.getElementById('metric-drawdown');
+                if (winrateEl) winrateEl.textContent = (res.acerto || 0).toFixed(1) + '%';
+                if (ddEl) ddEl.textContent = `Acerto | DD ${Math.round(res.max_dd_pts || 0)}p`;
+            } else if (!isSimulationMode && mt5LiveSummary) {
+                // Modo Mercado Real: exibe dados reais consolidados do MT5 sem zerar
+                document.getElementById('metric-orders').textContent = mt5LiveSummary.total_trades || 0;
+                const net = mt5LiveSummary.net_profit || 0;
+                const pnlReaisEl = document.getElementById('metric-pnl-reais');
+                const pnlEl = document.getElementById('metric-pnl');
+                if (pnlReaisEl) {
+                    pnlReaisEl.textContent = 'P&L: ' + (net >= 0 ? '+' : '') + net.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                    pnlReaisEl.style.color = net >= 0 ? 'var(--green)' : 'var(--red)';
+                }
+                if (pnlEl) {
+                    const pts = Math.round(net / 0.20);
+                    pnlEl.textContent = (pts >= 0 ? '+' : '') + pts + ' pts';
+                    pnlEl.style.color = pts >= 0 ? 'var(--green)' : 'var(--red)';
+                }
+                const winrateEl = document.getElementById('metric-winrate');
                 if (winrateEl) {
-                    winrateEl.textContent = (res.acerto || 0).toFixed(1) + '%';
+                    winrateEl.textContent = `${(mt5LiveSummary.win_rate || 0).toFixed(1)}%`;
+                    winrateEl.style.color = (mt5LiveSummary.win_rate >= 50) ? 'var(--cyan)' : '#f43f5e';
                 }
-                if (ddEl) {
-                    ddEl.textContent = `Acerto | DD ${Math.round(res.max_dd_pts || 0)}p`;
-                }
+                const ddEl = document.getElementById('metric-drawdown');
+                if (ddEl) ddEl.textContent = 'Acerto MT5 Real';
+            } else {
+                document.getElementById('metric-orders').textContent = data.orders_count || 0;
             }
 
 
             // Account
             if (data.account_info) {
-                document.getElementById('info-login').textContent = data.account_info.login || '-';
-                document.getElementById('info-server').textContent = data.account_info.server || '-';
-                document.getElementById('info-balance').textContent =
-                    'R$ ' + (data.account_info.balance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
-                document.getElementById('info-equity').textContent =
-                    'R$ ' + (data.account_info.equity || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+                const elLogin = document.getElementById('info-login');
+                if (elLogin) elLogin.textContent = data.account_info.login || '-';
+
+                const elServer = document.getElementById('info-server');
+                if (elServer) elServer.textContent = data.account_info.server || '-';
+
+                const elBal = document.getElementById('info-balance');
+                if (elBal) elBal.textContent = 'R$ ' + (data.account_info.balance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+
+                const elEq = document.getElementById('info-equity');
+                if (elEq) elEq.textContent = 'R$ ' + (data.account_info.equity || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 
                 const modeMap = { 0: 'DEMO', 1: 'CONTEST', 2: 'REAL' };
-                document.getElementById('metric-account-mode').textContent =
-                    modeMap[data.account_info.trade_mode] || 'N/A';
+                const elAccMode = document.getElementById('metric-account-mode');
+                if (elAccMode) {
+                    elAccMode.textContent = modeMap[data.account_info.trade_mode] || 'N/A';
+                }
 
-                document.getElementById('metric-balance').textContent =
-                    'R$ ' + (data.account_info.balance || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+                const elMetricBal = document.getElementById('metric-balance');
+                if (elMetricBal) {
+                    elMetricBal.textContent = 'R$ ' + (data.account_info.balance || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+                }
             }
 
             // Signals Table
             const signalsBody = document.getElementById('signals-table-body');
             const lastSignals = data.last_signals || [];
 
-            if (lastSignals.length === 0) {
-                signalsBody.innerHTML = `
-                    <tr>
-                        <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 3rem;">
-                            <i class="bi bi-lightning" style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem; opacity: 0.3;"></i>
-                            Aguardando sinais...
-                        </td>
-                    </tr>
-                `;
-            } else {
-                signalsBody.innerHTML = lastSignals.slice().reverse().map(signal => `
-                    <tr>
-                        <td>${signal.time}</td>
-                        <td class="signal-type">${signal.tipo}</td>
-                        <td><span class="badge-direction ${signal.direcao === 'COMPRA' ? 'badge-compra' : 'badge-venda'}">${signal.direcao}</span></td>
-                        <td style="font-weight: 700;">${signal.preco}</td>
-                    </tr>
-                `).join('');
+            if (signalsBody) {
+                if (lastSignals.length === 0) {
+                    signalsBody.innerHTML = `
+                        <tr>
+                            <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                                <i class="bi bi-lightning" style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem; opacity: 0.3;"></i>
+                                Aguardando sinais...
+                            </td>
+                        </tr>
+                    `;
+                } else {
+                    signalsBody.innerHTML = lastSignals.slice().reverse().map(signal => {
+                        const isBuy = (signal.direcao === 'COMPRA' || signal.direcao === 'BUY');
+                        const badgeClass = isBuy ? 'badge-compra' : 'badge-venda';
+                        const dirText = isBuy ? 'COMPRA' : 'VENDA';
+                        const precoVal = typeof signal.preco === 'number' ? signal.preco.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 }) : signal.preco;
+                        return `
+                        <tr>
+                            <td style="font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; color: var(--text-secondary);">${signal.time}</td>
+                            <td class="signal-type" style="font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 0.68rem;">${signal.tipo}</td>
+                            <td><span class="badge-direction ${badgeClass}">${dirText}</span></td>
+                            <td style="font-weight: 700; font-family: 'JetBrains Mono', monospace; color: var(--text-primary); font-size: 0.72rem;">${precoVal}</td>
+                        </tr>
+                    `;
+                    }).join('');
+                }
             }
 
             // Logs
@@ -964,6 +1005,31 @@ function loadDealsToday() {
                 pfEl.style.color = pf >= 1.0 ? '#22c55e' : '#f59e0b';
             }
 
+            mt5LiveSummary = summary;
+            if (!isSimulationMode) {
+                const topOrders = document.getElementById('metric-orders');
+                if (topOrders) topOrders.textContent = summary.total_trades || 0;
+                const net = summary.net_profit || 0;
+                const topPnlReais = document.getElementById('metric-pnl-reais');
+                const topPnl = document.getElementById('metric-pnl');
+                if (topPnlReais) {
+                    topPnlReais.textContent = 'P&L: ' + (net >= 0 ? '+' : '') + net.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                    topPnlReais.style.color = net >= 0 ? 'var(--green)' : 'var(--red)';
+                }
+                if (topPnl) {
+                    const pts = Math.round(net / 0.20);
+                    topPnl.textContent = (pts >= 0 ? '+' : '') + pts + ' pts';
+                    topPnl.style.color = pts >= 0 ? 'var(--green)' : 'var(--red)';
+                }
+                const topWinrate = document.getElementById('metric-winrate');
+                if (topWinrate) {
+                    topWinrate.textContent = `${(summary.win_rate || 0).toFixed(1)}%`;
+                    topWinrate.style.color = (summary.win_rate >= 50) ? 'var(--cyan)' : '#f43f5e';
+                }
+                const ddEl = document.getElementById('metric-drawdown');
+                if (ddEl) ddEl.textContent = 'Acerto MT5 Real';
+            }
+
             // Atualiza Tabela de Deals
             const tbody = document.getElementById('deals-table-body');
             if (!tbody) return;
@@ -1024,7 +1090,7 @@ if (btnRefreshDeals) {
     });
 }
 
-// Sincroniza configuração de Renko salva ao carregar a página
+// Sincroniza configuração de Renko e Risco salva ao carregar a página
 function syncRenkoConfig() {
     fetch('/api/renko/config')
         .then(res => res.json())
@@ -1051,8 +1117,143 @@ function syncRenkoConfig() {
             if (badgeStrat) {
                 badgeStrat.textContent = `PIRÂMIDE & CONFLUÊNCIA ${r}R`;
             }
+
+            // Atualiza inputs e switches do painel de Gerenciamento de Risco
+            const chkDailyLimits = document.getElementById('chk-daily-limits-enabled');
+            if (chkDailyLimits && cfg.daily_limits_enabled !== undefined) {
+                chkDailyLimits.checked = Boolean(cfg.daily_limits_enabled);
+            }
+            const inputDailyProfit = document.getElementById('input-daily-profit-target');
+            if (inputDailyProfit && cfg.daily_profit_target !== undefined) {
+                inputDailyProfit.value = cfg.daily_profit_target;
+            }
+            const inputDailyStop = document.getElementById('input-daily-stop-loss');
+            if (inputDailyStop && cfg.daily_stop_loss !== undefined) {
+                inputDailyStop.value = cfg.daily_stop_loss;
+            }
+            const chkDailyTrailing = document.getElementById('chk-daily-trailing-enabled');
+            if (chkDailyTrailing && cfg.daily_trailing_enabled !== undefined) {
+                chkDailyTrailing.checked = Boolean(cfg.daily_trailing_enabled);
+            }
+            const inputDailyTrailingTrigger = document.getElementById('input-daily-trailing-trigger');
+            if (inputDailyTrailingTrigger && cfg.daily_trailing_trigger !== undefined) {
+                inputDailyTrailingTrigger.value = cfg.daily_trailing_trigger;
+            }
+            const inputDailyTrailingGiveback = document.getElementById('input-daily-trailing-giveback');
+            if (inputDailyTrailingGiveback && cfg.daily_trailing_giveback !== undefined) {
+                inputDailyTrailingGiveback.value = cfg.daily_trailing_giveback;
+            }
+            const chkAccumulation = document.getElementById('chk-accumulation-filter-enabled');
+            if (chkAccumulation && cfg.accumulation_filter_enabled !== undefined) {
+                chkAccumulation.checked = Boolean(cfg.accumulation_filter_enabled);
+            }
+            const inputAccumulationWindow = document.getElementById('input-accumulation-window');
+            if (inputAccumulationWindow && cfg.accumulation_window_boxes !== undefined) {
+                inputAccumulationWindow.value = cfg.accumulation_window_boxes;
+            }
+            const inputAccumulationAlternations = document.getElementById('input-accumulation-alternations');
+            if (inputAccumulationAlternations && cfg.accumulation_max_alternations !== undefined) {
+                inputAccumulationAlternations.value = cfg.accumulation_max_alternations;
+            }
+            const chkMaeTrailing = document.getElementById('chk-mae-trailing-stop-enabled');
+            if (chkMaeTrailing && cfg.mae_trailing_stop_enabled !== undefined) {
+                chkMaeTrailing.checked = Boolean(cfg.mae_trailing_stop_enabled);
+            }
+            const inputMinDelta = document.getElementById('input-min-delta-threshold');
+            if (inputMinDelta && cfg.min_delta_threshold !== undefined) {
+                inputMinDelta.value = cfg.min_delta_threshold;
+            }
+            const inputMinReversalDelta = document.getElementById('input-min-reversal-delta');
+            if (inputMinReversalDelta && cfg.min_reversal_delta !== undefined) {
+                inputMinReversalDelta.value = cfg.min_reversal_delta;
+            }
+
+            updateRiskBadge();
         })
         .catch(() => {});
+}
+
+function updateRiskBadge() {
+    const badgeRisk = document.getElementById('badge-risk-status');
+    const chkDaily = document.getElementById('chk-daily-limits-enabled');
+    if (!badgeRisk) return;
+    if (chkDaily && chkDaily.checked) {
+        badgeRisk.textContent = 'PROTEÇÃO ATIVA';
+        badgeRisk.style.borderColor = 'rgba(0, 230, 118, 0.4)';
+        badgeRisk.style.color = 'var(--green)';
+    } else {
+        badgeRisk.textContent = 'LIMITES OFF';
+        badgeRisk.style.borderColor = 'rgba(255, 171, 0, 0.4)';
+        badgeRisk.style.color = 'var(--yellow)';
+    }
+}
+
+// Manipuladores dos botões de Gestão de Risco
+const btnSaveRisk = document.getElementById('btn-save-risk-config');
+if (btnSaveRisk) {
+    btnSaveRisk.addEventListener('click', () => {
+        const payload = {
+            daily_limits_enabled: document.getElementById('chk-daily-limits-enabled')?.checked ?? true,
+            daily_profit_target: parseFloat(document.getElementById('input-daily-profit-target')?.value || 1000),
+            daily_stop_loss: parseFloat(document.getElementById('input-daily-stop-loss')?.value || 800),
+            daily_trailing_enabled: document.getElementById('chk-daily-trailing-enabled')?.checked ?? true,
+            daily_trailing_trigger: parseFloat(document.getElementById('input-daily-trailing-trigger')?.value || 800),
+            daily_trailing_giveback: parseFloat(document.getElementById('input-daily-trailing-giveback')?.value || 250),
+            accumulation_filter_enabled: document.getElementById('chk-accumulation-filter-enabled')?.checked ?? true,
+            accumulation_window_boxes: parseInt(document.getElementById('input-accumulation-window')?.value || 6, 10),
+            accumulation_max_alternations: parseInt(document.getElementById('input-accumulation-alternations')?.value || 3, 10),
+            mae_trailing_stop_enabled: document.getElementById('chk-mae-trailing-stop-enabled')?.checked ?? true,
+            min_delta_threshold: parseFloat(document.getElementById('input-min-delta-threshold')?.value || 100),
+            min_reversal_delta: parseFloat(document.getElementById('input-min-reversal-delta')?.value || 75)
+        };
+
+        btnSaveRisk.disabled = true;
+        btnSaveRisk.innerHTML = '<i class="bi bi-hourglass-split"></i> SALVANDO...';
+
+        fetch('/api/renko/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+            .then(res => res.json())
+            .then(data => {
+                showToast(data.message || 'Parâmetros de risco salvos no robô!', data.success ? 'success' : 'error');
+                updateRiskBadge();
+            })
+            .catch(err => {
+                console.error('Erro ao salvar risco:', err);
+                showToast('Erro ao salvar parâmetros de risco', 'error');
+            })
+            .finally(() => {
+                btnSaveRisk.disabled = false;
+                btnSaveRisk.innerHTML = '<i class="bi bi-save2"></i> SALVAR NO ROBÔ';
+            });
+    });
+}
+
+const btnResetRisk = document.getElementById('btn-reset-risk-config');
+if (btnResetRisk) {
+    btnResetRisk.addEventListener('click', () => {
+        if (document.getElementById('input-daily-profit-target')) document.getElementById('input-daily-profit-target').value = 1000;
+        if (document.getElementById('input-daily-stop-loss')) document.getElementById('input-daily-stop-loss').value = 800;
+        if (document.getElementById('input-daily-trailing-trigger')) document.getElementById('input-daily-trailing-trigger').value = 800;
+        if (document.getElementById('input-daily-trailing-giveback')) document.getElementById('input-daily-trailing-giveback').value = 250;
+        if (document.getElementById('chk-daily-limits-enabled')) document.getElementById('chk-daily-limits-enabled').checked = true;
+        if (document.getElementById('chk-daily-trailing-enabled')) document.getElementById('chk-daily-trailing-enabled').checked = true;
+        if (document.getElementById('chk-accumulation-filter-enabled')) document.getElementById('chk-accumulation-filter-enabled').checked = true;
+        if (document.getElementById('input-accumulation-window')) document.getElementById('input-accumulation-window').value = 6;
+        if (document.getElementById('input-accumulation-alternations')) document.getElementById('input-accumulation-alternations').value = 3;
+        if (document.getElementById('chk-mae-trailing-stop-enabled')) document.getElementById('chk-mae-trailing-stop-enabled').checked = true;
+        if (document.getElementById('input-min-delta-threshold')) document.getElementById('input-min-delta-threshold').value = 100;
+        if (document.getElementById('input-min-reversal-delta')) document.getElementById('input-min-reversal-delta').value = 75;
+        updateRiskBadge();
+        showToast('Parâmetros restaurados para o setup padrão 20R', 'info');
+    });
+}
+
+const chkDailyLimitsToggle = document.getElementById('chk-daily-limits-enabled');
+if (chkDailyLimitsToggle) {
+    chkDailyLimitsToggle.addEventListener('change', updateRiskBadge);
 }
 
 // INITIALIZATION & DYNAMIC POLLING

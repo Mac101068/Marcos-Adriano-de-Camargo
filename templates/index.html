@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RoboFluxoB3 | Smart Flow Trading Dashboard</title>
     <meta name="description" content="Painel de controle profissional para o RoboFluxoB3 - Trading automatizado na B3 com análise de fluxo atemporal">
-    <link rel="stylesheet" href="/static/css/style.css?v=40">
+    <link rel="stylesheet" href="/static/css/style.css?v=41">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
@@ -287,6 +287,118 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Gestão de Risco & Parâmetros B3 -->
+                <div class="card" id="card-risk-management">
+                    <div class="card-header risk-card-header">
+                        <div class="card-title">
+                            <i class="bi bi-shield-check card-icon"></i>
+                            Gestão de Risco & Parâmetros
+                        </div>
+                        <span class="badge" id="badge-risk-status" style="border-color: rgba(0, 230, 118, 0.4); color: var(--green); font-size: 0.65rem;">PROTEÇÃO ATIVA</span>
+                    </div>
+                    <div class="card-body" style="padding: 0.5rem 0.6rem;">
+                        <!-- Bloco 1: Travas Diárias de Capital -->
+                        <div class="risk-section-block">
+                            <div class="risk-block-title">
+                                <span><i class="bi bi-cash-stack"></i> Travas Diárias de Capital</span>
+                                <label class="switch" title="Ativar/Desativar travas diárias compulsórias">
+                                    <input type="checkbox" id="chk-daily-limits-enabled" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="form-row-2">
+                                <div>
+                                    <label class="form-mini-label" for="input-daily-profit-target">Meta Diária (R$)</label>
+                                    <input type="number" id="input-daily-profit-target" class="form-mini-input" value="1000" step="50" min="100">
+                                </div>
+                                <div>
+                                    <label class="form-mini-label" for="input-daily-stop-loss">Stop Máximo (R$)</label>
+                                    <input type="number" id="input-daily-stop-loss" class="form-mini-input" value="800" step="50" min="100">
+                                </div>
+                            </div>
+
+                            <div class="form-switch-row" style="margin-top: 0.45rem;">
+                                <span class="form-switch-label">
+                                    <i class="bi bi-graph-up" style="color: var(--cyan); font-size: 0.75rem;"></i>
+                                    Trailing Capital Diário
+                                </span>
+                                <label class="switch" title="Ativar Trailing Stop no lucro acumulado do dia">
+                                    <input type="checkbox" id="chk-daily-trailing-enabled" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="form-row-2">
+                                <div>
+                                    <label class="form-mini-label" for="input-daily-trailing-trigger">Gatilho (R$)</label>
+                                    <input type="number" id="input-daily-trailing-trigger" class="form-mini-input" value="800" step="50" min="100">
+                                </div>
+                                <div>
+                                    <label class="form-mini-label" for="input-daily-trailing-giveback">Recuo Máx (R$)</label>
+                                    <input type="number" id="input-daily-trailing-giveback" class="form-mini-input" value="250" step="25" min="50">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bloco 2: Filtros de Fluxo & Estratégia -->
+                        <div class="risk-section-block">
+                            <div class="risk-block-title">
+                                <span><i class="bi bi-funnel-fill"></i> Filtro de Acumulação</span>
+                                <label class="switch" title="Evita entradas durante consolidações e caixotes laterais">
+                                    <input type="checkbox" id="chk-accumulation-filter-enabled" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="form-row-2">
+                                <div>
+                                    <label class="form-mini-label" for="input-accumulation-window">Janela Boxes</label>
+                                    <input type="number" id="input-accumulation-window" class="form-mini-input" value="6" min="3" max="15">
+                                </div>
+                                <div>
+                                    <label class="form-mini-label" for="input-accumulation-alternations">Máx Alternâncias</label>
+                                    <input type="number" id="input-accumulation-alternations" class="form-mini-input" value="3" min="1" max="6">
+                                </div>
+                            </div>
+
+                            <div class="form-switch-row" style="margin-top: 0.45rem;">
+                                <span class="form-switch-label">
+                                    <i class="bi bi-compass" style="color: var(--green); font-size: 0.75rem;"></i>
+                                    Trailing Ordem Mãe
+                                </span>
+                                <label class="switch" title="Ativar Trailing Stop dinâmico na ordem mãe de surfe">
+                                    <input type="checkbox" id="chk-mae-trailing-stop-enabled" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="form-row-2">
+                                <div>
+                                    <label class="form-mini-label" for="input-min-delta-threshold">Δ Mín Entrada</label>
+                                    <input type="number" id="input-min-delta-threshold" class="form-mini-input" value="100" step="25" min="25">
+                                </div>
+                                <div>
+                                    <label class="form-mini-label" for="input-min-reversal-delta">Δ Mín Reversão</label>
+                                    <input type="number" id="input-min-reversal-delta" class="form-mini-input" value="75" step="25" min="25">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Botões de Ação -->
+                        <div class="btn-group" style="margin-top: 0.35rem;">
+                            <button type="button" class="btn btn-save-risk" id="btn-save-risk-config">
+                                <i class="bi bi-save2"></i>
+                                SALVAR NO ROBÔ
+                            </button>
+                            <button type="button" class="btn btn-reset-risk" id="btn-reset-risk-config" title="Restaurar parâmetros recomendados para Renko 20R">
+                                <i class="bi bi-arrow-counterclockwise"></i>
+                                20R
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Tabela de Sinais -->
@@ -452,7 +564,7 @@
 
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/static/js/app.js?v=40"></script>
+    <script src="/static/js/app.js?v=43"></script>
 </body>
 
 </html>
