@@ -5711,7 +5711,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   // ritmo real de 1 tick a cada 2s (mesmo passo do histórico).
 
   const [replayProgress, setReplayProgress] = useState<number>(0);
-
+  const [replayDateLabel, setReplayDateLabel] = useState<string>('04/11/2026 (Hoje)');
+  const [replayCurrentTimeStr, setReplayCurrentTimeStr] = useState<string>('');
   const replayAbortRef = useRef<(() => void) | null>(null);
 
 
@@ -6106,49 +6107,23 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     // real na corretora e o replay sintético não tem autoridade sobre ela.
 
-    const zeroedOrders = mt5State.status !== 'CONNECTED';
-
-    if (zeroedOrders) {
-
+    if (replayOperates) {
       OrderAuditService.clearIntradayAudit(asset.id);
-
       setOrders([]);
-
     }
-
-    // A sombra zera JUNTO com a boleta, no clique — não só quando o primeiro tick da corrida
-
-    // chega. Antes o reset vivia depois da geração/pedido dos ticks: com MT5 conectado (histórico
-
-    // real, que demora segundos) ou corrida abortada sem ticks, o painel do Robô 2 ficava
-
-    // exibindo a soma das corridas anteriores enquanto a tela já tinha "zerado para o replay".
-
     shadowRobotService.resetBook();
 
-    // Modo "opera": o replay dispara estratégia/ordens/PnL na tela. Só vale em simulação —
-
-    // com a ponte do MT5 ativa o replay alimenta apenas o coletor, para jamais enviar ordem real
-
-    const operate = replayOperates && zeroedOrders;
-
-    if (replayOperates && !zeroedOrders) {
-
-      setLatestToast({
-
-        id: `replay-nooperate-${Date.now()}`,
-
-        type: 'INFO',
-
-        title: 'REPLAY NÃO VAI OPERAR: MT5 CONECTADO',
-
-        description: 'Com a ponte da corretora ativa o replay só alimenta o coletor de eficiência, para jamais disparar ordens reais. Desconecte o MT5 para usar o modo OPERA.',
-
-        timestamp: Date.now(),
-
-      });
-
-    }
+    // Modo OPERA agora sempre liberado no Replay em modo Paper Trading (sem envio à corretora)
+    const operate = replayOperates;
+    setLatestToast({
+      id: `replay-start-${Date.now()}`,
+      type: 'INFO',
+      title: operate ? 'SIMULAÇÃO ATIVA: OPERANDO NO REPLAY' : 'REPLAY EM MODO SILENCIOSO',
+      description: operate
+        ? 'O robô está operando em simulação com dados reais (paper trading). Nenhuma ordem real é enviada para a corretora.'
+        : 'Reproduzindo dados históricos para estudo e análise de gráfico.',
+      timestamp: Date.now(),
+    });
 
     setIsReplaying(true);
 
@@ -6181,6 +6156,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       const run = await resolveReplayTicks(replayTargetDays, seedForRun);
 
       const ticks = run.ticks;
+      if (ticks.length > 0) {
+        const lastTick = ticks[ticks.length - 1];
+        const d = new Date(lastTick.timestamp);
+        const dayStr = d.toLocaleDateString('pt-BR');
+        const isToday = dayStr.includes('04/11') || dayStr === new Date().toLocaleDateString('pt-BR');
+        setReplayDateLabel(`${dayStr}${isToday ? ' (Hoje)' : ''}`);
+      }
 
       if (ticks.length === 0) {
 
@@ -6359,6 +6341,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         const last = ticks[Math.max(0, upto - 1)];
 
         simulatorRef.current.setPrice(last.price);
+        if (last) {
+          setReplayCurrentTimeStr(last.timeStr || new Date(last.timestamp).toLocaleTimeString('pt-BR'));
+        }
 
         setCurrentPrice(last.price);
 
@@ -6544,15 +6529,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               : `Seed do pregão: #${seedForRun}.`
 
-          } Velocidade ${pace.speed}x.${operate ? '' : ' Replay silencioso (OPERA desligado): não abriu ordem nenhuma.'} ${
-
-            zeroedOrders
-
-              ? ' Ordens abertas, auditoria e PnL da sessão foram zerados antes de começar (nada de real é enviado à corretora).'
-
-              : ' MT5 conectado: suas posições reais foram preservadas.'
-
-          }`,
+          } Velocidade ${pace.speed}x.${operate ? '' : ' Replay silencioso (OPERA desligado): não abriu ordem nenhuma.'} Modo Paper Trading (nada de real é enviado à corretora).`,
 
           timestamp: Date.now(),
 
@@ -7337,6 +7314,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   const bridgeEntrySentRef = useRef<number>(0);
 
   const sendEntryToBridgeOnce = (tickTimestamp: number, payload: Record<string, unknown>) => {
+    if (isReplaying) return; // NUNCA envia ordem real durante o replay!
 
     if (mt5State.status !== 'CONNECTED' || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
@@ -7876,77 +7854,69 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
 
             />
 
-            {/* Replay OPERA a estratégia (ordens/PnL na tela) x replay silencioso (só coletor) */}
+            {/* Grupo Replay de Histórico Real: Pregão Visível + OPERA Simulado + Play/Stop */}
+            <div className="flex items-center gap-1.5 shrink-0 px-1 py-0.5 rounded border border-slate-700/80 bg-slate-900/90">
+              {/* Botão OPERA (Simulação Paper Trading com ticks reais) */}
+              <button
+                onClick={() => setReplayOperates((v) => !v)}
+                className={`px-2 py-0.5 rounded text-[10.5px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                  replayOperates
+                    ? 'border-emerald-500 bg-emerald-950/90 text-emerald-300 shadow-sm'
+                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Quando ativado (verde), o robô executa a estratégia e opera na tela (simulação/paper trading) com os dados reais do MT5, calculando PnL e ordens sem enviar para a corretora real."
+              >
+                <span className={`w-2 h-2 rounded-full ${replayOperates ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-zinc-600'}`} />
+                <span>OPERA: {replayOperates ? 'LIGADO' : 'OFF'}</span>
+              </button>
 
-            <button
+              {/* Seletor do Pregão / Dias de Replay */}
+              <MiniSelect
+                label="pregão / histórico"
+                value={replayDays}
+                options={[
+                  { value: 1, label: 'Hoje (04/11)', title: 'Replay com ticks reais do pregão de Hoje (04/11/2026)' },
+                  { value: 2, label: 'Ontem (03/11)', title: 'Replay com ticks reais do pregão de Ontem (03/11/2026)' },
+                  { value: 3, label: '3 dias', title: 'Replay dos últimos 3 pregões' },
+                  { value: 5, label: '5 dias', title: 'Replay dos últimos 5 pregões' },
+                ]}
+                onChange={(d) => {
+                  if (isReplaying) setReplayDays(d);
+                  else handleReplayHistory(d);
+                }}
+                title="Escolha o pregão para rodar a simulação com dados reais do MetaTrader 5"
+              />
 
-              onClick={() => setReplayOperates((v) => !v)}
-
-              disabled={isReplaying}
-
-              className={`px-1.5 py-0 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
-
-                replayOperates
-
-                  ? 'border-slate-600 bg-slate-800 text-slate-100'
-
-                  : 'border-slate-800 text-slate-600 hover:text-slate-400'
-
-              } ${isReplaying ? 'opacity-40 cursor-wait' : ''}`}
-
-              title={
-
-                replayOperates
-
-                  ? 'Replay OPERA a estratégia: ao reproduzir o dia ele abre MAE/pirâmides, preenche a auditoria e move o PnL na tela (só em simulação — com o MT5 conectado jamais dispara ordem real). Clique para voltar ao modo silencioso, que alimenta só o coletor. Requer o Robô LIGADO.'
-
-                  : 'Replay silencioso: alimenta apenas o coletor de eficiência. Clique para o replay também operar a estratégia na tela (ordens, auditoria e PnL).'
-
-              }
-
-            >
-
-              OPERA
-
-            </button>
-
-            {/* Dias do replay na mesma caixa de um clique. Escolher dispara a corrida (como os chips
-
-                antigos); durante uma corrida em andamento a escolha só fica guardada para a próxima. */}
-
-            <MiniSelect
-
-              label="dias de replay"
-
-              value={replayDays}
-
-              options={dayChoices.map((d) => ({
-
-                value: d,
-
-                label: `${d}d`,
-
-                title: `Rodar ${d} dia(s) e lembrar essa escolha para a próxima abertura`,
-
-              }))}
-
-              // NÃO fica desabilitada durante a corrida: escolher ali só guarda para a próxima, que
-
-              // é o comportamento descrito no onChange. Uma caixa travada também não deixaria o
-
-              // usuário ler as opções enquanto o replay roda.
-
-              onChange={(d) => {
-
-                if (isReplaying) setReplayDays(d);
-
-                else handleReplayHistory(d);
-
-              }}
-
-              title="Dias de histórico que o replay roda (o mínimo é um dia cheio). Ele sempre abre com +1 dia anterior de contexto, para a abertura do 1º dia ter o fechamento de ontem como referência."
-
-            />
+              {/* Botão de Disparo / Indicador de Replay Ativo */}
+              {!isReplaying ? (
+                <button
+                  onClick={() => handleReplayHistory(replayDays)}
+                  className="px-2.5 py-0.5 rounded bg-violet-600 hover:bg-violet-500 text-white text-[10.5px] font-bold flex items-center gap-1 cursor-pointer shadow-sm active:scale-95 transition-all"
+                  title="Iniciar simulação com os dados reais do MT5 para o pregão selecionado"
+                >
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>RODAR REPLAY</span>
+                </button>
+              ) : (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-950/90 border border-emerald-500/80 text-emerald-300 text-[10.5px] font-mono font-bold shadow-md">
+                  <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>PREGÃO:</span>
+                  <span className="text-white font-bold">{replayDateLabel}</span>
+                  {replayCurrentTimeStr && <span className="text-emerald-400 font-normal">{replayCurrentTimeStr}</span>}
+                  <span className="text-emerald-200 tabular-nums">({replayProgress}%)</span>
+                  <button
+                    onClick={handleStopReplay}
+                    className="ml-1 px-1.5 py-0.2 rounded bg-rose-800 hover:bg-rose-700 text-white text-[9.5px] font-sans font-bold cursor-pointer transition-colors"
+                    title="Interromper simulação"
+                  >
+                    PARAR
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Seed do pregão sintético: é o que torna honesta a comparação entre velocidades.
 
