@@ -2149,48 +2149,40 @@ async def ws_handler(websocket):
 
             if action == "SET_BOX_POINTS":
                 new_box_pts = float(data.get("boxPoints") or 0)
+                target_sym = str(data.get("symbol") or SYMBOL)
                 if new_box_pts > 0:
                     BOX_POINTS = new_box_pts
                     if RENKO_ENGINE:
                         RENKO_ENGINE.box_points = BOX_POINTS
-                    print(f" 📏 Escala Renko alterada para {BOX_POINTS} pts ({SYMBOL})", flush=True)
+                    if target_sym in ENGINES:
+                        ENGINES[target_sym].box_points = BOX_POINTS
+                    print(f" 📏 Escala Renko alterada para {BOX_POINTS} pts ({target_sym})", flush=True)
                 continue
 
             if action == "GET_BACKFILL":
                 await send_today_session_backfill(websocket, SYMBOL)
                 continue
 
-
-
             if action in ("SELECT_ASSET", "SELECT_SYMBOL"):
-
-# global declarations placed at top of ws_handler
-
                 new_asset_id = str(data.get("assetId") or "").upper()
-
                 new_sym = str(data.get("symbol") or "")
-
-                
+                new_box_pts = float(data.get("boxPoints") or 0)
 
                 if new_asset_id in SUPPORTED_ASSETS:
-
                     spec = SUPPORTED_ASSETS[new_asset_id]
-
                     SYMBOL = spec["symbol"]
-
                     ASSET_LABEL = spec["label"]
-
                     ASSET_DECIMALS = spec["decimals"]
-
                     ASSET_TICK_SIZE = spec["tick_size"]
-
                     ASSET_POINT_VALUE = spec["point_value"]
-
-                    BOX_POINTS = spec["box_points"]
-
+                    BOX_POINTS = new_box_pts if new_box_pts > 0 else spec["box_points"]
                 elif new_sym:
-
                     SYMBOL = new_sym
+                    if new_box_pts > 0:
+                        BOX_POINTS = new_box_pts
+
+                if SYMBOL in ENGINES:
+                    ENGINES[SYMBOL].box_points = BOX_POINTS
 
 
 
