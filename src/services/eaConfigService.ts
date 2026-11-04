@@ -40,6 +40,11 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   minDeltaThreshold: 100, // Delta mínimo de agressão líquida
   adaptiveThresholdEnabled: true, // Limiar adaptativo ligado por padrão: ±mín × fator de regime do momento
   regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
+  consolidationFilterEnabled: false, // Filtro de acumulação: desligado até o bench A/B provar o corte de stops
+  consolidationLookbackBoxes: 10, // Janela da Efficiency Ratio (boxes recentes)
+  consolidationErMax: 0.3, // ER abaixo disso = range curto/acumulação (sinal silenciado)
+  exhaustionFilterEnabled: false, // Filtro de exaustão: opcional, ligado só por decisão do operador
+  exhaustionDeltaRatio: 0.7, // Agressão abaixo disto x box anterior do mesmo lado = exausto
   requireCvdNewExtreme: false,
   confirmationMode: 'BOX_CLOSE',
   stopLossPoints: 0, // Sem Stop Loss fixo (zeragem pela virada do fluxo)
@@ -253,6 +258,11 @@ export class EaConfigService {
           noFixedStopLoss: parsed.noFixedStopLoss ?? DEFAULT_EA_CONFIG.noFixedStopLoss,
           adaptiveThresholdEnabled: parsed.adaptiveThresholdEnabled ?? DEFAULT_EA_CONFIG.adaptiveThresholdEnabled,
           regimeLookbackBoxes: parsed.regimeLookbackBoxes ?? DEFAULT_EA_CONFIG.regimeLookbackBoxes,
+          consolidationFilterEnabled: parsed.consolidationFilterEnabled ?? DEFAULT_EA_CONFIG.consolidationFilterEnabled,
+          consolidationLookbackBoxes: parsed.consolidationLookbackBoxes ?? DEFAULT_EA_CONFIG.consolidationLookbackBoxes,
+          consolidationErMax: parsed.consolidationErMax ?? DEFAULT_EA_CONFIG.consolidationErMax,
+          exhaustionFilterEnabled: parsed.exhaustionFilterEnabled ?? DEFAULT_EA_CONFIG.exhaustionFilterEnabled,
+          exhaustionDeltaRatio: parsed.exhaustionDeltaRatio ?? DEFAULT_EA_CONFIG.exhaustionDeltaRatio,
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
           mt5MaxOrdersPerMinute: parsed.mt5MaxOrdersPerMinute ?? DEFAULT_EA_CONFIG.mt5MaxOrdersPerMinute,
           enablePartialExit: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? false : (parsed.enablePartialExit ?? true),

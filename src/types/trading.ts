@@ -155,6 +155,21 @@ export interface AutomationConfig {
   minDeltaThreshold: number; // Delta mínimo para validar convergência (ex: 200 contratos)
   adaptiveThresholdEnabled: boolean; // Limiar adaptativo: ±minDeltaThreshold × fator de regime do momento
   regimeLookbackBoxes: number; // Nº de boxes recentes na janela do medidor de regime (padrão 20)
+  /**
+   * Filtro de ACUMULAÇÃO (range curto). Com LIGADO, um sinal só vale se o mercado estiver
+   * DIRECIONAL nos últimos `consolidationLookbackBoxes` boxes — medido pela Efficiency Ratio
+   * (deslocamento líquido ÷ caminho percorrido, 0..1). ER abaixo de `consolidationErMax` =
+   * o mercado está só serrando → silencia o sinal (não abre, não piramida, não vira). Padrão DESLIGADO.
+   */
+  consolidationFilterEnabled: boolean;
+  consolidationLookbackBoxes: number; // Nº de boxes recentes na janela da Efficiency Ratio (padrão 10)
+  consolidationErMax: number; // Abaixo desta ER (0..1) considera acumulação/range curto (padrão 0.30)
+  /**
+   * Filtro de EXAUSTÃO (opcional, padrão DESLIGADO): silencia o sinal quando a agressão do box
+   * caiu a `exhaustionDeltaRatio` (ou menos) da do último box do MESMO lado — movimento perdendo força.
+   */
+  exhaustionFilterEnabled: boolean;
+  exhaustionDeltaRatio: number; // Fração da força do box anterior que ainda vale (padrão 0.7)
   requireCvdNewExtreme: boolean; // Exige que o CVD faça nova máxima/mínima
   confirmationMode: 'BOX_CLOSE' | 'TICK_BREAKOUT'; // Disparar no fechamento ou no rompimento
   stopLossPoints: number; // Stop Loss (ex: 100 pontos = 2 boxes)

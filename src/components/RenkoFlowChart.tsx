@@ -167,6 +167,12 @@ function formatTimeframe(sec: number): string {
   return `${Math.round(sec / 3600)}h`;
 }
 
+// Torque único da "exaustão de fluxo": um box ainda do MESMO lado e acima do limiar, mas cuja
+// agressão caiu a este percentual (ou menos) do box anterior, é marcado CINZA — é o movimento
+// perdendo força, pó de reversão. Ajuste aqui (menor = só exaustão grave fica cinza; maior =
+// mais sensível, mas pode acender cinza em pullback saudável).
+const EXHAUST_DECAY_RATIO = 0.7;
+
 export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   boxes,
   currentBox,
@@ -576,33 +582,22 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Box ativo exibido no quadro fixo
   const activeBox = hoveredBox || (allBoxes.length > 0 ? allBoxes[allBoxes.length - 1] : null);
 
-  // Identifica o status do Heikin-Ashi do activeBox para mostrar no HUD
+  // Identifica o status do Heikin-Ashi do activeBox para mostrar no HUD.
+  // Igual à cor da vela (Melhoria A): governado pela agressão REAL do box, não pela
+  // média suavizada — senão a etiqueta do quadro fixo brigaria com a cor desenhada.
   const activeBoxHaState = useMemo(() => {
-    if (!activeBox || allBoxes.length === 0) return null;
+    if (!activeBox) return null;
+    const effThreshold = minDeltaThreshold * (activeBox.regimeFactor ?? 1);
+    const d = activeBox.delta ?? 0;
+    const decisiveFlow = d !== 0 && Math.abs(d) >= effThreshold;
+    // Espelha a exaustão da vela: compara com o box anterior do mesmo lado.
     const idx = allBoxes.findIndex((b) => b.index === activeBox.index);
-    if (idx < 0) return null;
-
-    // Calcula de forma rápida o estado desse box
-    const prevCvd = idx > 0 ? allBoxes[idx - 1].cvdAtClose : activeBox.cvdAtClose - activeBox.delta;
-    const rawOpen = prevCvd;
-    const rawClose = activeBox.cvdAtClose;
-    const rawHigh = Math.max(rawOpen, rawClose);
-    const rawLow = Math.min(rawOpen, rawClose);
-    const haClose = (rawOpen + rawHigh + rawLow + rawClose) / 4;
-    const haOpen = idx === 0 ? (rawOpen + rawClose) / 2 : (prevCvd + rawClose) / 2;
-
-    const isCurrentUp = haClose >= haOpen;
-    if (idx > 0) {
-      const prevPrevCvd = idx > 1 ? allBoxes[idx - 2].cvdAtClose : allBoxes[0].cvdAtClose - allBoxes[0].delta;
-      const prevHaClose = (prevPrevCvd + allBoxes[idx - 1].cvdAtClose * 2) / 3;
-      const prevHaOpen = prevPrevCvd;
-      const isPrevUp = prevHaClose >= prevHaOpen;
-      if (isCurrentUp !== isPrevUp) {
-        return 'REVERSAL';
-      }
-    }
-    return isCurrentUp ? 'UP' : 'DOWN';
-  }, [activeBox, allBoxes]);
+    const prevDelta = idx > 0 ? allBoxes[idx - 1].delta ?? 0 : 0;
+    const sameSide = d !== 0 && prevDelta !== 0 && Math.sign(d) === Math.sign(prevDelta);
+    const losingForce = sameSide && decisiveFlow && Math.abs(d) <= Math.abs(prevDelta) * EXHAUST_DECAY_RATIO;
+    if (!decisiveFlow || losingForce) return 'REVERSAL';
+    return d > 0 ? 'UP' : 'DOWN';
+  }, [activeBox, allBoxes, minDeltaThreshold]);
 
   // =========================================================================
   // RENDERIZAÇÃO DO CANVAS: RENKO (escala da config) & FLUXO HEIKIN-ASHI
@@ -942,22 +937,31 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const haHigh = Math.max(rawHigh, haOpen, haClose);
       const haLow = Math.min(rawLow, haOpen, haClose);
 
-      const isCurrentUp = haClose >= haOpen;
-      const isPrevUp = prevHa ? prevHa.close >= prevHa.open : isCurrentUp;
-      const isDirectionFlip = prevHa !== null && isCurrentUp !== isPrevUp;
-      const candleBody = Math.abs(haClose - haOpen);
-      const candleRange = Math.max(1, haHigh - haLow);
-      const isDoji = candleBody / candleRange < 0.16;
+      // ── Melhoria A: cor governada pela AGRESSÃO REAL do box, não pela média do HA ──
+      // O formato do candle (open/close/high/low acima) fica igual — é contexto. Mas a
+      // COR agora vem do delta deste box contra o limiar efetivo (fixo × fator de regime),
+      // a mesma régua que o robô usa. Assim a virada acende no exato box em que comprador
+      // ou vendedor vence, em vez de esperar a média suavizada do Heikin-Ashi cruzar.
+      const effThreshold = minDeltaThreshold * (b.regimeFactor ?? 1);
+      const deltaThisBox = b.delta ?? 0;
+      const decisiveFlow = deltaThisBox !== 0 && Math.abs(deltaThisBox) >= effThreshold;
 
-      // Classificação solicitada:
-      // Verde na subida, Vermelho na descida e na Reversão Cinza!
+      // ── Exaustão (pedido do operador): verde/vermelho que PERDE força é pó de reversão. ──
+      // Se o box ainda é decisivo (passa o limiar) mas a agressão caiu bem abaixo do box
+      // anterior DO MESMO LADO, ele vira CINZA: não é indecisão, é o movimento se esgotando.
+      const prevDelta = i > 0 ? displayedBoxes[i - 1].delta ?? 0 : 0;
+      const sameSideAsPrev =
+        deltaThisBox !== 0 && prevDelta !== 0 && Math.sign(deltaThisBox) === Math.sign(prevDelta);
+      const losingForce =
+        sameSideAsPrev && decisiveFlow && Math.abs(deltaThisBox) <= Math.abs(prevDelta) * EXHAUST_DECAY_RATIO;
+
+      // Cinza = indecisão (nenhum lado passou o limiar) OU exaustão (perdeu força).
+      // Verde/vermelho = agressão decisiva e segurando (ou acelerando) a força.
       let state: 'UP' | 'DOWN' | 'REVERSAL';
-      if (isDirectionFlip || isDoji) {
-        state = 'REVERSAL'; // Reversão / Transição de Fluxo -> CINZA
-      } else if (isCurrentUp) {
-        state = 'UP'; // Subida -> VERDE
+      if (!decisiveFlow || losingForce) {
+        state = 'REVERSAL';
       } else {
-        state = 'DOWN'; // Descida -> VERMELHO
+        state = deltaThisBox > 0 ? 'UP' : 'DOWN';
       }
 
       const colorFill = state === 'REVERSAL' ? '#a1a1aa' : state === 'UP' ? '#10b981' : '#ef4444';

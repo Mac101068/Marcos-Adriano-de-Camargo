@@ -30,6 +30,41 @@ export interface ConvergenceSeriesLabels {
   gainLabelDown?: string;
 }
 
+/**
+ * Efficiency Ratio (Kaufman) das últimas `lookback` fechadas de barra (inclusa a atual):
+ * |deslocamento líquido| ÷ Σ|passo a passo|. Próximo de 1 = tendência limpa; perto de 0 =
+ * o mercado gira em círculo (acumulação/range curto). Adimensional — sem número físico
+ * por ativo (regra dos limiares calculados). Sem janela completa (warm-up) devolve 1, para
+ * NUNCA travar entrada no começo da série.
+ */
+function efficiencyRatio(previousBoxes: RenkoBox[], box: RenkoBox, lookback: number): number {
+  const k = Math.max(2, Math.round(lookback) || 10);
+  const series = [...previousBoxes.slice(-(k - 1)), box];
+  if (series.length < k) return 1;
+  let path = 0;
+  for (let i = 1; i < series.length; i++) path += Math.abs(series[i].close - series[i - 1].close);
+  if (path <= 0) return 1;
+  const net = Math.abs(series[series.length - 1].close - series[0].close);
+  return Math.min(1, net / path);
+}
+
+/**
+ * Exaustão de fluxo: a agressão do box atual caiu a `ratio` (ou menos) da do último box
+ * anterior DO MESMO LADO (não só o vizinho — evita travar num box isolado). Sem comparável
+ * (primeiro do lado) devolve false: deixa o sinal passar.
+ */
+function isExhaustedFlow(previousBoxes: RenkoBox[], box: RenkoBox, ratio: number): boolean {
+  const d = box.delta ?? 0;
+  if (d === 0) return false;
+  for (let i = previousBoxes.length - 1; i >= 0; i--) {
+    const pd = previousBoxes[i].delta ?? 0;
+    if (pd !== 0 && Math.sign(pd) === Math.sign(d)) {
+      return Math.abs(d) <= Math.abs(pd) * ratio;
+    }
+  }
+  return false;
+}
+
 export function evaluateBoxConvergence(
   box: RenkoBox,
   config: AutomationConfig,
@@ -54,6 +89,20 @@ export function evaluateBoxConvergence(
   const limitSell = adaptive ? meter!.getPercentileLimit('SELL', SESSION_PERCENTILE, config.minDeltaThreshold) : config.minDeltaThreshold;
   const factorLabel = adaptive ? ' | limiar = P60 do pregão' : '';
 
+  // ── Filtros de regime (F2): ACUMULAÇÃO (range curto) e EXAUSTÃO ─────────────
+  // Silenciam ENTRADAS quando o mercado está só serrando (deslocamento líquido baixo frente
+  // ao caminho) ou o movimento perdeu força. Só rodam com o respectivo toggle LIGADO (padrão:
+  // desligado) e valem para QUALQUER sinal — entrada nova, piramidação e flip, pois todos
+  // nascem daqui. É a correção dos "vários stops em região de acumulação".
+  const consolidating =
+    config.consolidationFilterEnabled === true &&
+    efficiencyRatio(previousBoxes, box, config.consolidationLookbackBoxes ?? 10) <
+      (config.consolidationErMax ?? 0.3);
+  const exhausting =
+    config.exhaustionFilterEnabled === true &&
+    isExhaustedFlow(previousBoxes, box, config.exhaustionDeltaRatio ?? 0.7);
+  const regimeBlock = consolidating || exhausting;
+
   // SE A ESTRATÉGIA ATIVA FOR: PIRÂMIDE DE CONFLUÊNCIA FLUXO & RENKO 10R
   if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
     if (box.direction === 'UP') {
@@ -61,6 +110,9 @@ export function evaluateBoxConvergence(
       // agressão compradora acima do limiar do momento — blocos fracos não sinalizam)
       if (adaptive && box.delta < limitBuy) {
         return { isConvergence: false };
+      }
+      if (regimeBlock) {
+        return { isConvergence: false }; // acumulação/exaustão: não sinaliza compra
       }
       return {
         isConvergence: true,
@@ -72,6 +124,9 @@ export function evaluateBoxConvergence(
       // Bloco vermelho fechado: gera venda na pirâmide (mesmo gate adaptativo, lado vendedor)
       if (adaptive && box.delta > -limitSell) {
         return { isConvergence: false };
+      }
+      if (regimeBlock) {
+        return { isConvergence: false }; // acumulação/exaustão: não sinaliza venda
       }
       return {
         isConvergence: true,
@@ -99,7 +154,7 @@ export function evaluateBoxConvergence(
         cvdOk = box.cvdAtClose >= maxPrevCvd;
       }
 
-      if (cvdOk) {
+      if (cvdOk && !regimeBlock) {
         return {
           isConvergence: true,
           type: 'BUY_CONVERGENCE',
@@ -129,7 +184,7 @@ export function evaluateBoxConvergence(
         cvdOk = box.cvdAtClose <= minPrevCvd;
       }
 
-      if (cvdOk) {
+      if (cvdOk && !regimeBlock) {
         return {
           isConvergence: true,
           type: 'SELL_CONVERGENCE',

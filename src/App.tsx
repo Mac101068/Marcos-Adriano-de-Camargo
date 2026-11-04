@@ -34,6 +34,8 @@ import type { HedgeBook, HedgeSideBook } from './components/BoletaTicket';
 import { getBridgeToken } from './utils/bridgeSecurity';
 import { seriesCollectorService } from './services/seriesCollectorService';
 import { shadowRobotService } from './services/shadowRobotService';
+import { roundAuditService, buildRound } from './services/roundAuditService';
+import type { SeriesKey } from './utils/paperStrategyBot';
 import type { SessionRegimeMeter } from './utils/sessionRegime';
 import { SimulatorView } from './components/SimulatorView';
 import { B3MarketSimulator, generateHistoricalTicks, randomReplaySeed } from './utils/marketSimulator';
@@ -187,8 +189,8 @@ export default function App() {
     return saved >= 1 ? Math.min(10, Math.round(saved)) : 1;
   });
   // Replay de histórico: quantos dias a setinha amarela da tira de status vai rodar.
-  // MÍNIMO ABSOLUTO DE 1 DIA — abrir a plataforma já dispara isso sozinho (ver efeito
-  // do bootReplay), então o gráfico nasce com uma sessão inteira em vez de minuto a minuto.
+  // MÍNIMO ABSOLUTO DE 1 DIA — a plataforma acorda parada (regra do Ciclo 12), então o replay
+  // só anda pelo clique na seta; não existe mais "bootReplay" disparando na abertura.
   const [replayDays, setReplayDays] = useState<number>(() => {
     const saved = Number(localStorage.getItem('fluxo_replay_days_v1'));
     return saved >= 1 ? Math.min(10, Math.round(saved)) : 1;
@@ -2642,6 +2644,9 @@ export default function App() {
     days: number; speed: number; seed: number; operated: boolean; aborted: boolean;
     source: 'REAL' | 'SYNTHETIC'; volumeSource?: VolumeSource; tickCount: number;
   } | null>(null);
+  // Instante (relógio de parede) em que a última corrida começou — piso para isolar as ORDENS REAIS
+  // desta rodada no ledger (o livro real usa Date.now(); sombra e coletor entram por snapshot).
+  const roundStartTsRef = useRef<number>(0);
   useEffect(() => {
     if (isReplaying) return;
     const meta = pendingReplayMetaRef.current;
@@ -2658,6 +2663,37 @@ export default function App() {
       trades: closedRun.length,
       openCount: orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
     });
+    // LEDGER DE RODADAS (Raio-X): congela ESTA corrida como um registro reauditável, somando as
+    // ações das QUATRO automações que participaram (robô real + boleta + MT5 no livro real, Robô 2
+    // na sombra e as 6 séries no coletor). Persiste em localStorage, sobrevive a F5 e exporta CSV.
+    try {
+      const shadowSnap = shadowRobotService.getSnapshot();
+      const collectorSnap = seriesCollectorService.getSnapshot();
+      const now = Date.now();
+      const round = buildRound({
+        startedAt: roundStartTsRef.current || now,
+        finishedAt: now,
+        roundStartTs: roundStartTsRef.current || now,
+        meta,
+        assetId: asset.id,
+        assetSymbol: asset.primarySymbol,
+        boxLabel: renkoScaleLabel(config.boxPoints, asset),
+        strategyName: activeStrategyName,
+        strategyId: config.strategyId ?? null,
+        // Com MT5 conectado os ticks ao vivo também alimentam sombra e coletor → rodada 'mista'
+        // (a tela avisa, em vez de atribuir a atividade ao vivo silenciosamente ao replay).
+        liveMix: mt5State.status === 'CONNECTED',
+        realOrders: orders,
+        shadowTrades: shadowSnap.trades,
+        collectorTrades: (Object.keys(collectorSnap.series) as SeriesKey[]).map((k) => ({
+          series: k,
+          trades: collectorSnap.series[k].trades,
+        })),
+      });
+      roundAuditService.record(round);
+    } catch {
+      // Ledger é anexo de auditoria: uma falha aqui jamais pode quebrar o fim do replay na tela.
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReplaying]);
 
@@ -2733,6 +2769,9 @@ export default function App() {
 
   const handleReplayHistory = (days: number) => {
     if (isReplaying) return;
+    // Instala o marco de início desta corrida (relógio de parede): o ledger isola as ORDENS REAIS
+    // desta rodada por este piso. Sombra e coletor são zerados abaixo, então entram por snapshot.
+    roundStartTsRef.current = Date.now();
     // Tempo mínimo de uma corrida: 1 dia inteiro (nunca "só alguns minutos")
     const replayTargetDays = Math.max(1, Math.min(10, Math.round(days)));
     setReplayDays(replayTargetDays);
@@ -3592,11 +3631,12 @@ export default function App() {
         <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1 overflow-x-auto no-scrollbar">
           {/* ── REPLAY DO SIMULADOR (discreto, na cor apenas a setinha) ──
               Roda o histórico desde a PRIMEIRA barra (mínimo 1 dia) desenhando o período
-              aos poucos; na abertura da plataforma já se dispara sozinho. Clicar de novo para
+              aos poucos; NUNCA dispara sozinho na abertura — a plataforma acorda parada e
+              vazia (regra do Ciclo 12), o replay só anda por clique aqui. Clicar de novo para
               parar. O chip "Nx" é a velocidade do replay e do feed ao vivo. */}
           <div
             className="flex items-center gap-1 shrink-0 rounded-md border border-slate-800 bg-slate-900/70 px-1 py-0"
-            title="Simulador: reproduz o histórico desde a primeira barra (mínimo 1 dia cheio). Ao abrir a plataforma isso já dispara sozinho, sem precisar da aba Simulador."
+            title="Simulador: reproduz o histórico desde a primeira barra (mínimo 1 dia cheio). A plataforma acorda parada — o replay nunca roda sozinho; clique para rodar, sem precisar da aba Simulador."
           >
             <button
               onClick={() => (isReplaying ? handleStopReplay() : handleReplayHistory(replayDays))}

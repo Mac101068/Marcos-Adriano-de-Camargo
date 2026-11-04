@@ -13,11 +13,16 @@ import {
   Bot,
   Database,
   Radio,
+  ClipboardList,
+  Download,
+  Trash2,
 } from 'lucide-react';
 import { AutomationConfig, MT5ConnectionState } from '../types/trading';
 import { ChartSeries } from '../utils/barEngines';
 import { SeriesKey } from '../utils/paperStrategyBot';
 import { seriesCollectorService, SERIES_LABEL } from '../services/seriesCollectorService';
+import { roundAuditService, ROUND_SOURCE_LABEL, type RoundRecord, type RoundAction } from '../services/roundAuditService';
+import { CollapsibleSection } from './CollapsibleSection';
 import { sessionCloseLockLabel } from '../utils/sessionRules';
 import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, renkoScaleLabel } from '../assets/assetRegistry';
 
@@ -140,6 +145,214 @@ const GlossaryItem: React.FC<{ term: string; children: React.ReactNode }> = ({ t
   </details>
 );
 
+// ==============================================================================================
+// RODADAS — auditoria por corrida de replay (ledger persistente do roundAuditService).
+// ==============================================================================================
+
+const money = (v: number) => `R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const pnlClass = (v: number) => (v > 0 ? 'text-emerald-400' : v < 0 ? 'text-rose-400' : 'text-slate-400');
+const volumeTag = (v?: string) =>
+  v === 'TICK' ? 'volume do tick' : v === 'M1_RATE' ? 'volume M1' : v === 'NONE' ? 'SEM volume' : undefined;
+
+/** Uma linha da timeline: cada ação que uma automação produziu naquela rodada. */
+const ActionRow: React.FC<{ a: RoundAction }> = ({ a }) => {
+  const seriesLabel = a.series && a.series !== 'shadow' ? SERIES_LABEL[a.series as SeriesKey] : undefined;
+  return (
+    <div className="flex items-start gap-2 text-[11px] border-b border-slate-800/60 py-1.5 last:border-0">
+      <span className="font-mono text-slate-500 shrink-0 w-[80px]" title={a.clock === 'wall' ? 'relógio da tela (ordem real)' : 'hora da barra simulada (papel)'}>
+        {a.timeStr} <span className="text-slate-600 text-[9px]">{a.clock === 'wall' ? 'tela' : 'barra'}</span>
+      </span>
+      <span className="shrink-0 rounded bg-slate-800 border border-slate-700 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-slate-300">
+        {ROUND_SOURCE_LABEL[a.source]}
+      </span>
+      <span className="flex-1 min-w-0">
+        <span className="flex items-center gap-1.5 flex-wrap">
+          {a.side && (
+            <span className={`font-bold ${a.side === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {a.side === 'BUY' ? '▲' : '▼'} {a.side === 'BUY' ? 'COMPRA' : 'VENDA'}
+            </span>
+          )}
+          {seriesLabel && <span className="text-slate-500">· {seriesLabel}</span>}
+          {a.contracts ? <span className="text-slate-500">· {a.contracts} ctros</span> : null}
+          {a.pnl !== undefined && (
+            <span className={`ml-auto font-mono shrink-0 ${pnlClass(a.pnl)}`}>
+              {a.pnl >= 0 ? '+' : ''}
+              {money(a.pnl)}
+            </span>
+          )}
+        </span>
+        <span className="block text-slate-400 leading-snug mt-0.5">{a.detail}</span>
+      </span>
+    </div>
+  );
+};
+
+const MetaRow: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+  <>
+    <span>{label}</span>
+    <b className="text-slate-100 text-right">{value}</b>
+  </>
+);
+
+const SourceLine: React.FC<{ name: string; count: number; note?: string }> = ({ name, count, note }) => (
+  <div className="flex items-center justify-between gap-2 text-[11px] py-0.5">
+    <span className="text-slate-300">{name}</span>
+    <span className="font-mono text-slate-100">
+      {count}
+      {note && <span className="text-slate-500"> {note}</span>}
+    </span>
+  </div>
+);
+
+const RoundsAudit: React.FC<{ rounds: RoundRecord[] }> = ({ rounds }) => {
+  const header = (
+    <h3 className="text-xs sm:text-sm font-bold text-slate-100 uppercase tracking-wide flex items-center gap-1.5">
+      <ClipboardList className="w-4 h-4 text-slate-400" /> Rodadas — auditoria por corrida de replay
+    </h3>
+  );
+
+  if (rounds.length === 0) {
+    return (
+      <section>
+        {header}
+        <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-3 text-[11px] text-slate-400 leading-snug">
+          Nenhuma rodada registrada ainda. Rode um replay (botões <b className="text-slate-200">1d / 3d / 5d</b> acima) e
+          a corrida aparece aqui com <b className="text-slate-200">todas as automações</b> que participaram — Robô 1, boleta
+          manual, MT5, Robô 2 (sombra) e Coletor — pronta para auditar e exportar. O registro fica salvo mesmo depois de
+          recarregar a página. <b className="text-slate-200">Nada aqui envia ordens reais.</b>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section>
+      <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+        {header}
+        <span className="text-[10px] uppercase tracking-wider text-slate-500 ml-1">{rounds.length} rodada(s)</span>
+        <div className="flex items-center gap-1.5 ml-auto">
+          <button
+            onClick={() => roundAuditService.exportAllCSV()}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 transition-colors cursor-pointer"
+            title="Exporta todas as rodadas em CSV padrão BR (UTF-8 com BOM, separador ;)"
+          >
+            <Download className="w-3.5 h-3.5" /> Exportar tudo
+          </button>
+          <button
+            onClick={() => {
+              if (window.confirm(`Apagar as ${rounds.length} rodada(s) registradas? O replay e o coletor não são afetados.`)) {
+                roundAuditService.clear();
+              }
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-semibold bg-slate-800/60 hover:bg-rose-500/15 border border-slate-700 hover:border-rose-500/40 text-slate-300 transition-colors cursor-pointer"
+            title="Zera o histórico de rodadas (só o ledger do Raio-X; nada da corretora)"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Zerar
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {rounds.map((r, i) => (
+          <CollapsibleSection
+            key={r.id}
+            icon={ClipboardList}
+            iconClass={r.aborted ? 'text-amber-400' : 'text-emerald-400'}
+            defaultOpen={i === 0}
+            title={`${r.dateLabel} ${r.timeLabel} · ${r.days}d · ${r.speed}x · ${r.operated ? 'OPERA' : 'silencioso'}`}
+            summary={`#${r.seed} · ${r.source === 'REAL' ? 'REAL (MT5)' : 'sintético'} · ${r.counts.total} ação(ões): Robô ${r.counts.robot} · Sombra ${r.counts.shadow} · Coletor ${r.counts.collector}`}
+            trailing={
+              <span className={`font-mono text-[11px] shrink-0 ${pnlClass(r.book.pnl)}`}>
+                {r.book.pnl >= 0 ? '+' : ''}
+                {money(r.book.pnl)}
+              </span>
+            }
+          >
+            {/* Metadados da corrida */}
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-400">
+              <MetaRow label="Origem" value={r.source === 'REAL' ? `HISTÓRICO REAL (MT5)${volumeTag(r.volumeSource) ? ` · ${volumeTag(r.volumeSource)}` : ''}` : `SINTÉTICO · seed #${r.seed}`}
+              />
+              <MetaRow label="Modo" value={r.operated ? 'OPERA (operou a estratégia)' : 'silencioso (só mede)'} />
+              <MetaRow label="Ticks" value={r.tickCount.toLocaleString('pt-BR')} />
+              <MetaRow label="Interrompida?" value={r.aborted ? <span className="text-amber-400">sim, no meio</span> : 'não'} />
+              <MetaRow label="Ativo" value={`${r.assetSymbol} · ${r.boxLabel}`} />
+              <MetaRow label="Estratégia" value={r.strategyName ? `${r.strategyName}${r.strategyId ? ` #${r.strategyId.slice(0, 4)}` : ''}` : '—'} />
+            </div>
+
+            {/* Contabilidade por automação — a integração com TODAS as automações */}
+            <div className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Ações por automação</p>
+              <SourceLine name="Robô 1 (EA)" count={r.counts.robot} />
+              <SourceLine name="Boleta manual" count={r.counts.manual} />
+              <SourceLine name="MT5 real" count={r.counts.mt5} />
+              <SourceLine name="Robô 2 (sombra)" count={r.counts.shadow} />
+              <SourceLine name="Coletor (6 séries)" count={r.counts.collector} />
+              <div className="mt-2 pt-2 border-t border-slate-800/70 grid grid-cols-1 sm:grid-cols-3 gap-1 text-[11px]">
+                <div>
+                  <span className="text-slate-500" title="Só entram no livro real as posições ABERTAS nesta corrida">Livro real</span>{' '}
+                  <b className="text-slate-100">{r.book.trades}t</b>{' '}
+                  <span className="text-emerald-400">{r.book.wins}W</span>/<span className="text-rose-400">{r.book.losses}L</span>
+                  {r.book.breakeven > 0 && <span className="text-slate-400">/{r.book.breakeven}BE</span>}
+                  {r.book.openCount > 0 && <span className="text-slate-500"> · {r.book.openCount} aberta(s)</span>}
+                  <span className={`ml-1 font-mono ${pnlClass(r.book.pnl)}`}>{money(r.book.pnl)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Sombra</span> <b className="text-slate-100">{r.shadow.trades}t</b>
+                  <span className={`ml-1 font-mono ${pnlClass(r.shadow.pnl)}`}>{money(r.shadow.pnl)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Coletor</span> <b className="text-slate-100">{r.collector.trades}t</b>
+                  <span className={`ml-1 font-mono ${pnlClass(r.collector.pnl)}`}>{money(r.collector.pnl)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Timeline auditável */}
+            {r.liveMix && (
+              <p className="text-[10px] text-amber-400/90 leading-snug mb-2">
+                ⚠ Rodada gravada com o <b>MT5 conectado</b>: os ticks AO VIVO também alimentam sombra e
+                coletor, então essas duas linhas podem misturar atividade real da sessão com a do replay.
+                Só o livro real é separado por relógio.
+              </p>
+            )}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                  Linha do tempo ({r.actions.length} ação(ões){r.actionsTruncated > 0 ? ` · ${r.actionsTruncated} fora do teto` : ''})
+                </p>
+                <button
+                  onClick={() => roundAuditService.exportRoundCSV(r)}
+                  className="flex items-center gap-1 text-[10px] font-semibold text-slate-400 hover:text-slate-200 cursor-pointer"
+                  title="Exporta só esta rodada em CSV"
+                >
+                  <Download className="w-3 h-3" /> CSV
+                </button>
+              </div>
+              <p className="text-[9px] text-slate-600 leading-snug mb-1">
+                As ordens reais (relógio da tela) vêm primeiro; sombra e coletor depois, pela hora da
+                barra simulada — os dois relógios não são o mesmo tempo.
+              </p>
+              {r.actions.length === 0 ? (
+                <p className="text-[11px] text-slate-500 py-1">Rodada silenciosa: nenhum trade fechou (sombra e coletor sem liquidação nesta corrida).</p>
+              ) : (
+                <div className="max-h-72 overflow-y-auto pr-1">
+                  {r.actions.slice(0, 40).map((a) => (
+                    <ActionRow key={a.id} a={a} />
+                  ))}
+                  {r.actions.length > 40 && (
+                    <p className="text-[10px] text-slate-500 py-1">… e mais {r.actions.length - 40} ação(ões) — o CSV traz as primeiras 500.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          </CollapsibleSection>
+        ))}
+      </div>
+    </section>
+  );
+};
+
+
 export const SimulatorView: React.FC<SimulatorViewProps> = ({
   isSimulating,
   setIsSimulating,
@@ -165,6 +378,9 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
 }) => {
   useSyncExternalStore(seriesCollectorService.subscribe, seriesCollectorService.getVersion);
   const snap = seriesCollectorService.getSnapshot();
+  // Ledger de rodadas: a página se atualiza sozinha quando uma corrida é registrada no fim do replay.
+  useSyncExternalStore(roundAuditService.subscribe, roundAuditService.getVersion);
+  const rounds = roundAuditService.list();
 
   const mt5Live = mt5Status === 'CONNECTED';
   const intervalMs = Math.max(50, Math.floor(2000 / simulationSpeed));
@@ -435,8 +651,9 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
                 conectado nada é apagado.
                 <span className="text-slate-300"> A corrida agora é <b className="text-slate-200">progressiva</b>: começa
                 na primeira barra e desenha o período todo (mínimo 1 dia) no compasso da velocidade acima — 1x leva ~1min45,
-                2x ~55s, 5x ~15s e 10x roda em ~5s. Já dispara sozinha na abertura da plataforma e o mesmo controle vive na tira de status
-                logo abaixo do menu, então não precisa sair desta aba para escolher o dia.</span>
+                2x ~55s, 5x ~15s e 10x roda em ~5s. A plataforma <b className="text-slate-200">acorda parada e vazia</b> —
+                o replay nunca roda sozinho na abertura (regra do Ciclo 12), só pelo clique aqui ou na seta da tira de
+                status logo abaixo do menu, então não precisa sair desta aba para escolher o dia.</span>
                 <span className="text-slate-300"> No chip <b className="text-slate-200">OPERA</b> da tira de status o
                 replay também <b className="text-slate-200">opera a estratégia de verdade</b>: abre MAE e pirâmides,
                 enche a auditoria e move o PnL enquanto o dia passa (precisa do Robô LIGADO). Desligado, ele fica
@@ -466,6 +683,9 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
             </div>
           </div>
         </section>
+
+        {/* Rodadas — auditoria por corrida (todas as automações, persistente) */}
+        <RoundsAudit rounds={rounds} />
 
         {/* Glossário */}
         <section>

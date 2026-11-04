@@ -1183,7 +1183,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           title="2. Gatilho de Disparo & Tipo de Entrada"
           icon={Zap}
           trailing={<span className="text-[10px] font-mono text-emerald-400 shrink-0">FLUXO ATEMPORAL</span>}
-          summary={`Δ ${config.minDeltaThreshold}${config.adaptiveThresholdEnabled ? ' · adaptativo' : ' · fixo'} · ${config.confirmationMode === 'BOX_CLOSE' ? 'fechamento do box' : 'rompimento no tick'}`}
+          summary={`Δ ${config.minDeltaThreshold}${config.adaptiveThresholdEnabled ? ' · adaptativo' : ' · fixo'}${config.consolidationFilterEnabled ? ' · anti-acumulação' : ''} · ${config.confirmationMode === 'BOX_CLOSE' ? 'fechamento do box' : 'rompimento no tick'}`}
         >
 
           <div className="space-y-3 text-xs">
@@ -1350,6 +1350,90 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 {config.regimeLookbackBoxes} boxes ÷ média do dia, entre 0,5x e 3x) — na Pirâmide, blocos com
                 agressão abaixo do limiar do momento não sinalizam. A medição roda sempre (desligado só volta
                 ao comportamento antigo); o histórico do fator está na aba Avaliação Técnica.
+              </p>
+            </div>
+
+            {/* Filtros de regime (F2) sobre ENTRADAS: acumulação/range curto + exaustão. Vale para as DUAS estratégias. */}
+            <div className="pt-2 mt-1 border-t border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.consolidationFilterEnabled}
+                    onChange={(e) => handleConfigChange('consolidationFilterEnabled', e.target.checked)}
+                    className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer"
+                  />
+                  <span className="font-semibold">Filtro de Acumulação (range curto)</span>
+                </label>
+                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Anti-serra</span>
+              </div>
+              {config.consolidationFilterEnabled && (
+                <div className="space-y-2">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-400">Janela da Direcionalidade</label>
+                      <span className="font-mono text-emerald-400 font-semibold">{config.consolidationLookbackBoxes} boxes</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="4"
+                      max="30"
+                      step="1"
+                      value={config.consolidationLookbackBoxes}
+                      onChange={(e) => handleConfigChange('consolidationLookbackBoxes', Number(e.target.value))}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-400">Corte de Eficiência (ER)</label>
+                      <span className="font-mono text-emerald-400 font-semibold">{config.consolidationErMax.toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.05"
+                      max="0.60"
+                      step="0.05"
+                      value={config.consolidationErMax}
+                      onChange={(e) => handleConfigChange('consolidationErMax', Number(e.target.value))}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+                </div>
+              )}
+              <label className="flex items-center gap-2 text-slate-300 cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  checked={config.exhaustionFilterEnabled}
+                  onChange={(e) => handleConfigChange('exhaustionFilterEnabled', e.target.checked)}
+                  className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer"
+                />
+                <span className="font-semibold">Filtro de Exaustão</span>
+              </label>
+              {config.exhaustionFilterEnabled && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-400">Força mínima vs box anterior</label>
+                    <span className="font-mono text-emerald-400 font-semibold">{Math.round(config.exhaustionDeltaRatio * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.3"
+                    max="0.9"
+                    step="0.05"
+                    value={config.exhaustionDeltaRatio}
+                    onChange={(e) => handleConfigChange('exhaustionDeltaRatio', Number(e.target.value))}
+                    className="w-full accent-emerald-500"
+                  />
+                </div>
+              )}
+              <p className="text-[10px] text-slate-500 leading-snug">
+                Na acumulação os blocos alternam verde/vermelho com volume e o Robô entra dos dois lados,
+                comendo stop atrás de stop. Ligado, o sinal só vale se o mercado estiver <b className="text-slate-400">direcional</b>:
+                a Efficiency Ratio (deslocamento líquido ÷ caminho percorrido) dos últimos{' '}
+                {config.consolidationLookbackBoxes} boxes abaixo de {config.consolidationErMax.toFixed(2)} = range curto, e o
+                bloco não sinaliza (nem abre, nem vira). A Exaustão corta entradas quando a agressão do box caiu a{' '}
+                {Math.round(config.exhaustionDeltaRatio * 100)}% da do anterior do mesmo lado. Desligado = comportamento antigo.
               </p>
             </div>
           </div>

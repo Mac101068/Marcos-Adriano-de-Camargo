@@ -82,7 +82,7 @@ const entryLabel = (c: AutomationConfig) =>
     : `Limit custom ${c.pullbackCustomPoints} pts`;
 
 const thresholdLabel = (c: AutomationConfig) =>
-  `Δ ${c.minDeltaThreshold}${c.adaptiveThresholdEnabled ? ' · adaptativo' : ' · fixo'}`;
+  `Δ ${c.minDeltaThreshold}${c.adaptiveThresholdEnabled ? ' · adaptativo' : ' · fixo'}${c.consolidationFilterEnabled ? ' · anti-acumulação' : ''}`;
 
 const fmtDate = (ts: number) =>
   new Date(ts).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' }) +
@@ -541,6 +541,15 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
                 <Row label="Δ mínimo (base)" value={c.minDeltaThreshold} />
                 <Row label="Limiar adaptativo" value={yn(c.adaptiveThresholdEnabled)} />
                 {c.adaptiveThresholdEnabled && <Row label="Janela (boxes)" value={c.regimeLookbackBoxes} />}
+                <Row label="Filtro de acumulação" value={yn(c.consolidationFilterEnabled)} />
+                {c.consolidationFilterEnabled && (
+                  <>
+                    <Row label="Janela ER (boxes)" value={c.consolidationLookbackBoxes} />
+                    <Row label="Corte ER" value={c.consolidationErMax.toFixed(2)} />
+                  </>
+                )}
+                <Row label="Filtro de exaustão" value={yn(c.exhaustionFilterEnabled)} />
+                {c.exhaustionFilterEnabled && <Row label="Força mín. (razão)" value={c.exhaustionDeltaRatio.toFixed(2)} />}
                 <Row label="Exigir CVD novo extremo" value={yn(c.requireCvdNewExtreme)} />
                 <Row label="Confirmação" value={c.confirmationMode === 'BOX_CLOSE' ? 'Fechamento do box' : 'Rompimento no tick'} />
               </DetailSection>
