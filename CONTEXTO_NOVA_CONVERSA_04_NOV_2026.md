@@ -63,6 +63,14 @@ O sistema é uma plataforma completa e profissional de automação e análise de
 
 ---
 
+### F. Desmembramento e Independência Multiativo Concorrente
+- **Motores Concorrentes no Python**: `bot_mt5_ciclo15.py` agora mantém instâncias independentes em `ENGINES[s]` rodando simultaneamente para `WINZ26`, `WDOZ26` e `BITX26`.
+- **Times & Trades Dedicado**: Cada ativo possui seu próprio buffer de negócios e saldo CVD, com filtros de volume institucionais calibrados (WDO: >= 20 ctros; WIN: >= 40 ctros; BIT: >= 5 ctros) e formatação de casas decimais.
+- **Transição Instantânea**: O frontend (`App.tsx`) armazena `assetStateRef` com o pregão dos 3 ativos em memória contínua, permitindo alternar de aba sem resetar ou perder ticks do histórico.
+- **Magic Numbers e Gestão de Risco Isoladas**: Ordens disparadas com magic numbers exclusivos (WIN: `150101`, WDO: `150201`, BIT: `150301`) e gestão de stop e parciais específicas de cada contrato.
+
+---
+
 ## 3. Arquivos Críticos do Projeto
 
 | Arquivo | Descrição |
@@ -120,3 +128,4 @@ Set-Location "C:\Users\Lucas\Documents\RoboFluxoB3"
 Copie e cole o texto abaixo ao iniciar uma nova conversa com o assistente:
 
 > *"Olá! Estou continuando o desenvolvimento do Robô Fluxo B3. Por favor, leia o arquivo `CONTEXTO_NOVA_CONVERSA_04_NOV_2026.md` na raiz de `C:\Users\Lucas\Documents\RoboFluxoB3` para se situar no estado atual do projeto. Hoje finalizamos a integração da Curva de Patrimônio com dados reais do MT5, o backtest de ticks reais da B3 e o suporte completo a Mini Índice, Mini Dólar e Bitcoin B3 (incluindo correções de auto-escala e o ajuste de R do Renko). Gostaria de prosseguir a partir desse ponto."*
+

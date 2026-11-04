@@ -60,79 +60,66 @@ import websockets
 # ==============================================================================
 
 SUPPORTED_ASSETS = {
-
     "WIN": {
-
         "symbol": "WINZ26",
-
         "continuous": "WIN$",
-
         "label": "Mini-Índice B3",
-
         "decimals": 0,
-
         "tick_size": 5.0,
-
         "point_value": 0.2,
-
         "box_points": 50.0,
-
+        "min_delta": 150,
+        "magic": 150101,
+        "contracts": 2,
+        "sl_points": 50.0,
+        "tp_points": 100.0,
+        "partial_points": 50.0,
     },
-
     "WDO": {
-
         "symbol": "WDOZ26",
-
         "continuous": "WDO$",
-
         "label": "Mini-Dólar B3",
-
         "decimals": 1,
-
         "tick_size": 0.5,
-
         "point_value": 10.0,
-
         "box_points": 5.0,
-
+        "min_delta": 30,
+        "magic": 150201,
+        "contracts": 1,
+        "sl_points": 5.0,
+        "tp_points": 10.0,
+        "partial_points": 5.0,
     },
-
     "BTCBR": {
-
         "symbol": "BITX26",
-
         "continuous": "BIT$",
-
         "label": "Bitcoin B3 (BTCBR / BIT)",
-
         "decimals": 0,
-
         "tick_size": 20.0,
-
         "point_value": 0.1,
-
         "box_points": 100.0,
-
+        "min_delta": 20,
+        "magic": 150301,
+        "contracts": 1,
+        "sl_points": 200.0,
+        "tp_points": 400.0,
+        "partial_points": 200.0,
     },
-
     "BTC": {
-
         "symbol": "BITX26",
-
         "continuous": "BIT$",
-
         "label": "Bitcoin B3 (BTCBR / BIT)",
-
         "decimals": 0,
-
         "tick_size": 20.0,
-
         "point_value": 0.1,
-
         "box_points": 100.0,
-
+        "min_delta": 20,
+        "magic": 150301,
+        "contracts": 1,
+        "sl_points": 200.0,
+        "tp_points": 400.0,
+        "partial_points": 200.0,
     },
-
 }
 
 
@@ -540,24 +527,18 @@ class RegimeMeter:
 
 
 class RenkoFlowEngine:
-
-    def __init__(self, box_points=50):
-
+    def __init__(self, symbol="WINZ26", box_points=50.0, tick_size=5.0, min_delta_threshold=150):
+        self.symbol = symbol
         self.box_points = box_points
-
+        self.tick_size = tick_size
+        self.min_delta_threshold = min_delta_threshold
         self.boxes = []
-
         self.current_box = None
-
         self.cvd = 0.0
-
         self.regime_meter = RegimeMeter(REGIME_LOOKBACK_BOXES)
 
-
-
     def init_engine(self, initial_price, timestamp):
-
-        base_price = round(initial_price / ASSET_TICK_SIZE) * ASSET_TICK_SIZE
+        base_price = round(initial_price / self.tick_size) * self.tick_size
 
         self.current_box = {
 
@@ -750,16 +731,12 @@ class RenkoFlowEngine:
 
 
     def check_convergence(self, box):
-
         delta = box["delta"]
-
         direction = box["direction"]
-
         adaptive = ADAPTIVE_THRESHOLD_ENABLED
-
-        limit_buy = self.regime_meter.get_adaptive_limit(MIN_DELTA_THRESHOLD, "BUY") if adaptive else MIN_DELTA_THRESHOLD
-
-        limit_sell = self.regime_meter.get_adaptive_limit(MIN_DELTA_THRESHOLD, "SELL") if adaptive else MIN_DELTA_THRESHOLD
+        base_thresh = self.min_delta_threshold
+        limit_buy = self.regime_meter.get_adaptive_limit(base_thresh, "BUY") if adaptive else base_thresh
+        limit_sell = self.regime_meter.get_adaptive_limit(base_thresh, "SELL") if adaptive else base_thresh
 
         factor_lbl = f" | volume factor {self.regime_meter.last_factor:.2f}x" if adaptive else ""
 
@@ -1714,6 +1691,42 @@ class MT5OrderManager:
 CONNECTED_CLIENTS = set()
 
 ORDER_MANAGER = None
+
+ENGINES = {}
+ORDER_MANAGERS = {}
+
+def get_asset_spec(sym):
+    sym_u = str(sym).upper()
+    for k, v in SUPPORTED_ASSETS.items():
+        if v["symbol"] == sym_u or sym_u.startswith(k) or k in sym_u:
+            return v
+    return SUPPORTED_ASSETS["WIN"]
+
+def get_or_create_engine(sym):
+    if sym in ENGINES:
+        return ENGINES[sym]
+    spec = get_asset_spec(sym)
+    eng = RenkoFlowEngine(
+        symbol=sym,
+        box_points=spec["box_points"],
+        tick_size=spec["tick_size"],
+        min_delta_threshold=spec.get("min_delta", 150)
+    )
+    ENGINES[sym] = eng
+    return eng
+
+def get_or_create_order_manager(sym):
+    if sym in ORDER_MANAGERS:
+        return ORDER_MANAGERS[sym]
+    spec = get_asset_spec(sym)
+    mgr = MT5OrderManager(
+        symbol=sym,
+        contracts=spec.get("contracts", 1),
+        magic_number=spec.get("magic", MAGIC_NUMBER)
+    )
+    ORDER_MANAGERS[sym] = mgr
+    return mgr
+
 
 RENKO_ENGINE = None
 
@@ -2683,17 +2696,18 @@ STREAM_SYMBOLS = ["WINZ26", "WDOZ26", "BITX26"]
 LAST_TICK_TIMES = {s: 0 for s in STREAM_SYMBOLS}
 
 async def mt5_stream_loop():
-    global LAST_TICK_TIMES, RENKO_ENGINE
+    global LAST_TICK_TIMES, RENKO_ENGINE, ENGINES, ORDER_MANAGERS
     for s in STREAM_SYMBOLS:
         with MT5_LOCK:
             mt5.symbol_select(s, True)
             ref_i = mt5.symbol_info_tick(s)
             if ref_i:
                 LAST_TICK_TIMES[s] = int(ref_i.time_msc)
-                if s == SYMBOL and RENKO_ENGINE:
-                    p0 = float(ref_i.last if ref_i.last > 0 else ref_i.bid)
-                    RENKO_ENGINE.init_engine(p0, LAST_TICK_TIMES[s] + MT5_BRT_OFFSET_MSC)
-                    print(f" 📡 Monitorando Times & Trades ao vivo em '{SYMBOL}' a partir de {p0:.0f} pts...", flush=True)
+                eng = get_or_create_engine(s)
+                p0 = float(ref_i.last if ref_i.last > 0 else ref_i.bid)
+                if p0 > 0:
+                    eng.init_engine(p0, LAST_TICK_TIMES[s] + MT5_BRT_OFFSET_MSC)
+                    print(f" 📡 Times & Trades ao vivo em '{s}' ativo a partir de {p0:.1f} pts...", flush=True)
 
     while True:
         try:
@@ -2708,6 +2722,8 @@ async def mt5_stream_loop():
                     ticks = mt5.copy_ticks_from(s, server_time_sec - 3, 100, mt5.COPY_TICKS_ALL)
 
                 if ticks is not None and len(ticks) > 0:
+                    eng = get_or_create_engine(s)
+                    mgr = get_or_create_order_manager(s)
                     for tick in ticks:
                         raw_msc = int(tick['time_msc'])
                         if raw_msc <= LAST_TICK_TIMES.get(s, 0):
@@ -2722,6 +2738,7 @@ async def mt5_stream_loop():
                         aggressor = "BUY" if (flags & mt5.TICK_FLAG_BUY) else ("SELL" if (flags & mt5.TICK_FLAG_SELL) else "CROSS")
                         ts_msc = raw_msc + MT5_BRT_OFFSET_MSC
 
+                        # Transmissão do TICK independente para a fita de Times & Trades daquele ativo
                         await broadcast_to_web({
                             "type": "TICK",
                             "symbol": s,
@@ -2736,13 +2753,30 @@ async def mt5_stream_loop():
                             }
                         })
 
-                        if s == SYMBOL and RENKO_ENGINE:
-                            new_box, signal, reason = RENKO_ENGINE.process_tick(price, volume, aggressor, ts_msc)
-                            if new_box:
-                                print(f"[{datetime.fromtimestamp(ts_msc/1000).strftime('%H:%M:%S')}] Box {SYMBOL} #{new_box['index']}: {new_box['direction']} | Abertura: {new_box['open']} -> Fech: {new_box['close']}", flush=True)
-                                await broadcast_to_web({"type": "BOX_CLOSED", "symbol": s, "data": new_box})
-                                ORDER_MANAGER.check_and_clean_expired_pending(new_box["index"])
-                                ORDER_MANAGER.watch_closed_pyramids()
+                        # O motor Renko de CADA ativo processa o tick concorrentemente
+                        new_box, signal, reason = eng.process_tick(price, volume, aggressor, ts_msc)
+                        if new_box:
+                            print(f"[{datetime.fromtimestamp(ts_msc/1000).strftime('%H:%M:%S')}] Box {s} #{new_box['index']}: {new_box['direction']} | {new_box['open']} -> {new_box['close']}", flush=True)
+                            await broadcast_to_web({"type": "BOX_CLOSED", "symbol": s, "data": new_box})
+                            mgr.check_and_clean_expired_pending(new_box["index"])
+                            mgr.watch_closed_pyramids()
+
+                            if signal:
+                                print(f" ⚡ SINAL GERADO [{s}]: {signal} ({reason})", flush=True)
+                                await broadcast_to_web({
+                                    "type": "SIGNAL_GENERATED",
+                                    "symbol": s,
+                                    "data": {
+                                        "signal": signal,
+                                        "reason": reason,
+                                        "boxIndex": new_box["index"],
+                                        "price": new_box["close"],
+                                        "timestamp": ts_msc
+                                    }
+                                })
+                                # Se a ponte estiver armada em qualquer cliente, executa com o magic number do ativo
+                                if any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
+                                    mgr.execute_pyramid_confluence(signal, new_box)
 
             await asyncio.sleep(0.01)
         except Exception as exc:
