@@ -93,6 +93,8 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   noFixedStopLoss: true,
   shadowRobot: { ...DEFAULT_SHADOW_ROBOT },
   profileName: '10R Pirâmide & Confluência',
+  // Fase A: preenchido no boot por ensureActiveStrategy; aqui é só o estado "ainda sem vínculo".
+  strategyId: null,
   lastSavedTimestamp: Date.now(),
 };
 
@@ -257,6 +259,9 @@ export class EaConfigService {
           // Robô 2: sempre reassemble — storage antigo não tem o campo, e um objeto parcial
           // não pode deixar `scaleR` undefined (a sombra derivaria pts de undefined).
           shadowRobot: normalizeShadowRobot(parsed.shadowRobot),
+          // Fase A: preserva o vínculo do config ativo com a estratégia. Config antigo sem o campo
+          // volta null e é semeado/vinculado por ensureActiveStrategy no boot do App.
+          strategyId: typeof parsed.strategyId === 'string' && parsed.strategyId ? parsed.strategyId : null,
           lastSavedTimestamp: parsed.lastSavedTimestamp || Date.now(),
         };
       }
@@ -386,6 +391,8 @@ export class EaConfigService {
       // WIN por cima e uma estratégia de WDO$N ficaria com R$/ponto e tick de outro mercado.
       assetId: (ASSETS[candidate.assetId as AssetId] ? candidate.assetId : resolveAsset(candidate.symbol).id) as AssetId,
       profileName: candidate.profileName || 'Configuração Importada',
+      // Fase A: se o JSON importado trouxer um vínculo válido, ele é mantido; senão o boot re-semeia.
+      strategyId: typeof candidate.strategyId === 'string' && candidate.strategyId ? candidate.strategyId : null,
       lastSavedTimestamp: Date.now(),
     };
 

@@ -63,6 +63,15 @@ interface HeaderProps {
   // Janela flutuante de controles do painel Renko (atalho "Dados")
   dadosPanelOpen: boolean;
   onToggleDadosPanel: () => void;
+  /**
+   * Selo da estratégia ativa (Fase A — regra 8/13, mesmo memo da tira de status). Nome + id curto
+   * + ponto vivo/solto; o clique abre o Estúdio. Fica na Zona 1 (sempre visível, inclusive no
+   * celular) porque "em qual estratégia estou escrevendo" é controle primário do operador.
+   */
+  activeStrategyName?: string | null;
+  activeStrategyId?: string | null;
+  activeStrategyLive?: boolean;
+  onOpenStudio?: () => void;
 }
 
 interface MenuItem {
@@ -376,6 +385,39 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
   );
 };
 
+/**
+ * Selo da estratégia ativa. É a resposta curta para "que EA está rodando agora e em qual eu
+ * estou escrevendo". Nome + id curto + ponto: esmeralda = AO VIVO (config materializado de uma
+ * estratégia da biblioteca — a Boleta e o Estúdio escrevem nela); âmbar = SOLTO (config manual
+ * ou estratégia apagada — ainda vale, mas não está vinculado ao banco único). Clique abre o
+ * Estúdio, a casa única de programação/acesso. Chrome neutro: cor só no ponto de status.
+ */
+const StrategySeal: React.FC<{
+  name?: string | null;
+  id?: string | null;
+  live?: boolean;
+  onOpen?: () => void;
+}> = ({ name, id, live, onOpen }) => {
+  const shortId = id ? id.replace(/^strategy-/, '').slice(-4) : null;
+  return (
+    <button
+      onClick={onOpen}
+      title={
+        live
+          ? `Estratégia ativa: ${name || '—'} · AO VIVO (banco único) — editar na Boleta ou no Estúdio grava nela. Clique para abrir o Estúdio.`
+          : `Config atual solto da biblioteca (${name || 'sem nome'}). Edite e salve como estratégia no Estúdio para vinculá-la ao banco único. Clique para abrir o Estúdio.`
+      }
+      className="flex items-center gap-1.5 px-1.5 sm:px-2 py-0.5 rounded-lg border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer max-w-[180px]"
+    >
+      <Palette className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+      <span className="hidden sm:inline text-[9px] uppercase tracking-wider text-slate-500 shrink-0">EA</span>
+      <span className="text-[11px] font-semibold text-slate-100 truncate">{name || '— sem estratégia —'}</span>
+      {shortId && <span className="hidden md:inline text-[9px] font-mono text-slate-500 shrink-0">#{shortId}</span>}
+      <span className={`w-2 h-2 rounded-full shrink-0 ${live ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+    </button>
+  );
+};
+
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
@@ -400,6 +442,10 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleDadosPanel,
   boxWindowOpen,
   onToggleBoxWindow,
+  activeStrategyName,
+  activeStrategyId,
+  activeStrategyLive,
+  onOpenStudio,
 }) => {
   const chartItems: MenuItem[] = [
     { tab: 'chart', label: 'Terminal & Gráficos', icon: Activity },
@@ -418,8 +464,8 @@ export const Header: React.FC<HeaderProps> = ({
   const systemItems: MenuItem[] = [
     { tab: 'python', label: 'Código Python MT5', icon: FileCode },
     { tab: 'docs', label: 'Guia MT5', icon: BookOpen },
-    { tab: 'settings', label: 'Parâmetros', icon: Sliders },
-    { tab: 'studio', label: 'Estúdio de Estratégias', icon: Palette, title: 'Programar, salvar e gerenciar estratégias completas — sem mexer no painel de Parâmetros' },
+    { tab: 'settings', label: 'Parâmetros', icon: Sliders, title: 'O ÚNICO editor de estratégia: ajusta os números da estratégia ATIVA e grava direto na biblioteca (banco único, espelha a boleta)' },
+    { tab: 'studio', label: 'Estúdio de Estratégias', icon: Palette, title: 'A casa das estratégias: criar, ativar, duplicar, renomear, excluir, importar e sincronizar. A edição de parâmetros é na aba Parâmetros.' },
     ...(currentUser.role === 'ADMIN'
       ? [{ tab: 'admin' as TabId, label: 'Rede de Assinantes', icon: Users, title: 'Gestão da rede de assinantes (somente administrador)' }]
       : []),
@@ -440,6 +486,12 @@ export const Header: React.FC<HeaderProps> = ({
           onSelect={onSelectAsset}
           mt5SymbolOk={mt5SymbolOk}
           liveSymbol={liveSymbol}
+        />
+        <StrategySeal
+          name={activeStrategyName}
+          id={activeStrategyId}
+          live={activeStrategyLive}
+          onOpen={onOpenStudio}
         />
       </div>
 

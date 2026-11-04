@@ -16,6 +16,43 @@ import { ASSETS, resolveAsset, type AssetId } from '../assets/assetRegistry';
 const STORAGE_KEY = 'fluxo_strategy_library_v1';
 
 /**
+ * FASE A (banco de dados único): campos de RUNTIME/CONEXÃO que vivem só no config ativo —
+ * nunca vão para a `SavedStrategy`. Todo o RESTO do `AutomationConfig` é campo de estratégia e
+ * tem como fonte autoritativa a biblioteca.
+ */
+const RUNTIME_KEYS: ReadonlySet<keyof AutomationConfig> = new Set<keyof AutomationConfig>([
+  'active',
+  'dataSourceMode',
+  'mt5Host',
+  'mt5Port',
+  'shadowRobot',
+  'lastSavedTimestamp',
+  'strategyId',
+]);
+
+/** Só os campos de runtime presentes em `cfg` (para re-aplicar por cima da estratégia). */
+function pickRuntime(cfg: Partial<AutomationConfig>): Partial<AutomationConfig> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(cfg) as (keyof AutomationConfig)[]) {
+    if (RUNTIME_KEYS.has(key)) out[key as string] = cfg[key];
+  }
+  return out as Partial<AutomationConfig>;
+}
+
+/** Divide um patch em { operational (vai para a estratégia), runtime (fica no config) }. */
+export function splitStrategyPatch(patch: Partial<AutomationConfig>): {
+  operational: Partial<AutomationConfig>;
+  runtime: Partial<AutomationConfig>;
+} {
+  const operational: Record<string, unknown> = {};
+  const runtime: Record<string, unknown> = {};
+  for (const key of Object.keys(patch) as (keyof AutomationConfig)[]) {
+    (RUNTIME_KEYS.has(key) ? runtime : operational)[key as string] = patch[key];
+  }
+  return { operational: operational as Partial<AutomationConfig>, runtime: runtime as Partial<AutomationConfig> };
+}
+
+/**
  * Merge defensivo de qualquer config parcial com o DEFAULT (campos novos que estratégia ou
  * sincronização antiga não tinham voltam saneados). Exportado para o App usar no "Importar
  * tudo" da sincronização de terminal — nenhum caminho aplica config cru sem saneamento.
@@ -28,6 +65,9 @@ export function mergeConfig(partial: unknown): AutomationConfig {
     // Estratégia salva antes da Fase 2 não tem `assetId`: sem resolver pelo símbolo, o spread do
     // DEFAULT devolveria WIN (R$ 0,20/pt) para uma estratégia gravada em WDO$N.
     assetId: (ASSETS[p.assetId as AssetId] ? p.assetId : resolveAsset(p.symbol as string).id) as AssetId,
+    // Fase A: `strategyId` é runtime e NÃO pertence à estratégia, mas sobrevive ao merge do config
+    // ativo (load/import/sync) — sem isto, o spread do DEFAULT o apagaria e o vínculo se perderia.
+    strategyId: typeof p.strategyId === 'string' && p.strategyId ? p.strategyId : null,
   };
 }
 
@@ -132,6 +172,53 @@ class StrategyLibraryStore {
       updatedAt: now,
       config: mergeConfig(config),
     };
+  }
+
+  // ==========================================================================
+  // FASE A — biblioteca como banco de dados único
+  // ==========================================================================
+
+  /**
+   * Materializa o config ativo a partir de uma estratégia: campos de estratégia vêm do
+   * `SavedStrategy.config` (saneados), runtime/conexão vêm de `baseConfig`. Único funil que
+   * produz config ativo — os leitores do App (handleIncomingTick, script, boleta) leem o resultado.
+   */
+  resolveOperational(strategy: SavedStrategy, baseConfig: Partial<AutomationConfig>): AutomationConfig {
+    return {
+      ...mergeConfig(strategy.config),
+      ...pickRuntime(baseConfig),
+      strategyId: strategy.id,
+    };
+  }
+
+  /**
+   * Garante que TODO config ativo tenha uma estratégia por trás:
+   * (1) `strategyId` válido existente → reusa; (2) `profileName` igual a uma estratégia → vincula
+   * pelo id (não duplica); (3) senão cria "Estratégia ativa" a partir dos campos atuais.
+   * Idempotente: depois de vinculado, sempre cai no caso (1).
+   */
+  ensureActiveStrategy(config: AutomationConfig): { strategy: SavedStrategy; strategyId: string } {
+    const list = this.list();
+    if (config.strategyId) {
+      const byId = list.find((s) => s.id === config.strategyId);
+      if (byId) return { strategy: byId, strategyId: byId.id };
+    }
+    if (config.profileName) {
+      const byName = list.find((s) => s.name === config.profileName);
+      if (byName) return { strategy: byName, strategyId: byName.id };
+    }
+    const created = this.save(this.newFromConfig(config, config.profileName?.trim() || 'Estratégia ativa'));
+    return { strategy: created, strategyId: created.id };
+  }
+
+  /** Aplica só os campos de estratégia a uma `SavedStrategy` e salva. Id ausente/inexistente → null. */
+  updateStrategyConfig(strategyId: string, operationalPatch: Partial<AutomationConfig>): SavedStrategy | null {
+    const target = this.list().find((s) => s.id === strategyId);
+    if (!target) return null;
+    // Garante que nenhum runtime escape para dentro da estratégia, mesmo vindo de um patch malformado.
+    const { operational } = splitStrategyPatch(operationalPatch);
+    const merged = mergeConfig({ ...target.config, ...operational });
+    return this.save({ ...target, config: merged, updatedAt: Date.now() });
   }
 }
 

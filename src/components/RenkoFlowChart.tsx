@@ -39,11 +39,14 @@ const STORAGE_KEY_VISIBLE_COUNT = 'fluxo_renko_visible_count_v3';
 const STORAGE_KEY_PRICE_LEVELS = 'fluxo_renko_price_levels_v1';
 // Marca-d'água do ativo no painel de preço: ligada na primeira vez, depois é gosto do operador.
 const STORAGE_KEY_ASSET_WATERMARK = 'fluxo_renko_asset_watermark_v1';
-// Faixa da régua de tempo (eixo X): vive no vão entre o painel de preço e o painel de fluxo
-// (Heikin-Ashi/Delta), onde o operador lê o tempo do gráfico — antes ela era desenhada na
-// base da tela, em cima da própria janela de fluxo.
-const TIME_AXIS_BAND_H = 24;
-const TIME_AXIS_BASELINE = 17; // y do texto dentro da faixa (medido a partir do divisor)
+// Faixa da régua de tempo (eixo X): mora DENTRO do painel de preço, colada acima do divisor — antes
+// ela vivia no topo do painel de fluxo e roubava 28px do indicador. Agora o indicador fica com a
+// janela livre para ler o fluxo inteiro, e o tempo fica onde ele sempre pertenceu: no gráfico. A
+// faixa continua sendo a zona de gesto do eixo X (arrastar = zoom/rolar o tempo; duplo clique = reset).
+const TIME_AXIS_BAND_H = 22;
+const TIME_AXIS_BASELINE = 8; // y do texto, medido PARA CIMA a partir do divisor
+// Folga no topo do painel de fluxo: só a etiqueta do painel mora aí; o indicador começa abaixo.
+const FLOW_TOP_PAD = 16;
 // Recuo inicial do gráfico ("Chart Shift" do MetaTrader): distância, em pixels, entre a aresta
 // direita do tijolo mais novo (o em formação) e a borda direita do desenho. 20px é o padrão.
 const STORAGE_KEY_CHART_SHIFT = 'fluxo_renko_chart_shift_v1';
@@ -743,22 +746,23 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.fill();
     }
 
-    // Etiquetas dos painéis, no mesmo padrão das subfaixas de fluxo
+    // Etiquetas dos painéis, no mesmo padrão das subfaixas de fluxo. A do preço sobe para logo acima
+    // da faixa da régua de tempo (que agora vive dentro do painel de preço), para não brigar com ela.
     if (!isMobile) {
       ctx.font = '8.5px "Plus Jakarta Sans", sans-serif';
       ctx.textAlign = 'left';
       ctx.fillStyle = '#52525b';
       const pricePaneLabel =
         chartSeries === 'range' ? 'PREÇO · RANGE' : chartSeries === 'tempo' ? 'PREÇO · TEMPO' : 'PREÇO · RENKO';
-      ctx.fillText(pricePaneLabel, 4, pricePaneHeight - 10);
+      ctx.fillText(pricePaneLabel, 4, pricePaneHeight - TIME_AXIS_BAND_H - 4);
       // No Heikin-Ashi a própria subfaixa já vem rotulada logo abaixo, então só rotula o
-      // painel de fluxo nos modos onde ele ocupa a janela inteira. A etiqueta nasce depois da
-      // faixa da régua de tempo, colada no topo do fluxo (a faixa é dela, não do painel).
+      // painel de fluxo nos modos onde ele ocupa a janela inteira. A etiqueta senta na folga do
+      // topo: a régua de tempo não mora mais aí, o indicador é dono da janela.
       if (flowViewMode !== 'heikin_ashi') {
         ctx.fillText(
           flowViewMode === 'histogram' ? 'FLUXO · DELTA' : 'FLUXO · HÍBRIDO',
           4,
-          pricePaneHeight + TIME_AXIS_BAND_H + 4
+          pricePaneHeight + FLOW_TOP_PAD - 4
         );
       }
     }
@@ -1039,7 +1043,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const effectiveMaxPrice = centerPrice + effectivePriceRange / 2;
 
     const priceTopMargin = 12;
-    const priceBottomMargin = 16;
+    // Base do painel de preço respeita a faixa da régua de tempo, que agora mora aí dentro.
+    const priceBottomMargin = TIME_AXIS_BAND_H;
     const usablePriceHeight = Math.max(50, pricePaneHeight - priceTopMargin - priceBottomMargin);
 
     priceViewRef.current = {
@@ -1144,9 +1149,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const effectiveMinFlowHa = midHa - effectiveHaRange / 2;
     const effectiveMaxFlowHa = midHa + effectiveHaRange / 2;
 
-    // Topo do fluxo logo abaixo da faixa da régua de tempo (eixo X), que agora mora no vão
-    // entre os dois painéis — o tempo é lido entre o Renko e o Heikin-Ashi, não na base da tela.
-    const flowTopMargin = pricePaneHeight + TIME_AXIS_BAND_H + 4;
+    // Topo do fluxo: usa só a folga da etiqueta do painel. A régua de tempo (eixo X) subiu para
+    // dentro do painel de preço, então o indicador pega a janela desde o divisor.
+    const flowTopMargin = pricePaneHeight + FLOW_TOP_PAD;
     const flowBottomMargin = 16;
     const usableFlowHeight = Math.max(40, flowPaneHeight - (flowTopMargin - pricePaneHeight) - flowBottomMargin);
 
@@ -1869,10 +1874,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     }
 
     // =======================================================================
-    // RÉGUA HORIZONTAL DE TEMPO (EIXO X) — na faixa entre o painel de preço
-    // e o painel de fluxo, logo abaixo do divisor arrastável.
+    // RÉGUA HORIZONTAL DE TEMPO (EIXO X) — dentro do painel de preço, colada
+    // acima do divisor arrastável. O indicador abaixo fica com a janela livre.
     // =======================================================================
-    const timeAxisY = pricePaneHeight + TIME_AXIS_BASELINE;
+    const timeAxisY = pricePaneHeight - TIME_AXIS_BASELINE;
     ctx.fillStyle = '#52525b';
     ctx.font = isMobile ? '8px "JetBrains Mono"' : '9px "JetBrains Mono"';
     ctx.textAlign = 'center';
@@ -2474,8 +2479,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const clampedRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
     const flowPaneH = canvasH * clampedRatio;
     const pricePaneH = canvasH - flowPaneH;
-    // Mesma conta do desenho: faixa da régua de tempo (24) + vão (4) + margem inferior 16
-    const usableFlowH = Math.max(40, flowPaneH - (TIME_AXIS_BAND_H + 4) - 16);
+    // Mesma conta do desenho: folga do topo do fluxo (etiqueta) + margem inferior 16
+    const usableFlowH = Math.max(40, flowPaneH - FLOW_TOP_PAD - 16);
     const clampedSplit = Math.max(0.3, Math.min(0.85, haHistSplit));
     const haBandH = flowViewMode === 'heikin_ashi' ? usableFlowH * clampedSplit : usableFlowH;
     return {
@@ -2488,7 +2493,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       usableFlowH,
       haBandH,
       // Divisor interno Heikin-Ashi ↔ histograma (só existe no modo Heikin-Ashi)
-      histDividerY: pricePaneH + TIME_AXIS_BAND_H + 4 + haBandH + 6,
+      histDividerY: pricePaneH + FLOW_TOP_PAD + haBandH + 6,
     };
   };
 
@@ -2506,7 +2511,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     }
 
     // 1. Clique no divisor entre o gráfico de preço e a janela de fluxo
-    // (tolerância 5: logo abaixo começa a faixa da régua de tempo, que é do eixo X)
+    // (tolerância 5: logo ACIMA fica a faixa da régua de tempo, que é do eixo X)
     if (Math.abs(y - pricePaneH) <= 5 && x < plotW) {
       setDragMode('DIVIDER');
       setDragStartY(e.clientY);
@@ -2540,8 +2545,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         setDragStartPanOffset(pricePanOffset);
         setIsDragging(true);
       }
-    } else if (y > pricePaneH && y <= pricePaneH + TIME_AXIS_BAND_H && x < plotW) {
-      // 4. Clique na faixa da régua de tempo (entre preço e fluxo): arrasta a escala do Eixo X
+    } else if (y > pricePaneH - TIME_AXIS_BAND_H && y < pricePaneH && x < plotW) {
+      // 4. Clique na faixa da régua de tempo (dentro do painel de preço, acima do divisor):
+      // arrasta a escala do Eixo X
       setDragMode('X_AXIS');
       setDragStartX(e.clientX);
       setDragStartScaleX(scaleX);
@@ -2697,8 +2703,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         setScaleY(1.0);
         setPricePanOffset(0);
       }
-    } else if (y > pricePaneH && y <= pricePaneH + TIME_AXIS_BAND_H && x < plotW) {
-      // Duplo clique na faixa da régua de tempo: reseta escala horizontal!
+    } else if (y > pricePaneH - TIME_AXIS_BAND_H && y < pricePaneH && x < plotW) {
+      // Duplo clique na faixa da régua de tempo (no pé do painel de preço): reseta escala horizontal!
       setScaleX(1.0);
       setScrollOffset(0);
     } else {
@@ -2957,10 +2963,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         return 'cursor-row-resize';
       }
       if (mousePos.x >= chartW) return 'cursor-ns-resize';
-      // Faixa da régua de tempo (entre preço e fluxo): o eixo X arrastável
+      // Faixa da régua de tempo (pé do painel de preço, acima do divisor): o eixo X arrastável
       if (
-        mousePos.y > pricePaneH &&
-        mousePos.y <= pricePaneH + TIME_AXIS_BAND_H &&
+        mousePos.y > pricePaneH - TIME_AXIS_BAND_H &&
+        mousePos.y < pricePaneH &&
         mousePos.x < plotW
       ) {
         return 'cursor-ew-resize';

@@ -42,10 +42,30 @@ import {
   AlertCircle,
   Cpu
 } from 'lucide-react';
+import { CollapsibleSection } from './CollapsibleSection';
 
 interface AutomationPanelProps {
   config: AutomationConfig;
   setConfig: React.Dispatch<React.SetStateAction<AutomationConfig>>;
+  /**
+   * FASE A (banco de dados único): editar um parâmetro de estratégia escreve de volta na
+   * biblioteca e devolve o config como visão materializada. Quando presente, TODOS os edits de
+   * campo passam por aqui; sem ela, o painel cai no setConfig antigo (compat).
+   */
+  onPatchStrategy?: (patch: Partial<AutomationConfig>) => void;
+  /**
+   * Fase A (banco único): perfil 1-clique, restaurar padrões e importar JSON carregam um conjunto
+   * inteiro de números. Isso não é um patch de campo — é um pacote que vira estratégia na biblioteca
+   * (atualiza a homônima ou cria uma nova) e é ativado por ela. Sem a prop, o painel cai no caminho
+   * antigo de config apenas, ainda com o Robô pausado.
+   */
+  onApplyConfigBundle?: (cfg: AutomationConfig, name?: string) => void;
+  /**
+   * Fase A (regra 8/13): nome da estratégia ativa resolvido pelo id no App. Este painel é o
+   * EDITOR da estratégia ativa, então o cabeçalho mostra o nome autoritativo (não o `profileName`
+   * que pode estar defasado). Sem ele, cai no `config.profileName` (compat).
+   */
+  activeStrategyName?: string | null;
   simulationSpeed: number;
   setSimulationSpeed: (speed: number) => void;
   onStepTick: () => void;
@@ -65,9 +85,89 @@ function formatBoxes(points: number, boxPoints: number): string {
   return String(Math.round((points / box) * 100) / 100);
 }
 
+/**
+ * Linha de perfil rápido: mesmo formato das linhas do acordeão (título + resumo dos números numa
+ * linha só). O clique aplica o perfil em 1-clique, como antes; a descrição completa fica no
+ * tooltip. Era um card de 4 colunas — virou lista para não lotar a tela.
+ */
+const PresetRow: React.FC<{
+  preset: ConfigPreset;
+  isCurrent: boolean;
+  accent: 'emerald' | 'neutral';
+  onApply: () => void;
+  onDelete?: () => void;
+}> = ({ preset, isCurrent, accent, onApply, onDelete }) => {
+  const c = preset.config;
+  const entrada = c.entryTriggerType === 'PULLBACK_ENTRY' ? 'pullback' : 'a mercado';
+  const summary = `SL ${c.stopLossPoints}p · TP ${c.takeProfitPoints}p · ${entrada} · ${c.contracts} ctros · Δ ${c.minDeltaThreshold}`;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onApply}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onApply();
+        }
+      }}
+      title={preset.description}
+      className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl border text-left cursor-pointer transition-colors ${
+        isCurrent
+          ? accent === 'emerald'
+            ? 'bg-emerald-950/40 border-emerald-500/60 ring-1 ring-emerald-500/30'
+            : 'bg-neutral-950/40 border-neutral-500/60 ring-1 ring-neutral-500/30'
+          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
+      }`}
+    >
+      <span
+        className={`shrink-0 max-w-[92px] truncate text-[9px] font-mono px-1.5 py-0.5 rounded font-bold ${
+          isCurrent
+            ? accent === 'emerald'
+              ? 'bg-emerald-500/20 text-emerald-300'
+              : 'bg-neutral-500/20 text-neutral-300'
+            : 'bg-slate-800 text-slate-400'
+        }`}
+      >
+        {preset.badge}
+      </span>
+      <span className="flex-1 min-w-0">
+        <span className="block text-xs font-semibold text-slate-200 truncate">{preset.name}</span>
+        <span className="block text-[10px] font-mono text-slate-500 mt-0.5 truncate">{summary}</span>
+      </span>
+      {isCurrent && (
+        <span
+          className={`shrink-0 flex items-center gap-1 text-[10px] font-semibold ${
+            accent === 'emerald' ? 'text-emerald-400' : 'text-neutral-400'
+          }`}
+        >
+          <CheckCircle className="w-3 h-3" />
+          ATIVO
+        </span>
+      )}
+      {onDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="shrink-0 text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-500/15 transition-colors cursor-pointer"
+          title={`Excluir perfil "${preset.name}"`}
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
+  );
+};
+
 export const AutomationPanel: React.FC<AutomationPanelProps> = ({
   config,
   setConfig,
+  onPatchStrategy,
+  onApplyConfigBundle,
+  activeStrategyName,
   simulationSpeed,
   setSimulationSpeed,
   onStepTick,
@@ -119,6 +219,11 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
     key: K,
     value: AutomationConfig[K]
   ) => {
+    // Fase A: roteia pelo funil da estratégia ativa (write-through na biblioteca + materialização).
+    if (onPatchStrategy) {
+      onPatchStrategy({ [key]: value } as Partial<AutomationConfig>);
+      return;
+    }
     setConfig((prev) => {
       const updated: AutomationConfig = {
         ...prev,
@@ -148,13 +253,21 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
     const updated: AutomationConfig = {
       ...preset.config,
       profileName: preset.name,
+      // Aplicar um perfil carrega números, não liga o mercado: o boot permanece parado (regra do
+      // projeto) e quem quiser operar usa o On do header.
+      active: false,
       lastSavedTimestamp: Date.now(),
     };
+    if (onApplyConfigBundle) {
+      // Banco único: o perfil entra como estratégia da biblioteca e o config vira a visão dela.
+      onApplyConfigBundle(updated, preset.name);
+      showNotification(`⚡ Perfil "${preset.name}" virou estratégia ativa na biblioteca (Robô pausado).`);
+      return;
+    }
     setConfig(updated);
     EaConfigService.saveConfig(updated);
     showNotification(`⚡ Perfil "${preset.name}" carregado e registrado no EA!`);
   };
-
   const handleCreateCustomProfile = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProfileName.trim()) return;
@@ -186,9 +299,22 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
 
   const confirmResetToDefaults = () => {
     const def = EaConfigService.resetToDefault();
-    setConfig(def);
+    // O que a fábrica entrega hoje é a Pirâmide & Confluência sem SL/TP fixos (ver DEFAULT_EA_CONFIG),
+    // então a estratégia criada no banco tem nome que diz isso — não colide com os cards de perfil.
+    const name = 'Padrão de Fábrica (Pirâmide 10R)';
+    if (onApplyConfigBundle) {
+      // O padrão NÃO apaga a sua estratégia: ele entra como a estratégia homônima do banco e é
+      // ativado. A que estava em uso continua inteira no Estúdio, com os seus números.
+      onApplyConfigBundle({ ...def, profileName: name, active: false }, name);
+      setShowResetConfirmModal(false);
+      showNotification(`🔄 Padrão de fábrica carregado como estratégia "${name}" (Robô pausado).`);
+      return;
+    }
+    const paused = { ...def, profileName: name, active: false };
+    setConfig(paused);
+    EaConfigService.saveConfig(paused); // persiste pausado: o resetToDefault() de cima gravou active:true
     setShowResetConfirmModal(false);
-    showNotification('🔄 Configurações restauradas para o padrão institucional.');
+    showNotification('🔄 Configurações restauradas para o padrão de fábrica (Robô pausado).');
   };
 
   const handleExportJson = () => {
@@ -212,7 +338,16 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
       try {
         const content = event.target?.result as string;
         const imported = EaConfigService.importConfigFromJson(content);
-        setConfig(imported);
+        const name = imported.profileName || 'Configuração Importada';
+        if (onApplyConfigBundle) {
+          // O JSON importado é um conjunto fechado de números: vira estratégia no banco (reusa a
+          // homônima, senão cria) em vez de só por cima do config.
+          onApplyConfigBundle({ ...imported, active: false }, name);
+          showNotification(`⬆️ "${name}" importada para a biblioteca e ativada (Robô pausado).`);
+          return;
+        }
+        setConfig({ ...imported, active: false });
+        EaConfigService.saveConfig({ ...imported, active: false }); // o import gravou com o default active:true
         showNotification('⬆️ Configuração importada e registrada com sucesso!');
       } catch (err) {
         showNotification('❌ Erro ao importar arquivo JSON: formato inválido.');
@@ -294,9 +429,9 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           </div>
           <p className="text-xs text-slate-400 flex flex-wrap items-center gap-3">
             <span>
-              Perfil Ativo:{' '}
+              Estratégia ativa:{' '}
               <strong className="text-emerald-300 font-mono">
-                {config.profileName || '10R Institucional'}
+                {activeStrategyName || config.profileName || '10R Institucional'}
               </strong>
             </span>
             <span className="text-slate-600 hidden sm:inline">•</span>
@@ -450,7 +585,11 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                 Restaurar Padrões de Fábrica do EA?
               </h3>
               <p className="text-xs text-slate-300">
-                Deseja restaurar todas as configurações para a parametrização institucional recomendada (10R, Pullback na Abertura, Parcial +50 pts com Breakeven +5 pts, SL 100 pts e TP 150 pts)?
+                Carrega a parametrização de fábrica (Pirâmide &amp; Confluência, entrada no fechamento do
+                bloco, sem SL/TP fixos na mãe). Ela entra como a estratégia
+                <b> "Padrão de Fábrica (Pirâmide 10R)"</b> na biblioteca e passa a ser a ativa — a
+                estratégia que está em uso <b>não é apagada</b>: continua no Estúdio com os seus números.
+                O Robô fica <b>pausado</b>.
               </p>
             </div>
           </div>
@@ -474,114 +613,41 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
         </div>
       )}
 
-      {/* SELEÇÃO DE PERFIS ESTRATÉGICOS PRONTOS */}
-      <div className="space-y-2.5">
-        <div className="flex items-center justify-between text-xs text-slate-400">
-          <span className="font-semibold text-slate-300 flex items-center gap-1.5">
-            <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
-            Perfis de Configuração Rápida (1-Clique)
+      {/* SELEÇÃO DE PERFIS ESTRATÉGICOS PRONTOS — uma linha por perfil, fechada por padrão */}
+      <CollapsibleSection
+        title="Perfis de Configuração Rápida (1-clique)"
+        icon={SlidersHorizontal}
+        trailing={
+          <span className="text-[10px] font-mono text-slate-500 shrink-0">
+            {builtInPresets.length + customProfiles.length} perfis
           </span>
-          <span className="text-[11px] text-slate-500">
-            A qualquer momento você pode alternar ou customizar cada parâmetro abaixo
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {builtInPresets.map((p) => {
-            const isCurrent = config.profileName === p.name;
-            return (
-              <div
-                key={p.id}
-                onClick={() => handleApplyPreset(p)}
-                className={`p-3 rounded-lg border text-left cursor-pointer transition-all ${
-                  isCurrent
-                    ? 'bg-emerald-950/40 border-emerald-500/60 shadow-md ring-1 ring-emerald-500/40'
-                    : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <span
-                    className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-bold ${
-                      isCurrent
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : 'bg-slate-800 text-slate-400'
-                    }`}
-                  >
-                    {p.badge}
-                  </span>
-                  {isCurrent && (
-                    <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-semibold">
-                      <CheckCircle className="w-3 h-3" />
-                      ATIVO
-                    </span>
-                  )}
-                </div>
-                <h4 className="text-xs font-bold text-slate-100">{p.name}</h4>
-                <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-tight">
-                  {p.description}
-                </p>
-                <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                  <span>SL: {p.config.stopLossPoints} pts</span>
-                  <span>TP: {p.config.takeProfitPoints} pts</span>
-                  <span>
-                    {p.config.entryTriggerType === 'PULLBACK_ENTRY' ? 'Pullback' : 'A Mercado'}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+        }
+        summary={`em uso: ${config.profileName || '—'} · abrir e tocar num perfil aplica na hora`}
+      >
+        <div className="flex flex-col gap-1.5">
+          {builtInPresets.map((p) => (
+            <PresetRow
+              key={p.id}
+              preset={p}
+              accent="emerald"
+              isCurrent={config.profileName === p.name}
+              onApply={() => handleApplyPreset(p)}
+            />
+          ))}
 
           {/* Perfis Salvos pelo Usuário */}
-          {customProfiles.map((cp) => {
-            const isCurrent = config.profileName === cp.name;
-            return (
-              <div
-                key={cp.id}
-                onClick={() => handleApplyPreset(cp)}
-                className={`p-3 rounded-lg border text-left cursor-pointer transition-all relative group ${
-                  isCurrent
-                    ? 'bg-neutral-950/40 border-neutral-500/60 shadow-md ring-1 ring-neutral-500/40'
-                    : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-neutral-500/20 text-neutral-300 font-bold">
-                    OPERADOR
-                  </span>
-                  <div className="flex items-center gap-1">
-                    {isCurrent && (
-                      <span className="flex items-center gap-1 text-[10px] text-neutral-400 font-semibold mr-1">
-                        <CheckCircle className="w-3 h-3" />
-                        ATIVO
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setProfileToDelete({ id: cp.id, name: cp.name });
-                      }}
-                      className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-500/15 transition-colors cursor-pointer"
-                      title={`Excluir perfil "${cp.name}"`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-                <h4 className="text-xs font-bold text-slate-100 truncate">{cp.name}</h4>
-                <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-tight">
-                  {cp.description}
-                </p>
-                <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                  <span>SL: {cp.config.stopLossPoints} pts</span>
-                  <span>TP: {cp.config.takeProfitPoints} pts</span>
-                  <span>{cp.config.contracts} ctro(s)</span>
-                </div>
-              </div>
-            );
-          })}
+          {customProfiles.map((cp) => (
+            <PresetRow
+              key={cp.id}
+              preset={cp}
+              accent="neutral"
+              isCurrent={config.profileName === cp.name}
+              onApply={() => handleApplyPreset(cp)}
+              onDelete={() => setProfileToDelete({ id: cp.id, name: cp.name })}
+            />
+          ))}
         </div>
-      </div>
+      </CollapsibleSection>
 
       {/* ========================================================================= */}
       {/* SELETOR PRINCIPAL DA MODALIDADE DE ESTRATÉGIA QUANTITATIVA                */}
@@ -683,24 +749,19 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
       {/* BLOCO DEDICADO: PARÂMETROS DA ESTRATÉGIA PIRÂMIDE ATIVA (tudo num só lugar) */}
       {/* ========================================================================= */}
       {config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' && (
-        <div className="bg-slate-900/90 border border-emerald-500/40 p-4 rounded-xl space-y-3.5 shadow-lg">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
-            <h3 className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
-              <Layers className="w-4 h-4" />
-              Parâmetros da Pirâmide Ativa
-            </h3>
-            <span className="text-[10px] font-mono text-slate-400 self-start sm:self-auto">
-              ENTRADA: {config.pyramidEntryType === 'BOX_50_LIMIT'
-                ? 'LIMIT A 50% DO BOX'
-                : config.pyramidEntryType === 'BOX_OPEN_LIMIT'
-                ? 'LIMIT NA ENTRADA DO BOX'
-                : 'MERCADO NO FECHAMENTO DO BLOCO'}{' '}
-              · MÁX 10 NÍVEIS{config.moveMainToBreakevenOnPyramidTp ? ' · MÃE NO BREAKEVEN' : ''}
-              {config.trailingStop ? ' · MÃE NO TRAILING' : ''}
-            </span>
-          </div>
+        <CollapsibleSection
+          title="Parâmetros da Pirâmide Ativa"
+          icon={Layers}
+          iconClass="text-emerald-400"
+          trailing={<span className="text-[10px] font-mono text-slate-500 shrink-0">PIRÂMIDE</span>}
+          summary={`ENTRADA: ${config.pyramidEntryType === 'BOX_50_LIMIT'
+            ? 'LIMIT A 50% DO BOX'
+            : config.pyramidEntryType === 'BOX_OPEN_LIMIT'
+            ? 'LIMIT NA ENTRADA DO BOX'
+            : 'MERCADO NO FECHAMENTO DO BLOCO'} · MÁX 10 NÍVEIS${config.moveMainToBreakevenOnPyramidTp ? ' · MÃE NO BREAKEVEN' : ''}${config.trailingStop ? ' · MÃE NO TRAILING' : ''}`}
+        >
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div className="flex flex-col gap-3 text-xs">
             {/* Card 1: ORDEM MÃE (SURFE) */}
             <div className="bg-slate-950/70 p-3.5 rounded-lg border border-slate-800 space-y-2.5">
               <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">🏄 Ordem Mãe (Surfe)</span>
@@ -963,20 +1024,20 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               </p>
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
-      {/* GRADE PRINCIPAL DE CONTROLE DETERMINADA PELO OPERADOR */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* LISTA DE GRUPOS (acordeão): cada bloco é uma linha com o resumo dos dados; o clique
+          abre os campos logo abaixo, um grupo após o outro. Era uma grade de 3 colunas sempre
+          abertas — muita informação na tela de uma vez. */}
+      <div className="flex flex-col gap-2.5">
         {/* BLOCO 1: ATIVO, IDENTIFICAÇÃO DO EA & MAGIC NUMBER */}
-        <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 border-b border-slate-800 pb-2">
-            <span className="flex items-center gap-1.5">
-              <Layers className="w-4 h-4 text-emerald-400" />
-              1. Identificação do EA & Ativo MT5
-            </span>
-            <span className="text-[10px] font-mono text-slate-500">B3 WIN$</span>
-          </div>
+        <CollapsibleSection
+          title="1. Identificação do EA & Ativo MT5"
+          icon={Layers}
+          trailing={<span className="text-[10px] font-mono text-slate-500 shrink-0">B3 WIN$</span>}
+          summary={`${config.symbol} · box ${config.boxPoints} pts · ${config.contracts} ctros · magic ${config.magicNumber}`}
+        >
 
           <div className="space-y-3 text-xs">
             <div>
@@ -1100,30 +1161,30 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               />
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* BLOCO 1.5: ROBÔ 2 (SOMBRA) — segundo robô em papel, ao lado do box Renko, para quem
             procura a configuração no lugar de sempre. Só leitura + escolha: nada daqui dispara ordem. */}
-        <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 border-b border-slate-800 pb-2">
-            <span className="flex items-center gap-1.5">
-              <Cpu className="w-4 h-4 text-emerald-400" />
-              {SHADOW_LABEL}
-            </span>
-            <span className="text-[10px] font-mono text-slate-500">PAPEL · SEM ORDEM REAL</span>
-          </div>
+        <CollapsibleSection
+          title={SHADOW_LABEL}
+          icon={Cpu}
+          trailing={<span className="text-[10px] font-mono text-slate-500 shrink-0">PAPEL · SEM ORDEM REAL</span>}
+          summary={
+            config.shadowRobot?.enabled
+              ? `ligado · escala ${config.shadowRobot?.scaleR}R`
+              : 'desligado'
+          }
+        >
           <ShadowRobotPanel onPatchConfig={(patch) => handleConfigChange('shadowRobot', patch.shadowRobot)} variant="page" />
-        </div>
+        </CollapsibleSection>
 
         {/* BLOCO 2: GATILHO DE DISPARO & MODO DE ENTRADA (PULLBACK OU MERCADO) */}
-        <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 border-b border-slate-800 pb-2">
-            <span className="flex items-center gap-1.5">
-              <Zap className="w-4 h-4 text-emerald-400" />
-              2. Gatilho de Disparo & Tipo de Entrada
-            </span>
-            <span className="text-[10px] font-mono text-emerald-400">FLUXO ATEMPORAL</span>
-          </div>
+        <CollapsibleSection
+          title="2. Gatilho de Disparo & Tipo de Entrada"
+          icon={Zap}
+          trailing={<span className="text-[10px] font-mono text-emerald-400 shrink-0">FLUXO ATEMPORAL</span>}
+          summary={`Δ ${config.minDeltaThreshold}${config.adaptiveThresholdEnabled ? ' · adaptativo' : ' · fixo'} · ${config.confirmationMode === 'BOX_CLOSE' ? 'fechamento do box' : 'rompimento no tick'}`}
+        >
 
           <div className="space-y-3 text-xs">
             {config.strategyMode === 'PULLBACK_RETEST' ? (
@@ -1292,17 +1353,15 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               </p>
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
 
         {/* BLOCO 3: STOP LOSS, TAKE PROFIT E LIMITES FINANCEIROS */}
-        <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 border-b border-slate-800 pb-2">
-            <span className="flex items-center gap-1.5">
-              <Shield className="w-4 h-4 text-emerald-400" />
-              3. Stop Loss, Take Profit & Metas
-            </span>
-            <span className="text-[10px] font-mono text-slate-500">RISK / REWARD</span>
-          </div>
+        <CollapsibleSection
+          title="3. Stop Loss, Take Profit & Metas"
+          icon={Shield}
+          trailing={<span className="text-[10px] font-mono text-slate-500 shrink-0">RISK / REWARD</span>}
+          summary={`SL ${config.stopLossPoints}p · TP ${config.takeProfitPoints}p · trava R$ ${config.maxDailyLoss} · meta R$ ${config.maxDailyProfit}`}
+        >
 
           <div className="space-y-3 text-xs">
             {config.strategyMode === 'PULLBACK_RETEST' ? (
@@ -1396,23 +1455,18 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               </span>
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
       </div>
 
       {/* BLOCO 4: GESTÃO AVANÇADA (REALIZAÇÃO PARCIAL, BREAKEVEN & TRAILING STOP) — EXCLUSIVO DA ESTRATÉGIA RETESTE */}
       {config.strategyMode === 'PULLBACK_RETEST' && (
-      <div className="bg-slate-900/70 p-4 sm:p-5 rounded-xl border border-neutral-500/30 space-y-4 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
-          <div className="flex items-center gap-2">
-            <Target className="w-4 h-4 text-neutral-400" />
-            <h3 className="text-sm font-bold text-slate-100">
-              4. Ordem Parcial, Breakeven Automático & Trailing Stop Móvel
-            </h3>
-          </div>
-          <span className="px-2 py-0.5 rounded bg-neutral-500/10 text-neutral-300 border border-neutral-500/30 text-[10px] font-mono font-semibold self-start sm:self-auto">
-            CONTROLE AVANÇADO DE EXECUÇÃO
-          </span>
-        </div>
+      <CollapsibleSection
+        title="4. Ordem Parcial, Breakeven Automático & Trailing Stop Móvel"
+        icon={Target}
+        iconClass="text-neutral-400"
+        trailing={<span className="text-[10px] font-mono text-slate-500 shrink-0">EXECUÇÃO</span>}
+        summary={`parcial ${config.enablePartialExit ? `${config.partialContracts} ctros @ ${config.partialPoints}p` : 'off'} · breakeven ${config.moveStopToBreakevenOnPartial ? `+${config.breakevenOffsetPoints ?? 5}p` : 'off'} · trailing ${config.trailingStop ? `+${config.trailingActivationPoints}p / ${config.trailingDistancePoints}p` : 'off'}`}
+      >
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
           {/* Realização Parcial & Breakeven */}
@@ -1570,28 +1624,37 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
             )}
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
       )}
 
       {/* BLOCO 5: JANELA DE HORÁRIOS DAY TRADE & CONTA HEDGE MT5 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="flex flex-col gap-2.5">
         {/* Janela de Horários (B3) */}
-        <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-3.5 shadow-sm">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 border-b border-slate-800 pb-2">
-            <span className="flex items-center gap-1.5">
-              <Clock className="w-4 h-4 text-emerald-400" />
-              5. Janela de Horários de Negociação (Day Trade B3)
+        <CollapsibleSection
+          title="5. Janela de Horários de Negociação (Day Trade B3)"
+          icon={Clock}
+          trailing={
+            <span className="text-[10px] font-mono text-slate-500 shrink-0">
+              {config.tradingHoursEnabled ? 'ATIVA' : 'DESATIVADA'}
             </span>
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={config.tradingHoursEnabled}
-                onChange={(e) => handleConfigChange('tradingHoursEnabled', e.target.checked)}
-                className="w-3.5 h-3.5 rounded accent-emerald-500"
-              />
-              <span className="text-[10px] text-slate-300">Habilitar</span>
-            </label>
-          </div>
+          }
+          summary={
+            config.tradingHoursEnabled
+              ? `${config.tradingStartTime || '09:05'}→${config.tradingStopEntriesTime || '17:00'} · zeragem ${config.tradingCloseAllTime || '17:45'}`
+              : 'horário livre (filtro desativado)'
+          }
+        >
+          {/* o checkbox ficava no cabeçalho do bloco; no acordeão o cabeçalho é um botão, então ele
+              desce para o corpo, como primeira linha do grupo. */}
+          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={config.tradingHoursEnabled}
+              onChange={(e) => handleConfigChange('tradingHoursEnabled', e.target.checked)}
+              className="w-3.5 h-3.5 rounded accent-emerald-500"
+            />
+            <span>Habilitar filtro de horário</span>
+          </label>
 
           <div className="grid grid-cols-3 gap-2.5 text-xs">
             <div>
@@ -1635,20 +1698,21 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               ? `O robô só abre posições entre ${config.tradingStartTime} e ${config.tradingStopEntriesTime}. Às ${config.tradingCloseAllTime}, todas as ordens em aberto são encerradas a mercado.`
               : 'Filtro desativado: O robô operará em qualquer horário que receber ticks do mercado.'}
           </p>
-        </div>
+        </CollapsibleSection>
 
         {/* Conta Hedge e Preenchimento */}
-        <div className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 space-y-3.5 shadow-sm">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 border-b border-slate-800 pb-2">
-            <span className="flex items-center gap-1.5">
-              <ArrowRightLeft className="w-4 h-4 text-emerald-400" />
-              6. Modo de Conta MT5 & Execução B3
-            </span>
-            <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-mono">
-              {config.accountMode}
-            </span>
-          </div>
-
+        <CollapsibleSection
+          title="6. Modo de Conta MT5 & Execução B3"
+          icon={ArrowRightLeft}
+          trailing={<span className="text-[10px] font-mono text-slate-500 shrink-0">{config.accountMode}</span>}
+          summary={`${config.accountMode} · ${config.maxSimultaneousPositions} posição(ões) · ${
+            config.hedgeOppositeAction === 'ALLOW_SIMULTANEOUS'
+              ? 'hedge simultâneo'
+              : config.hedgeOppositeAction === 'CLOSE_OPPOSITE'
+                ? 'fecha a oposta'
+                : 'ignora o novo'
+          }`}
+        >
           <div className="space-y-2.5 text-xs">
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -1698,36 +1762,37 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               </select>
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
       </div>
 
-      {/* BLOCO 6: CONTROLE DO SIMULADOR E TESTES DE AGRESSÃO */}
-      <div className="bg-slate-900/40 p-4 rounded-xl border border-slate-800 space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
-            <TrendingUp className="w-4 h-4 text-neutral-400" />
-            Controles do Simulador de Mercado B3 & Teste Manual de Ordens
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-slate-400 mr-1">Velocidade:</span>
-            {[1, 5, 15, 30].map((s) => (
-              <button
-                key={s}
-                onClick={() => setSimulationSpeed(s)}
-                className={`px-2.5 py-1 text-xs font-mono rounded transition-colors cursor-pointer ${
-                  simulationSpeed === s
-                    ? 'bg-neutral-500/20 text-neutral-300 font-bold border border-neutral-500/40'
-                    : 'bg-slate-900 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {s}x
-              </button>
-            ))}
-          </div>
+      {/* BLOCO 7: CONTROLE DO SIMULADOR E TESTES DE AGRESSÃO */}
+      <CollapsibleSection
+        title="Controles do Simulador de Mercado B3 & Teste Manual de Ordens"
+        icon={TrendingUp}
+        iconClass="text-neutral-400"
+        trailing={<span className="text-[10px] font-mono text-slate-500 shrink-0">{simulationSpeed}x</span>}
+        summary="velocidade do replay · 1 tick manual · agressão ±350 ctros · limpar fita & gráfico"
+      >
+        {/* os botões de velocidade ficavam no cabeçalho do bloco; como o cabeçalho do acordeão é um
+            botão, eles descem para o corpo, na primeira linha. */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-xs text-slate-400 mr-1">Velocidade:</span>
+          {[1, 5, 15, 30].map((s) => (
+            <button
+              key={s}
+              onClick={() => setSimulationSpeed(s)}
+              className={`px-2.5 py-1 text-xs font-mono rounded transition-colors cursor-pointer ${
+                simulationSpeed === s
+                  ? 'bg-neutral-500/20 text-neutral-300 font-bold border border-neutral-500/40'
+                  : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {s}x
+            </button>
+          ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 pt-1 text-xs">
+        <div className="flex flex-wrap items-center gap-2.5 text-xs">
           <button
             onClick={onStepTick}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition-colors cursor-pointer"
@@ -1760,7 +1825,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
             Limpar Fita & Gráfico
           </button>
         </div>
-      </div>
+      </CollapsibleSection>
     </div>
   );
 };

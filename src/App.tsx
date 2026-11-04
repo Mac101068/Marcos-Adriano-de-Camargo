@@ -58,7 +58,7 @@ import { SeriesComparisonView } from './components/SeriesComparisonView';
 import { TechnicalEvaluationView } from './components/TechnicalEvaluationView';
 import { StrategyStudio } from './components/StrategyStudio';
 import { AlertChip } from './components/AlertChip';
-import { StrategyLibraryService, mergeConfig } from './services/strategyLibraryService';
+import { StrategyLibraryService, mergeConfig, splitStrategyPatch } from './services/strategyLibraryService';
 import { SavedStrategy } from './types/strategy';
 import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, ShieldAlert, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Square, Clock, Sparkles, RefreshCw } from 'lucide-react';
 
@@ -157,7 +157,12 @@ export default function App() {
     assetSelectionRef.current = migrateAssetSelection();
     // Depois das duas acima: esta reescreve só o `symbol`, e precisa ver o `assetId` já preenchido.
     chartContractRef.current = migrateChartVigenteContract();
-    return EaConfigService.loadSavedConfig();
+    // Fase A (banco de dados único): garante que TODO config ativo tenha uma estratégia por trás,
+    // ANTES da primeira leitura. Id válido reusa; `profileName` que casa com uma estratégia é
+    // vinculado pelo id (não duplica); sem nada, semeia "Estratégia ativa" a partir do config.
+    const loaded = EaConfigService.loadSavedConfig();
+    const { strategy } = StrategyLibraryService.ensureActiveStrategy(loaded);
+    return StrategyLibraryService.resolveOperational(strategy, loaded);
   });
   /**
    * Números do ativo em operação (R$/ponto, tick, casas decimais, preço de referência, horário
@@ -362,6 +367,14 @@ export default function App() {
   // Biblioteca de estratégias (Estúdio). A caixinha da tira de status lê esta lista;
   // ativar uma estratégia aplica o snapshot e força o Robô PAUSADO por segurança.
   const [strategyLibrary, setStrategyLibrary] = useState<SavedStrategy[]>(() => StrategyLibraryService.list());
+  // Fase A (regra 8/13 — fonte única): o NOME da estratégia ativa é resolvido pelo id, não pelo
+  // `profileName` (que agora é só rótulo retrocompatível). Header, caixinha da tira e o modal de
+  // exclusão bebem deste memo. Sem `strategyId` (config manual/órfão), cai no `profileName`.
+  const activeStrategy = React.useMemo(
+    () => (config.strategyId ? StrategyLibraryService.list().find((s) => s.id === config.strategyId) ?? null : null),
+    [config.strategyId, strategyLibrary],
+  );
+  const activeStrategyName = activeStrategy?.name ?? config.profileName ?? null;
   const refreshStrategyLibrary = () => {
     const list = StrategyLibraryService.list();
     setStrategyLibrary(list);
@@ -370,14 +383,17 @@ export default function App() {
     // e o Robô 1 apontava para um perfil fantasma. Toda mudança de biblioteca passa por aqui.
     const shadowSel = config.shadowRobot?.strategyId ?? null;
     const shadowStale = !!shadowSel && !list.some((s) => s.id === shadowSel);
-    const mainStale = !!config.profileName && !list.some((s) => s.name === config.profileName);
+    // Fase A: o Robô 1 é detectado por strategyId (não mais por nome). Estratégia ativa apagada →
+    // limpa só o vínculo; o último config materializado continua valendo, agora solto da biblioteca.
+    const mainSel = config.strategyId ?? null;
+    const mainStale = !!mainSel && !list.some((s) => s.id === mainSel);
     if (!shadowStale && !mainStale) return;
     const updated: AutomationConfig = {
       ...config,
       ...(shadowStale && config.shadowRobot
         ? { shadowRobot: { ...config.shadowRobot, strategyId: null, enabled: false } }
         : {}),
-      ...(mainStale ? { profileName: '' } : {}),
+      ...(mainStale ? { strategyId: null } : {}),
       lastSavedTimestamp: Date.now(),
     };
     EaConfigService.saveConfig(updated);
@@ -387,7 +403,7 @@ export default function App() {
       type: 'INFO',
       title: 'Estratégia em uso saiu da biblioteca — referências limpas',
       description: [
-        mainStale ? `Robô 1: o perfil "${config.profileName}" não existe mais; o config atual continua valendo, solto da biblioteca.` : null,
+        mainStale ? 'Robô 1: a estratégia ativa foi apagada da biblioteca; o config atual continua valendo, solto da biblioteca.' : null,
         shadowStale ? 'Robô 2: ficou sem estratégia e foi desligado — reescolha na janela dele.' : null,
       ]
         .filter(Boolean)
@@ -396,10 +412,13 @@ export default function App() {
     });
   };
   const handleActivateStrategy = (strategy: SavedStrategy) => {
+    // Fase A: ativar NÃO copia mais o snapshot inteiro por cima do config — ele vira uma visão
+    // materializada da estratégia (campos de estratégia do snapshot, runtime/conexão preservados
+    // do config atual) e passa a apontar para a biblioteca pelo id.
     const updated: AutomationConfig = {
-      ...strategy.config,
-      profileName: strategy.name,
+      ...StrategyLibraryService.resolveOperational(strategy, config),
       active: false,
+      profileName: strategy.name,
       lastSavedTimestamp: Date.now(),
     };
     EaConfigService.saveConfig(updated);
@@ -420,12 +439,43 @@ export default function App() {
       timestamp: Date.now(),
     });
   };
+  /**
+   * Fase A (banco único): "aplicar perfil 1-clique", "restaurar padrões" e "importar JSON" carregam
+   * um conjunto INTEIRO de números. Antes eles escreviam só no config (a biblioteca ficava defasada e
+   * o Estúdio mostrava outra coisa). Agora o pacote vira estratégia no banco: atualiza a homônima se
+   * já existir, senão cria uma nova — e o config ativo passa a ser a visão materializada dela, ativada
+   * pelo mesmo funil de sempre. Nada sobrescreve em silêncio a estratégia que estava ativa: a anterior
+   * continua inteira no Estúdio. Robô PAUSADO, como na ativação e no sync.
+   */
+  const handleApplyConfigBundle = (cfg: AutomationConfig, name?: string) => {
+    const bundleName = (name || cfg.profileName || 'Estratégia ativa').trim();
+    const merged: AutomationConfig = {
+      ...mergeConfig(cfg),
+      profileName: bundleName,
+      // Desempara do id anterior: o vínculo abaixo é por nome (reusa) ou por criação.
+      strategyId: null,
+      active: false,
+      lastSavedTimestamp: Date.now(),
+    };
+    const existing = StrategyLibraryService.list().find((s) => s.name === bundleName);
+    const strategy = existing
+      ? StrategyLibraryService.updateStrategyConfig(existing.id, merged) ?? existing
+      : StrategyLibraryService.save(StrategyLibraryService.newFromConfig(merged, bundleName));
+    handleActivateStrategy(strategy);
+    refreshStrategyLibrary();
+  };
   // Sincronização de terminal (Ciclo 12): o "Importar tudo" do Estúdio devolve o config ativo
   // que veio do OUTRO navegador (interno e externo têm localStorage próprio). Ele entra pelo
   // mesmo funil de segurança da ativação de estratégia: saneado pelo mergeConfig, persistido
   // e com o Robô PAUSADO — sincronizar dados nunca liga mercado nem ordem sozinho.
   const handleApplySyncedConfig = (cfg: AutomationConfig) => {
-    const updated: AutomationConfig = { ...mergeConfig(cfg), active: false, lastSavedTimestamp: Date.now() };
+    const merged: AutomationConfig = { ...mergeConfig(cfg), active: false, lastSavedTimestamp: Date.now() };
+    // Fase A (banco único): o pacote de sync chega com o config ativo apontando para um strategyId.
+    // A biblioteca do pacote já foi vertida antes daqui (applySyncPayload dá upsert por id), então o
+    // id normalmente já existe no cofre local; se não existir, ensureActiveStrategy a semeia a partir
+    // do config recebido e o config ativo passa a ser a visão materializada dessa estratégia.
+    const { strategy } = StrategyLibraryService.ensureActiveStrategy(merged);
+    const updated: AutomationConfig = StrategyLibraryService.resolveOperational(strategy, merged);
     EaConfigService.saveConfig(updated);
     setConfig(updated);
     refreshStrategyLibrary();
@@ -2173,16 +2223,26 @@ export default function App() {
     }
   }, [config.active, mt5State.status]);
 
-  // A boleta é a BASE das estratégias: editar Alvo/Breakeven escreve no config do EA (persistido),
-  // os mesmos campos que Robô, script Python e gestão de saídas já leem. Os editores que viviam
-  // nos painéis de parâmetros foram eliminados — fonte única de verdade.
-  const handleBoletaConfigPatch = (patch: Partial<AutomationConfig>) => {
+  // Fase A — banco de dados único. A boleta e o painel de Ajustes editam a ESTRATÉGIA ATIVA ao
+  // vivo: cada patch de campo de estratégia é gravado de volta na biblioteca (upsert pelo id) e o
+  // config ativo volta como VISÃO MATERIALIZADA (estratégia + runtime). Patch de runtime (shadowRobot,
+  // host, porta, active) fica só no config. Robô, script Python e saídas leem o config materializado.
+  const patchActiveStrategy = (patch: Partial<AutomationConfig>) => {
     setConfig((prev) => {
-      const updated = { ...prev, ...patch, lastSavedTimestamp: Date.now() };
-      EaConfigService.saveConfig(updated);
-      return updated;
+      const { strategy } = StrategyLibraryService.ensureActiveStrategy(prev);
+      const { operational, runtime } = splitStrategyPatch(patch);
+      let updatedStrategy = strategy;
+      if (Object.keys(operational).length > 0) {
+        const saved = StrategyLibraryService.updateStrategyConfig(strategy.id, operational);
+        if (saved) updatedStrategy = saved;
+      }
+      const nextConfig = StrategyLibraryService.resolveOperational(updatedStrategy, { ...prev, ...runtime });
+      EaConfigService.saveConfig(nextConfig);
+      return nextConfig;
     });
   };
+  // Mesma funil para a boleta e para o `onPatchShadowConfig` (o patch de sombra é runtime e fica só no config).
+  const handleBoletaConfigPatch = patchActiveStrategy;
 
   // Envio manual de ordem (boleta rápida da tela) com suporte à Pirâmide & Confluência
   const handleManualOrder = (type: 'BUY' | 'SELL') => {
@@ -3520,6 +3580,10 @@ export default function App() {
         onSelectAsset={handleSelectAsset}
         mt5SymbolOk={mt5SymbolOk}
         liveSymbol={assetSyms.live}
+        activeStrategyName={activeStrategyName}
+        activeStrategyId={config.strategyId ?? null}
+        activeStrategyLive={!!config.strategyId && !!activeStrategy}
+        onOpenStudio={() => setActiveTab('studio')}
       />
 
       {/* Tira de Métricas e Status Rápido — a esquerda rola sozinha e o PnL fica SEMPRE à vista
@@ -3656,13 +3720,13 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
           <div className="flex items-center gap-1.5 px-1.5 py-0 rounded bg-slate-900 border border-slate-800 text-[11px] shrink-0"
             title="Selecione uma estratégia salva para aplicar no terminal (o Robô é pausado por segurança). Para programar novas, abra o Estúdio."
           >
-            <span className="hidden sm:inline text-slate-400">Estratégia:</span>
+            <span className="hidden sm:inline text-slate-400">Trocar:</span>
             <select
-              value={StrategyLibraryService.findByProfileName(config.profileName)?.id ?? ''}
+              value={config.strategyId ?? ''}
               onChange={(e) => {
                 // Lê a biblioteca FRIA do storage: o estado `strategyLibrary` pode estar atrasado
-                // (salva em outra aba), e a caixinha nunca pode deixar de listar uma estratégia
-                // que existe na biblioteca.
+                // (salva em outra aba, ou criada por write-through da Boleta), e a caixinha nunca
+                // pode deixar de listar uma estratégia que existe na biblioteca.
                 const list = StrategyLibraryService.list();
                 setStrategyLibrary(list);
                 const target = list.find((s) => s.id === e.target.value);
@@ -3670,14 +3734,16 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
               }}
               className="bg-transparent font-mono text-slate-200 font-medium focus:outline-none cursor-pointer max-w-[130px] sm:max-w-[180px]"
             >
-              {config.profileName && !StrategyLibraryService.findByProfileName(config.profileName) && (
-                <option value="" className="bg-slate-900">{config.profileName} (config manual)</option>
+              {!config.strategyId && activeStrategyName && (
+                <option value="" className="bg-slate-900">{activeStrategyName} (config manual)</option>
               )}
-              {!config.profileName && <option value="" className="bg-slate-900">— selecione —</option>}
-              {strategyLibrary.length === 0 && (
+              {!config.strategyId && !activeStrategyName && (
+                <option value="" className="bg-slate-900">— selecione —</option>
+              )}
+              {StrategyLibraryService.list().length === 0 && (
                 <option value="" className="bg-slate-900">nenhuma salva — use o Estúdio</option>
               )}
-              {strategyLibrary.map((s) => (
+              {StrategyLibraryService.list().map((s) => (
                 <option key={s.id} value={s.id} className="bg-slate-900">{s.name}</option>
               ))}
             </select>
@@ -3958,11 +4024,9 @@ ${
                   onToggleMT5Connect={toggleMT5Connect}
                   onOpenPdfModal={() => setShowPdfModal(true)}
                   onConfigChange={(partial) => {
-                    setConfig((prev) => {
-                      const updated = { ...prev, ...partial, lastSavedTimestamp: Date.now() };
-                      EaConfigService.saveConfig(updated);
-                      return updated;
-                    });
+                    // Fase A: host/porta são runtime (ficam só no config); tetos da ponte são campo
+                    // de estratégia (voltam para a biblioteca). O funil separa os dois.
+                    patchActiveStrategy(partial);
                   }}
                 />
               </div>
@@ -3973,6 +4037,9 @@ ${
                 <AutomationPanel
                   config={config}
                   setConfig={setConfig}
+                  onPatchStrategy={patchActiveStrategy}
+                  onApplyConfigBundle={handleApplyConfigBundle}
+                  activeStrategyName={activeStrategyName}
                   simulationSpeed={simulationSpeed}
                   setSimulationSpeed={setSimulationSpeed}
                   onStepTick={handleStepTick}
@@ -3990,7 +4057,8 @@ ${
               <div className="h-full w-full">
                 <StrategyStudio
                   currentConfig={config}
-                  activeProfileName={config.profileName}
+                  activeProfileName={activeStrategyName ?? undefined}
+                  activeStrategyId={config.strategyId ?? null}
                   shadowStrategyId={config.shadowRobot?.strategyId ?? null}
                   onLibraryChanged={refreshStrategyLibrary}
                   onApplyConfig={handleApplySyncedConfig}
@@ -3998,6 +4066,7 @@ ${
                     handleActivateStrategy(s);
                     refreshStrategyLibrary();
                   }}
+                  onOpenEditor={() => setActiveTab('settings')}
                 />
               </div>
             )}

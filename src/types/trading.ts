@@ -228,7 +228,15 @@ export interface AutomationConfig {
   shadowRobot?: ShadowRobotConfig;
 
   // Metadados de Persistência e Perfil do Operador
-  profileName?: string; // Nome do setup selecionado (ex: "Institucional 10R")
+  profileName?: string; // Nome do setup selecionado (ex: "Institucional 10R") — rótulo de exibição
+  /**
+   * FASE A (banco de dados único): id da `SavedStrategy` na biblioteca
+   * (`fluxo_strategy_library_v1`) que é a FONTE AUTORITATIVA dos campos de estratégia deste
+   * config. Opcional de propósito: config antigos não têm o campo e são vinculados/semeados por
+   * `StrategyLibraryService.ensureActiveStrategy` no boot. Runtime/conexão (active, host, porta,
+   * dataSourceMode, shadowRobot) ficam SÓ aqui, nunca na estratégia.
+   */
+  strategyId?: string | null;
   lastSavedTimestamp?: number; // Data/Hora em que a configuração foi salva
 }
 
