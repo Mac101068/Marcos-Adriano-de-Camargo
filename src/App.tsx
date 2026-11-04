@@ -42,7 +42,45 @@ import {
 
   type AssetSpec,
 
+  type AssetTradeDefaults,
+
 } from './assets/assetRegistry';
+
+export const getAssetTradeParams = (assetId: AssetId): AssetTradeDefaults => {
+  const def = ASSETS[assetId]?.tradeDefaults ?? ASSETS.WIN.tradeDefaults;
+  try {
+    const raw = localStorage.getItem(`fluxo_asset_trade_params_${assetId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        ...def,
+        ...parsed,
+        boxPoints: Number(parsed.boxPoints) || def.boxPoints,
+        stopLossPoints: Number(parsed.stopLossPoints) || def.stopLossPoints,
+        takeProfitPoints: Number(parsed.takeProfitPoints) || def.takeProfitPoints,
+        partialPoints: Number(parsed.partialPoints) || def.partialPoints,
+        breakevenOffsetPoints: Number(parsed.breakevenOffsetPoints) || def.breakevenOffsetPoints,
+        trailingDistancePoints: Number(parsed.trailingDistancePoints) || def.trailingDistancePoints,
+        minDeltaThreshold: Number(parsed.minDeltaThreshold) || def.minDeltaThreshold,
+        contracts: Number(parsed.contracts) || def.contracts,
+        rangePoints: Number(parsed.rangePoints) || def.rangePoints,
+      };
+    }
+  } catch {
+    // ignora
+  }
+  return { ...def };
+};
+
+export const saveAssetTradeParams = (assetId: AssetId, patch: Partial<AssetTradeDefaults>) => {
+  try {
+    const current = getAssetTradeParams(assetId);
+    const updated = { ...current, ...patch };
+    localStorage.setItem(`fluxo_asset_trade_params_${assetId}`, JSON.stringify(updated));
+  } catch {
+    // ignora
+  }
+};
 
 import { migrateAssetBaseline, AssetBaselineMigration } from './assets/assetMigration';
 
@@ -1847,7 +1885,7 @@ export default function App() {
       rangeCurrentBox: null,
       timeBoxes: [],
       timeCurrentBox: null,
-      engine: new RenkoFlowEngine(100, ASSETS.BTCBR),
+      engine: new RenkoFlowEngine(200, ASSETS.BTCBR),
       rangeEngine: new RangeBarEngine(400),
       timeEngine: new TimeBarEngine(30000),
       allTicks: [],
@@ -1862,7 +1900,7 @@ export default function App() {
       rangeCurrentBox: null,
       timeBoxes: [],
       timeCurrentBox: null,
-      engine: new RenkoFlowEngine(100, ASSETS.BTC),
+      engine: new RenkoFlowEngine(200, ASSETS.BTC),
       rangeEngine: new RangeBarEngine(400),
       timeEngine: new TimeBarEngine(30000),
       allTicks: [],
@@ -4874,35 +4912,44 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   // host, porta, active) fica só no config. Robô, script Python e saídas leem o config materializado.
 
   const patchActiveStrategy = (patch: Partial<AutomationConfig>) => {
+    // Salva parâmetros operacionais no storage específico do ativo atual
+    const tradeKeys = [
+      'boxPoints',
+      'stopLossPoints',
+      'takeProfitPoints',
+      'partialPoints',
+      'breakevenOffsetPoints',
+      'trailingDistancePoints',
+      'minDeltaThreshold',
+      'contracts',
+    ];
+    const tradePatch: Record<string, unknown> = {};
+    for (const k of tradeKeys) {
+      if (k in patch) tradePatch[k] = (patch as Record<string, unknown>)[k];
+    }
+    if (Object.keys(tradePatch).length > 0) {
+      saveAssetTradeParams(asset.id, tradePatch as Partial<AssetTradeDefaults>);
+    }
+
+    if (patch.boxPoints !== undefined && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: 'SET_BOX_POINTS', boxPoints: patch.boxPoints, symbol: chartSymbolFor(asset) }));
+    }
 
     setConfig((prev) => {
-
       const { strategy } = StrategyLibraryService.ensureActiveStrategy(prev);
-
       const { operational, runtime } = splitStrategyPatch(patch);
-
       let updatedStrategy = strategy;
-
       if (Object.keys(operational).length > 0) {
-
         const saved = StrategyLibraryService.updateStrategyConfig(strategy.id, operational);
-
         if (saved) updatedStrategy = saved;
-
       }
-
       const nextConfig = StrategyLibraryService.resolveOperational(updatedStrategy, { ...prev, ...runtime });
-
       EaConfigService.saveConfig(nextConfig);
-
       return nextConfig;
-
     });
-
   };
 
   // Mesma funil para a boleta e para o `onPatchShadowConfig` (o patch de sombra é runtime e fica só no config).
-
   const handleBoletaConfigPatch = patchActiveStrategy;
 
 
@@ -6990,39 +7037,32 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-    const box = nextBoxPointsFor(config.boxPoints, next);
-
+    const assetParams = getAssetTradeParams(id);
     const unconfirmed = next.status === 'a_confirmar';
 
     const updated: AutomationConfig = {
-
       ...config,
-
       assetId: id,
-
       // Gráfico no vigente do ativo novo (sem vencimento confirmado, cai na contínua do registro).
-
       symbol: chartSymbolFor(next),
-
-      boxPoints: box.points,
-
+      boxPoints: assetParams.boxPoints,
+      stopLossPoints: assetParams.stopLossPoints,
+      takeProfitPoints: assetParams.takeProfitPoints,
+      partialPoints: assetParams.partialPoints,
+      breakevenOffsetPoints: assetParams.breakevenOffsetPoints,
+      trailingDistancePoints: assetParams.trailingDistancePoints,
+      minDeltaThreshold: assetParams.minDeltaThreshold,
+      contracts: assetParams.contracts,
       // Ensaio de spec não homologado nunca acorda o Robô (decisão 2 do plano).
-
       active: unconfirmed ? false : config.active,
-
       lastSavedTimestamp: Date.now(),
-
     };
 
     EaConfigService.saveConfig(updated);
-
     setConfig(updated);
 
-
-
     // Motores e eixos no preço de referência do ativo novo; o livro é o DELE (persistido à parte).
-
-    const nextRangePts = next.id === 'WDO' ? 10 : (next.id === 'BTCBR' || next.id === 'BTC' ? 400 : 100);
+    const nextRangePts = assetParams.rangePoints || (next.id === 'WDO' ? 10 : (next.id === 'BTCBR' || next.id === 'BTC' ? 400 : 100));
     const targetState = assetStateRef.current[id];
     if (targetState && targetState.boxes.length > 0) {
       engineRef.current = targetState.engine;
@@ -7040,7 +7080,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       handleResetData({
         assetOverride: next,
         keepAudit: true,
-        boxPointsOverride: box.points,
+        boxPointsOverride: assetParams.boxPoints,
         rangePointsOverride: nextRangePts,
       });
     }
@@ -7051,16 +7091,23 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       StrategyLibraryService.updateStrategyConfig(config.strategyId, {
         assetId: id,
         symbol: chartSymbolFor(next),
-        boxPoints: box.points,
+        boxPoints: assetParams.boxPoints,
+        stopLossPoints: assetParams.stopLossPoints,
+        takeProfitPoints: assetParams.takeProfitPoints,
+        partialPoints: assetParams.partialPoints,
+        breakevenOffsetPoints: assetParams.breakevenOffsetPoints,
+        trailingDistancePoints: assetParams.trailingDistancePoints,
+        minDeltaThreshold: assetParams.minDeltaThreshold,
       });
     }
 
-
-
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-
-      wsRef.current.send(JSON.stringify({ action: 'SELECT_ASSET', assetId: id, symbol: chartSymbolFor(next) }));
-
+      wsRef.current.send(JSON.stringify({
+        action: 'SELECT_ASSET',
+        assetId: id,
+        symbol: chartSymbolFor(next),
+        boxPoints: assetParams.boxPoints,
+      }));
     }
 
 
@@ -7083,11 +7130,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       title: unconfirmed ? `🧪 ENSAIO: ${next.label} (SPEC NÃO HOMOLOGADO)` : `ATIVO: ${next.label}`,
 
-      description: `${next.contractNote}. Preço de referência ${formatPrice(referencePrice(next), next)} pts · escala ${formatPrice(box.points, next)} pts (${renkoScaleLabel(box.points, next)})${
-
-        box.changed ? ` — a escala anterior (${config.boxPoints} pts) não fazia sentido neste ativo e foi trocada` : ''
-
-      }.${unconfirmed ? ' Robô deixado OFF e ponte em seguro até você homologar R$/ponto, tick e casas decimais.' : ''}${sessionNote} Conectado ao MT5, baixe o script de novo: ele grava o símbolo na hora de subir a ponte.`,
+      description: `${next.contractNote}. Preço de referência ${formatPrice(referencePrice(next), next)} pts · escala ${formatPrice(assetParams.boxPoints, next)} pts (${renkoScaleLabel(assetParams.boxPoints, next)}).${unconfirmed ? ' Robô deixado OFF e ponte em seguro até você homologar R$/ponto, tick e casas decimais.' : ''}${sessionNote} Conectado ao MT5, baixe o script de novo: ele grava o símbolo na hora de subir a ponte.`,
 
       timestamp: Date.now(),
 

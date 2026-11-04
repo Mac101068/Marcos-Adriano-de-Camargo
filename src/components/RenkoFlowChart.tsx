@@ -26,7 +26,7 @@ import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
 import { Sliders, ArrowUp, ArrowDown } from 'lucide-react';
 
-const STORAGE_KEY_SCALES = 'fluxo_renko_chart_scales_v2';
+const getStorageKeyScales = (assetId?: string) => `fluxo_renko_chart_scales_${assetId || 'WIN'}_v3`;
 const STORAGE_KEY_FLOW_MODE = 'fluxo_renko_flow_mode_v1';
 // v2: migra quem estava preso em 'compact' (meia tela) para o novo padrão 'fill' (tela inteira)
 const STORAGE_KEY_SPACING_MODE = 'fluxo_renko_spacing_mode_v2';
@@ -292,10 +292,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     canvasH: number;
   }>({ mode: null, startY: 0, startValue: 0.66, usableH: 100, canvasH: 100 });
 
-  // Carrega escalas salvas pelo operador (se existirem)
+  // Carrega escalas salvas pelo operador (se existirem) isoladas por ativo
   const initialScales = useMemo(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_SCALES);
+      const saved = localStorage.getItem(getStorageKeyScales(asset?.id));
       if (saved) {
         const parsed = JSON.parse(saved);
         return {
@@ -312,7 +312,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       // Ignora erro de storage
     }
     return { scaleX: 1.0, scaleY: 1.0, scaleFlow: 1.0, flowPaneRatio: 0.33, flowPanOffset: 0, haHistSplit: 0.66 };
-  }, []);
+  }, [asset?.id]);
 
   // =========================================================================
   // CONTROLES DE ESCALAS AJUSTÁVEIS: PREÇO (Y), TEMPO/BOXES (X) E FLUXO (Y & PAINEL)
@@ -324,6 +324,29 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   const [flowPanOffset, setFlowPanOffset] = useState<number>(initialScales.flowPanOffset || 0); // Deslocamento vertical do fluxo
   const [flowPaneRatio, setFlowPaneRatio] = useState<number>(initialScales.flowPaneRatio || 0.33); // Divisor: % de altura da janela de fluxo (0.18 a 0.55)
   const [haHistSplit, setHaHistSplit] = useState<number>(initialScales.haHistSplit ?? 0.66); // Divisor interno: % da janela de fluxo para o Heikin-Ashi (0.30 a 0.85)
+
+  // Ao alternar o ativo, reseta o Pan vertical de preço para centralizar na cotação do ativo novo
+  // e carrega as escalas guardadas especificamente para este contrato
+  useEffect(() => {
+    setPricePanOffset(0);
+    setFlowPanOffset(0);
+    try {
+      const saved = localStorage.getItem(getStorageKeyScales(asset?.id));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.scaleY) setScaleY(Math.max(0.3, Math.min(4.0, Number(parsed.scaleY))));
+        if (parsed.scaleX) setScaleX(Math.max(0.15, Math.min(3.5, Number(parsed.scaleX))));
+        if (parsed.scaleFlow) setScaleFlow(Math.max(0.3, Math.min(4.0, Number(parsed.scaleFlow))));
+      } else {
+        setScaleY(1.0);
+        setScaleX(1.0);
+        setScaleFlow(1.0);
+      }
+    } catch {
+      setScaleY(1.0);
+      setScaleX(1.0);
+    }
+  }, [asset?.id]);
 
   // Janela do eixo X (tijolos na tela): persistida, com teto alto de propósito — cada sessão
   // gera ~100-150 blocos, então dá para colocar MAIS DE UM DIA inteiro na tela.
@@ -517,11 +540,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // inteira rola junto com o zoom do gráfico.
   const wheelHandlerRef = useRef<(e: WheelEvent) => void>(null);
 
-  // Salva no localStorage para persistir a escolha de escalas e layout do operador
+  // Salva no localStorage para persistir a escolha de escalas e layout do operador isoladas por ativo
   useEffect(() => {
     try {
       localStorage.setItem(
-        STORAGE_KEY_SCALES,
+        getStorageKeyScales(asset?.id),
         JSON.stringify({
           scaleX: Number(scaleX.toFixed(2)),
           scaleY: Number(scaleY.toFixed(2)),
@@ -534,7 +557,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     } catch (e) {
       // Ignora
     }
-  }, [scaleX, scaleY, scaleFlow, flowPaneRatio, flowPanOffset, haHistSplit]);
+  }, [scaleX, scaleY, scaleFlow, flowPaneRatio, flowPanOffset, haHistSplit, asset?.id]);
 
   // Salva preferência do modo de fluxo
   useEffect(() => {
@@ -1029,18 +1052,20 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }
     });
 
-    const minRange = asset?.id === 'WDO' ? 5 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 100 : 50);
+    const isWdo = asset?.id === 'WDO';
+    const isBtc = asset?.id === 'BTCBR' || asset?.id === 'BTC';
+    const minRange = isWdo ? 4 : isBtc ? 100 : 50;
     const priceRange = Math.max(minRange, maxPrice - minPrice);
-    // Folga da auto-escala (sem zoom Y): 7% do range, mínimo de 16 pontos. Antes eram 4%/10pt e o
-    // tijolo em formação (que costuma ser o extremo da janela) colava na borda do painel — era o
-    // "bate em cima/embaixo" do operador, e ainda roubava o curso do arrasto vertical, porque a
-    // guarda abaixo só deixa o pan andar até o candle encostar na margem.
-    const pricePadding = scaleY === 1.0 ? Math.max(16, priceRange * 0.07) : Math.max(30, priceRange * 0.12);
+    // Folga da auto-escala (sem zoom Y): 7% do range com piso proporcional ao ativo
+    const minPad = isWdo ? 1.5 : isBtc ? 60 : 16;
+    const minPadZoom = isWdo ? 3.0 : isBtc ? 120 : 30;
+    const pricePadding = scaleY === 1.0 ? Math.max(minPad, priceRange * 0.07) : Math.max(minPadZoom, priceRange * 0.12);
     minPrice -= pricePadding;
     maxPrice += pricePadding;
 
     const baseMidPrice = (maxPrice + minPrice) / 2;
-    const basePriceRange = Math.max(10, maxPrice - minPrice);
+    const minBaseRange = isWdo ? 2.5 : isBtc ? 40 : 10;
+    const basePriceRange = Math.max(minBaseRange, maxPrice - minPrice);
 
     const effectivePriceRange = basePriceRange / Math.max(0.2, scaleY);
     const centerPrice = baseMidPrice + pricePanOffset;
@@ -1184,14 +1209,20 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     flowViewRef.current = { bandH: haBandHeight, range: effectiveHaRange };
 
     // =======================================================================
-    // GRADE DINÂMICA DE PREÇOS (EIXO Y ADAPTATIVO)
+    // GRADE DINÂMICA DE PREÇOS (EIXO Y ADAPTATIVO POR ATIVO)
     // =======================================================================
-    const baseGridUnit = asset?.id === 'WDO' ? 5 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 100 : 50);
-    const pxPerUnit = Math.abs(priceToY(centerPrice + baseGridUnit) - priceToY(centerPrice));
-    let gridStep = pxPerUnit < 18 ? baseGridUnit * 2 : pxPerUnit > 60 ? baseGridUnit / 2 : baseGridUnit;
-    if (gridStep <= 0) gridStep = asset?.tickSize ?? 1;
-    while ((effectiveMaxPrice - effectiveMinPrice) / gridStep > 20) {
-      gridStep *= 2;
+    const targetTicks = Math.max(4, Math.min(14, Math.floor(usablePriceHeight / 38)));
+    const rawStep = effectivePriceRange / targetTicks;
+    let gridStep: number;
+    if (isWdo) {
+      const candidates = [0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0];
+      gridStep = candidates.find((c) => c >= rawStep) ?? (Math.ceil(rawStep / 50) * 50);
+    } else if (isBtc) {
+      const candidates = [20, 50, 100, 200, 500, 1000, 2000, 5000];
+      gridStep = candidates.find((c) => c >= rawStep) ?? (Math.ceil(rawStep / 5000) * 5000);
+    } else {
+      const candidates = [5, 10, 25, 50, 100, 200, 250, 500, 1000];
+      gridStep = candidates.find((c) => c >= rawStep) ?? (Math.ceil(rawStep / 1000) * 1000);
     }
 
     ctx.strokeStyle = '#18181b';

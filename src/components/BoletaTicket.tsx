@@ -187,9 +187,22 @@ const StepperRow: React.FC<{
   unit: string;
   onChange?: (v: number) => void;
   hint: string;
-}> = ({ label, value, min, max, step = 5, unit, onChange, hint }) => {
-  const clamp = (v: number) => Math.min(max, Math.max(min, Math.round(v)));
-  const bump = (dir: 1 | -1) => onChange?.(clamp((Number.isFinite(value) ? value : min) + dir * step));
+  decimals?: number;
+}> = ({ label, value, min, max, step = 5, unit, onChange, hint, decimals = 0 }) => {
+  const roundToStep = (v: number, s: number) => {
+    if (s <= 0) return v;
+    const inv = Math.round(1 / s);
+    return inv >= 1 ? Math.round(v * inv) / inv : Math.round(v / s) * s;
+  };
+  const clamp = (v: number) => {
+    const bounded = Math.min(max, Math.max(min, v));
+    return roundToStep(bounded, step);
+  };
+  const bump = (dir: 1 | -1) => {
+    const current = Number.isFinite(value) ? value : min;
+    const nextVal = clamp(current + dir * step);
+    onChange?.(Number(nextVal.toFixed(decimals)));
+  };
   const btn =
     'w-[18px] h-[18px] shrink-0 rounded bg-zinc-900 border border-zinc-700 text-zinc-300 hover:text-white hover:border-zinc-500 active:scale-90 disabled:opacity-40 disabled:cursor-default text-[12px] font-bold leading-none flex items-center justify-center cursor-pointer transition-colors select-none';
   return (
@@ -204,10 +217,10 @@ const StepperRow: React.FC<{
           min={min}
           max={max}
           step={step}
-          value={value}
+          value={decimals > 0 ? Number(value.toFixed(decimals)) : value}
           disabled={!onChange}
           onChange={(e) => onChange?.(clamp(Number(e.target.value) || 0))}
-          className="w-[40px] h-[18px] rounded bg-zinc-900 border border-zinc-700 px-0.5 text-center text-[10.5px] font-semibold font-mono tabular-nums text-zinc-100 focus:border-emerald-500 focus:outline-hidden disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          className="w-[44px] h-[18px] rounded bg-zinc-900 border border-zinc-700 px-0.5 text-center text-[10.5px] font-semibold font-mono tabular-nums text-zinc-100 focus:border-emerald-500 focus:outline-hidden disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
         <button type="button" className={btn} disabled={!onChange} onClick={() => bump(1)} aria-label={`Aumentar ${label}`}>
           +
@@ -427,54 +440,74 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
                 estratégias do Estúdio buscam estes valores do config. Na Pirâmide o Stop da mãe é
                 o ponto de partida do gatilho, mas o campo continua editável (vale para as pirâmides
                 e para ordens manuais). */}
-            <StepperRow
-              label="Stop"
-              value={stopLossPoints}
-              min={0}
-              max={1000}
-              step={5}
-              unit="pts"
-              onChange={onStopLossPointsChange}
-              hint={`Stop Loss fixo: ${stopLossPoints} pts atrás da entrada ≈ ${pointsToBRL(stopLossPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de risco por ${contracts} contrato(s). Base das estratégias.`}
-            />
-            <StepperRow
-              label="Alvo"
-              value={takeProfitPoints}
-              min={0}
-              max={2000}
-              unit="pts"
-              onChange={onTakeProfitChange}
-              hint={`TP variável — base das estratégias: Robô, script Python e ordens da boleta buscam este valor. ${takeProfitPoints} pts ≈ ${pointsToBRL(takeProfitPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ${contracts} ctro(s)`}
-            />
-            <StepperRow
-              label="Parcial"
-              value={partialPoints}
-              min={5}
-              max={1000}
-              step={5}
-              unit="pts"
-              onChange={onPartialPointsChange}
-              hint={`Saída parcial (metade do lote) em +${partialPoints} pts — protege o breakeven antes do alvo final. Base das estratégias.`}
-            />
-            <StepperRow
-              label="Break even"
-              value={breakevenOffsetPoints}
-              min={0}
-              max={50}
-              step={1}
-              unit="pts"
-              onChange={onBreakevenChange}
-              hint={`Piso de proteção (taxas B3): ao proteger a posição, o stop garante entrada + ${breakevenOffsetPoints} pts. Vale para o breakeven da parcial, o do TP da pirâmide e o piso do gatilho.`}
-            />
-            <StepperRow
-              label="Trailing"
-              value={trailingDistancePoints}
-              min={0}
-              max={300}
-              unit="pts"
-              onChange={onTrailingChange}
-              hint={`Trailing Stop: depois do gatilho, o stop acompanha o preço sempre ${trailingDistancePoints} pts atrás do extremo (máxima na compra, mínima na venda). Só anda a favor.`}
-            />
+            {(() => {
+              const def = asset?.tradeDefaults;
+              const pStep = def?.stepperStep ?? (asset?.decimals ? 0.5 : 5);
+              const maxSL = def?.maxSL ?? 1000;
+              const maxTP = def?.maxTP ?? 2000;
+              const beStep = asset?.decimals ? 0.5 : 1;
+              const dec = asset?.decimals ?? 0;
+              const minPar = pStep;
+              return (
+                <>
+                  <StepperRow
+                    label="Stop"
+                    value={stopLossPoints}
+                    min={0}
+                    max={maxSL}
+                    step={pStep}
+                    decimals={dec}
+                    unit="pts"
+                    onChange={onStopLossPointsChange}
+                    hint={`Stop Loss fixo: ${stopLossPoints} pts atrás da entrada ≈ ${pointsToBRL(stopLossPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de risco por ${contracts} contrato(s). Base das estratégias.`}
+                  />
+                  <StepperRow
+                    label="Alvo"
+                    value={takeProfitPoints}
+                    min={0}
+                    max={maxTP}
+                    step={pStep}
+                    decimals={dec}
+                    unit="pts"
+                    onChange={onTakeProfitChange}
+                    hint={`TP variável — base das estratégias: Robô, script Python e ordens da boleta buscam este valor. ${takeProfitPoints} pts ≈ ${pointsToBRL(takeProfitPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ${contracts} ctro(s)`}
+                  />
+                  <StepperRow
+                    label="Parcial"
+                    value={partialPoints}
+                    min={minPar}
+                    max={maxSL}
+                    step={pStep}
+                    decimals={dec}
+                    unit="pts"
+                    onChange={onPartialPointsChange}
+                    hint={`Saída parcial (metade do lote) em +${partialPoints} pts — protege o breakeven antes do alvo final. Base das estratégias.`}
+                  />
+                  <StepperRow
+                    label="Break even"
+                    value={breakevenOffsetPoints}
+                    min={0}
+                    max={maxSL / 4}
+                    step={beStep}
+                    decimals={dec}
+                    unit="pts"
+                    onChange={onBreakevenChange}
+                    hint={`Piso de proteção (taxas B3): ao proteger a posição, o stop garante entrada + ${breakevenOffsetPoints} pts. Vale para o breakeven da parcial, o do TP da pirâmide e o piso do gatilho.`}
+                  />
+                  <StepperRow
+                    label="Trailing"
+                    value={trailingDistancePoints}
+                    min={0}
+                    max={maxSL}
+                    step={pStep}
+                    decimals={dec}
+                    unit="pts"
+                    onChange={onTrailingChange}
+                    hint={`Trailing Stop: depois do gatilho, o stop acompanha o preço sempre ${trailingDistancePoints} pts atrás do extremo (máxima na compra, mínima na venda). Só anda a favor.`}
+                  />
+                </>
+              );
+            })()}
             {riskBRL > 0 && (
               <Row
                 label="Risco"

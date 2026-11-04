@@ -190,8 +190,26 @@ class StrategyLibraryStore {
     const activeAssetId = (runtime.assetId || baseConfig.assetId || strategy.config.assetId || DEFAULT_ASSET_ID) as AssetId;
     const activeSymbol = (runtime.symbol || baseConfig.symbol || strategy.config.symbol || ASSETS[activeAssetId]?.activeContract || ASSETS[activeAssetId]?.primarySymbol) as string;
 
+    const stratAssetId = strategy.config.assetId || resolveAsset(strategy.config.symbol).id;
+    const isDifferentAsset = stratAssetId !== activeAssetId;
+
+    const merged = mergeConfig(strategy.config);
+    if (isDifferentAsset) {
+      // Se a estratégia foi salva para outro ativo (ex: WIN), preserva os pontos de trading calibrados do ativo atual (ex: WDO)
+      const def = ASSETS[activeAssetId]?.tradeDefaults;
+      if (def) {
+        merged.boxPoints = Number(baseConfig.boxPoints) || def.boxPoints;
+        merged.stopLossPoints = Number(baseConfig.stopLossPoints) || def.stopLossPoints;
+        merged.takeProfitPoints = Number(baseConfig.takeProfitPoints) || def.takeProfitPoints;
+        merged.partialPoints = Number(baseConfig.partialPoints) || def.partialPoints;
+        merged.breakevenOffsetPoints = Number(baseConfig.breakevenOffsetPoints) || def.breakevenOffsetPoints;
+        merged.trailingDistancePoints = Number(baseConfig.trailingDistancePoints) || def.trailingDistancePoints;
+        merged.minDeltaThreshold = Number(baseConfig.minDeltaThreshold) || def.minDeltaThreshold;
+      }
+    }
+
     return {
-      ...mergeConfig(strategy.config),
+      ...merged,
       ...runtime,
       assetId: activeAssetId,
       symbol: activeSymbol,

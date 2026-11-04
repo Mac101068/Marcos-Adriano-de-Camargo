@@ -36,6 +36,21 @@ export interface AssetSessionSpec {
   settlementWindowMinutes: number;
 }
 
+export interface AssetTradeDefaults {
+  boxPoints: number;
+  stopLossPoints: number;
+  takeProfitPoints: number;
+  partialPoints: number;
+  breakevenOffsetPoints: number;
+  trailingDistancePoints: number;
+  minDeltaThreshold: number;
+  contracts: number;
+  rangePoints: number;
+  stepperStep: number;
+  maxSL: number;
+  maxTP: number;
+}
+
 export interface AssetSpec {
   id: AssetId;
   label: string;
@@ -73,6 +88,8 @@ export interface AssetSpec {
   /** Escalas de Renko que fazem sentido para a volatilidade do ativo (F2 usa). */
   renkoDefaults: number[];
   session: AssetSessionSpec;
+  /** Parâmetros operacionais e de boleta específicos e isolados deste contrato. */
+  tradeDefaults: AssetTradeDefaults;
   /** 'a_confirmar' marca spec ainda não validado na corretora — nunca vira padrão silencioso. */
   status: 'ativo' | 'a_confirmar';
   contractNote: string;
@@ -102,6 +119,20 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       auctionMinutes: 10,
       settlementWindowMinutes: 30,
     },
+    tradeDefaults: {
+      boxPoints: 50,
+      stopLossPoints: 50,
+      takeProfitPoints: 100,
+      partialPoints: 50,
+      breakevenOffsetPoints: 5,
+      trailingDistancePoints: 50,
+      minDeltaThreshold: 50,
+      contracts: 1,
+      rangePoints: 100,
+      stepperStep: 5,
+      maxSL: 1000,
+      maxTP: 2000,
+    },
     status: 'ativo',
     contractNote: '1 contrato = R$ 0,20 por ponto (variação mínima de 5 pontos = 1R)',
   },
@@ -124,6 +155,20 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       weekdaysOnly: true,
       auctionMinutes: 10,
       settlementWindowMinutes: 30,
+    },
+    tradeDefaults: {
+      boxPoints: 5.0,
+      stopLossPoints: 5.0,
+      takeProfitPoints: 10.0,
+      partialPoints: 5.0,
+      breakevenOffsetPoints: 0.5,
+      trailingDistancePoints: 5.0,
+      minDeltaThreshold: 10,
+      contracts: 1,
+      rangePoints: 10,
+      stepperStep: 0.5,
+      maxSL: 100,
+      maxTP: 200,
     },
     status: 'ativo',
     contractNote: '1 contrato = R$ 10,00 por ponto (variação mínima de 0,5 pt = R$ 5,00)',
@@ -148,6 +193,20 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       auctionMinutes: 10,
       settlementWindowMinutes: 30,
     },
+    tradeDefaults: {
+      boxPoints: 200,
+      stopLossPoints: 200,
+      takeProfitPoints: 400,
+      partialPoints: 200,
+      breakevenOffsetPoints: 20,
+      trailingDistancePoints: 200,
+      minDeltaThreshold: 10,
+      contracts: 1,
+      rangePoints: 400,
+      stepperStep: 20,
+      maxSL: 5000,
+      maxTP: 10000,
+    },
     status: 'ativo',
     contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts',
   },
@@ -170,6 +229,20 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       weekdaysOnly: true,
       auctionMinutes: 10,
       settlementWindowMinutes: 30,
+    },
+    tradeDefaults: {
+      boxPoints: 200,
+      stopLossPoints: 200,
+      takeProfitPoints: 400,
+      partialPoints: 200,
+      breakevenOffsetPoints: 20,
+      trailingDistancePoints: 200,
+      minDeltaThreshold: 10,
+      contracts: 1,
+      rangePoints: 400,
+      stepperStep: 20,
+      maxSL: 5000,
+      maxTP: 10000,
     },
     status: 'ativo',
     contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts',
