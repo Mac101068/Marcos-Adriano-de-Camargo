@@ -278,12 +278,50 @@ export interface ConfigPreset {
   config: AutomationConfig;
 }
 
+export interface MT5Deal {
+  ticket: number;
+  order: number;
+  time: number;
+  timeStr: string;
+  symbol: string;
+  type: 'BUY' | 'SELL';
+  volume: number;
+  price: number;
+  profit: number;
+  commission?: number;
+  swap?: number;
+  comment?: string;
+  magic?: number;
+}
+
+export interface MT5Position {
+  ticket: number;
+  time: number;
+  timeStr: string;
+  symbol: string;
+  type: 'BUY' | 'SELL';
+  volume: number;
+  priceOpen: number;
+  priceCurrent: number;
+  profit: number;
+  sl: number;
+  tp: number;
+  magic?: number;
+  comment?: string;
+}
+
 export interface MT5ConnectionState {
   status: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR';
   pingMs?: number;
   accountLogin?: number;
   brokerCompany?: string;
   balance?: number;
+  equity?: number;
+  floatingProfit?: number;
+  margin?: number;
+  marginFree?: number;
+  deals?: MT5Deal[];
+  positions?: MT5Position[];
   isHedgeAccount?: boolean;
   lastError?: string;
   /** A ponte aceitou o token no handshake AUTH? undefined = ainda sem resposta */

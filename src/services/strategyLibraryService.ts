@@ -1,7 +1,7 @@
 import { AutomationConfig } from '../types/trading';
 import { SavedStrategy } from '../types/strategy';
 import { DEFAULT_EA_CONFIG } from './eaConfigService';
-import { ASSETS, resolveAsset, type AssetId } from '../assets/assetRegistry';
+import { ASSETS, resolveAsset, DEFAULT_ASSET_ID, type AssetId } from '../assets/assetRegistry';
 
 /**
  * Biblioteca de Estratégias do Estúdio (localStorage `fluxo_strategy_library_v1`).
@@ -28,6 +28,8 @@ const RUNTIME_KEYS: ReadonlySet<keyof AutomationConfig> = new Set<keyof Automati
   'shadowRobot',
   'lastSavedTimestamp',
   'strategyId',
+  'assetId',
+  'symbol',
 ]);
 
 /** Só os campos de runtime presentes em `cfg` (para re-aplicar por cima da estratégia). */
@@ -184,9 +186,15 @@ class StrategyLibraryStore {
    * produz config ativo — os leitores do App (handleIncomingTick, script, boleta) leem o resultado.
    */
   resolveOperational(strategy: SavedStrategy, baseConfig: Partial<AutomationConfig>): AutomationConfig {
+    const runtime = pickRuntime(baseConfig);
+    const activeAssetId = (runtime.assetId || baseConfig.assetId || strategy.config.assetId || DEFAULT_ASSET_ID) as AssetId;
+    const activeSymbol = (runtime.symbol || baseConfig.symbol || strategy.config.symbol || ASSETS[activeAssetId]?.activeContract || ASSETS[activeAssetId]?.primarySymbol) as string;
+
     return {
       ...mergeConfig(strategy.config),
-      ...pickRuntime(baseConfig),
+      ...runtime,
+      assetId: activeAssetId,
+      symbol: activeSymbol,
       strategyId: strategy.id,
     };
   }

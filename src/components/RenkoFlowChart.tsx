@@ -997,16 +997,16 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     if (!isFinite(boxMin) || !isFinite(boxMax) || boxMin >= boxMax) {
       // eixo Y sem nenhum box na tela: a régua do ativo (preço real fresco ou basePrice do registro)
       const fallbackCenter = currentPrice > 0 ? currentPrice : referencePrice(asset);
-      boxMin = fallbackCenter - 100;
-      boxMax = fallbackCenter + 100;
+      const span = asset?.id === 'WDO' ? 10 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 500 : 100);
+      boxMin = fallbackCenter - span;
+      boxMax = fallbackCenter + span;
     }
 
     let minPrice = boxMin;
     let maxPrice = boxMax;
 
-    // Apenas expande a escala para ordens abertas se estiverem a até 350 pontos do preço atual,
-    // evitando que ordens antigas ou distantes esmaguem os boxes visíveis no canto do gráfico
-    const maxAllowedOrderDist = 350;
+    // Apenas expande a escala para ordens abertas se estiverem a até a distância máxima permitida
+    const maxAllowedOrderDist = asset?.id === 'WDO' ? 25 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 1500 : 350);
     openOrders.forEach((o) => {
       const isPending = o.status === 'PENDING_LIMIT';
       const effPrice = isPending && o.limitPrice ? o.limitPrice : o.entryPrice;
@@ -1029,7 +1029,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }
     });
 
-    const priceRange = Math.max(50, maxPrice - minPrice);
+    const minRange = asset?.id === 'WDO' ? 5 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 100 : 50);
+    const priceRange = Math.max(minRange, maxPrice - minPrice);
     // Folga da auto-escala (sem zoom Y): 7% do range, mínimo de 16 pontos. Antes eram 4%/10pt e o
     // tijolo em formação (que costuma ser o extremo da janela) colava na borda do painel — era o
     // "bate em cima/embaixo" do operador, e ainda roubava o curso do arrasto vertical, porque a
@@ -1185,8 +1186,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // =======================================================================
     // GRADE DINÂMICA DE PREÇOS (EIXO Y ADAPTATIVO)
     // =======================================================================
-    const pxPer50Pts = Math.abs(priceToY(centerPrice + 50) - priceToY(centerPrice));
-    let gridStep = pxPer50Pts < 18 ? 100 : pxPer50Pts > 55 ? 25 : 50;
+    const baseGridUnit = asset?.id === 'WDO' ? 5 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 100 : 50);
+    const pxPerUnit = Math.abs(priceToY(centerPrice + baseGridUnit) - priceToY(centerPrice));
+    let gridStep = pxPerUnit < 18 ? baseGridUnit * 2 : pxPerUnit > 60 ? baseGridUnit / 2 : baseGridUnit;
+    if (gridStep <= 0) gridStep = asset?.tickSize ?? 1;
     while ((effectiveMaxPrice - effectiveMinPrice) / gridStep > 20) {
       gridStep *= 2;
     }
@@ -1205,7 +1208,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.moveTo(0, y);
         ctx.lineTo(lineRight, y);
         ctx.stroke();
-        ctx.fillText(p.toLocaleString('pt-BR'), chartWidth + rightAxisWidth / 2, y + 3.5);
+        ctx.fillText(formatPrice(p, asset), chartWidth + rightAxisWidth / 2, y + 3.5);
       }
     }
 
@@ -3102,22 +3105,45 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               <option value="range">Range</option>
             </select>
             {chartSeries === 'renko' && (
-              <button
-                type="button"
-                onClick={() => onOpenRenkoParam?.()}
-                className={`text-[10.5px] transition-colors whitespace-nowrap ${
-                  onOpenRenkoParam
-                    ? 'text-zinc-300 hover:text-emerald-300 cursor-pointer underline decoration-zinc-700 underline-offset-2 hover:decoration-emerald-400'
-                    : 'text-zinc-400'
-                }`}
-                title={
-                  onOpenRenkoParam
-                    ? 'Escala do Renko definida no painel de Parâmetros — clique para abrir o bloco do box'
-                    : 'Escala do Renko definida no Painel do EA'
-                }
-              >
-                {renkoScaleLabel(renkoBoxPoints, asset)}
-              </button>
+              <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-700/80 rounded px-1 py-0.5">
+                <button
+                  type="button"
+                  onClick={() => stepRenkoR(-1)}
+                  className="w-4 h-4 flex items-center justify-center rounded bg-zinc-800 text-[10px] font-bold text-zinc-300 hover:bg-zinc-700 hover:text-white cursor-pointer select-none"
+                  title={`Diminuir 1R (atual: ${renkoR}R)`}
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={renkoR}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (!isNaN(v) && v > 0) applyRenkoR(v);
+                  }}
+                  className="w-9 h-4 bg-black/60 border border-zinc-700 rounded text-center text-[10.5px] font-mono font-bold text-emerald-300 focus:outline-none focus:border-emerald-500 tabular-nums p-0"
+                  title={`Digite o valor em R (1R = ${asset.tickSize} pts -> ${renkoBoxPoints} pts). Clique para digitar.`}
+                />
+                <span className="text-[10px] font-mono text-zinc-400 select-none">R</span>
+                <button
+                  type="button"
+                  onClick={() => stepRenkoR(1)}
+                  className="w-4 h-4 flex items-center justify-center rounded bg-zinc-800 text-[10px] font-bold text-zinc-300 hover:bg-zinc-700 hover:text-white cursor-pointer select-none"
+                  title={`Aumentar 1R (atual: ${renkoR}R)`}
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenRenkoParam?.()}
+                  className="text-[9.5px] text-zinc-500 hover:text-zinc-300 cursor-pointer ml-0.5 tabular-nums"
+                  title="Abrir no painel de Parâmetros"
+                >
+                  ({renkoBoxPoints}p)
+                </button>
+              </div>
             )}
             {chartSeries === 'range' && (
               <select

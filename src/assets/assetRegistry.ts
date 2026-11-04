@@ -21,7 +21,7 @@
  */
 export const ALLOW_UNCONFIRMED_PREVIEW = true;
 
-export type AssetId = 'WIN' | 'WDO' | 'BTC';
+export type AssetId = 'WIN' | 'WDO' | 'BTC' | 'BTCBR';
 
 export interface AssetSessionSpec {
   /** Abertura do pregão no relógio de Brasília ("HH:MM"). */
@@ -108,53 +108,71 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
   WDO: {
     id: 'WDO',
     label: 'Mini Dólar (WDO)',
-    primarySymbol: 'WDO$N',
-    // Sem vencimento declarado: o spec é 'a_confirmar' e inventar código de vencimento aqui
-    // levaria o operador a assinar um gráfico que não existe na corretora.
+    primarySymbol: 'WDO$',
+    activeContract: 'WDOZ26',
     watermarkCaption: 'Mini Dólar · B3',
     prefixes: ['WDO', 'DOL'],
-    pointValue: 0.1,
+    pointValue: 10.0,
     tickSize: 0.5,
     decimals: 1,
-    basePrice: 5300,
-    staleTolerancePct: 0.05,
-    renkoDefaults: [2, 5, 10],
+    basePrice: 5480,
+    staleTolerancePct: 0.1,
+    renkoDefaults: [2.5, 5, 10],
     session: {
-      // Horário de pregão do dólar e o fix das 13:00 (PTAX) ainda serão tratados — Fase 2/3.
       open: '09:00',
       close: '18:00',
       weekdaysOnly: true,
       auctionMinutes: 10,
       settlementWindowMinutes: 30,
     },
-    status: 'a_confirmar',
-    contractNote: 'A CONFIRMAR NA CORRETORA: R$ 0,10 por ponto, tick de 0,5 ponto',
+    status: 'ativo',
+    contractNote: '1 contrato = R$ 10,00 por ponto (variação mínima de 0,5 pt = R$ 5,00)',
   },
-  BTC: {
-    id: 'BTC',
-    label: 'Bitcoin B3 (BIT/WBRA)',
-    // 'BIT$N' é o código que o seletor grava HOJE; o exato do produto B3 (BIT x WBRA) ainda
-    // será confirmado na corretora junto com o resto do spec.
-    primarySymbol: 'BIT$N',
-    watermarkCaption: 'Bitcoin B3',
-    prefixes: ['BTC', 'BIT', 'WBRA'],
-    // Placeholder declarado (não é chute "oficial": nenhum código consome este ativo na Fase 1).
-    // O contrato WBRA é fracionário e o ponto em R$ varia com a especificação da B3/corretora.
-    pointValue: 1,
-    tickSize: 5,
+  BTCBR: {
+    id: 'BTCBR',
+    label: 'Bitcoin B3 (BTCBR / BIT)',
+    primarySymbol: 'BIT$',
+    activeContract: 'BITX26',
+    watermarkCaption: 'Bitcoin Futuro · B3',
+    prefixes: ['BTCBR', 'BTC', 'BIT', 'WBRA', 'BITX'],
+    pointValue: 0.1,
+    tickSize: 20,
     decimals: 0,
-    basePrice: 5000,
+    basePrice: 440000,
     staleTolerancePct: 0.15,
-    renkoDefaults: [50, 100, 200],
+    renkoDefaults: [100, 200, 500],
     session: {
       open: '09:00',
-      close: '18:00',
-      weekdaysOnly: false, // cripto negocia fora de seg–sex; o gap de fim de semana é real
+      close: '18:30',
+      weekdaysOnly: true,
       auctionMinutes: 10,
       settlementWindowMinutes: 30,
     },
-    status: 'a_confirmar',
-    contractNote: 'A CONFIRMAR NA CORRETORA: contrato, valor do ponto e horário de pregão',
+    status: 'ativo',
+    contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts',
+  },
+  BTC: {
+    id: 'BTC',
+    label: 'Bitcoin B3 (BIT / BTC)',
+    primarySymbol: 'BIT$',
+    activeContract: 'BITX26',
+    watermarkCaption: 'Bitcoin Futuro · B3',
+    prefixes: ['BTC', 'BIT', 'WBRA', 'BTCBR', 'BITX'],
+    pointValue: 0.1,
+    tickSize: 20,
+    decimals: 0,
+    basePrice: 440000,
+    staleTolerancePct: 0.15,
+    renkoDefaults: [100, 200, 500],
+    session: {
+      open: '09:00',
+      close: '18:30',
+      weekdaysOnly: true,
+      auctionMinutes: 10,
+      settlementWindowMinutes: 30,
+    },
+    status: 'ativo',
+    contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts',
   },
 };
 
