@@ -14,11 +14,13 @@ a renderização do Markdown por causa das cercas aninhadas `text`/`bash`) agora
 renderizável** em:
 
 - **`CHAT_SEED.md`** — arquivo único, pronto para copiar e colar inteiro em um bate-papo novo
-  (ponto de retomada mais recente: **Ciclo 14, commit `23cb03f`**).
-- **`CHAT_SEED_CICLO_14.md`** — seed do ciclo mais recente: resumo da evolução até a **Fase A**
-  (estratégia como banco de dados único, um só editor de parâmetros, telas em lista colapsável e régua de
-  tempo dentro do gráfico) e a **lista de tarefas da próxima conversa** com critério de pronto. Pode ser
-  colado depois do `CHAT_SEED.md` ou sozinho, quando o contexto já estiver quente.
+  (ponto de retomada mais recente: **Ciclo 15, commit `d5d5a02`**).
+- **`CHAT_SEED_CICLO_15.md`** — seed do ciclo mais recente: o **fluxo que parou de atrasar** (cor pelo delta
+  real, cinza = reversão E exaustão), o **Filtro de Acumulação (Efficiency Ratio) no funil único do EA** e o
+  **Livro de Rodadas** por corrida, com a **lista de tarefas da próxima conversa** e critério de pronto. Pode
+  ser colado depois do `CHAT_SEED.md` ou sozinho, quando o contexto já estiver quente.
+- **`CHAT_SEED_CICLO_14.md`** — seed da FASE A (estratégia como banco de dados único, um só editor, telas em
+  lista colapsável e régua X no gráfico). Mantido como **histórico**; não é mais o ponto de retomada.
 - **`CHAT_SEED_CICLO_10.md`** — seed do Ciclo 10 (Robô 2 / sombra). Mantido como **histórico**; não é
   mais o ponto de retomada.
 

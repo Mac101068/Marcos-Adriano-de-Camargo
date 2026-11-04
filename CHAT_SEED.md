@@ -3,15 +3,18 @@
 Você está assumindo o projeto **Fluxo & Renko 10R - MT5 Quant Terminal**: aplicação web de trading
 quantitativo que hoje roda no Mini-Índice B3 (`WIN$`) e está preparada para multi-mercado (WDO e BTC
 já têm linha no registro, mas seguem **`a_confirmar`**), enviando ordens automatizadas ao MetaTrader 5
-por uma ponte WebSocket em Python. **Fase atual: Ciclo 14 (commit `23cb03f`) — a estratégia virou banco
- de dados único**: a `SavedStrategy` da biblioteca manda, o config ativo é **visão materializada** dela
- (editar campo, aplicar perfil 1-clique, restaurar padrões e importar JSON escrevem na biblioteca),
- **existe um único editor de parâmetros** (a aba Parâmetros; o Estúdio só gerencia a biblioteca), o
- **header traz o selo da estratégia ativa** (EA + nome + `#id` + ponto verde AO VIVO / âmbar SOLTO),
- **Estúdio e Parâmetros são listas colapsáveis** (uma linha por grupo, com o resumo dos números; o
- clique abre os campos abaixo) e a **régua de tempo voltou para dentro do gráfico de preço**, deixando
- o indicador livre abaixo do divisor (a ponte ainda nunca rodou contra a corretora de verdade
- — validação na demo XP segue o próximo marco).
+por uma ponte WebSocket em Python. **Fase atual: Ciclo 15 (commit `d5d5a02`) — o fluxo parou de atrasar e virou filtro, com Livro de Rodadas por
+ corrida**: a **cor do candle de fluxo (Heikin-Ashi) passou a ser governada pelo delta real do box** contra o
+ limiar adaptativo (fim do atraso visual), o **cinza agora marca reversão E exaustão** (mesmo lado perdendo
+ força, `EXHAUST_DECAY_RATIO = 0.7`), e essas duas leituras viraram **porta de sinal no funil único**
+ `evaluateBoxConvergence` — o **Filtro de Acumulação (Efficiency Ratio)**, que vale igualmente para robô real,
+ Sombra e Coletor e **vem desligado por padrão** (opt-in). Nasceu junto o **Livro de Rodadas**
+ (`roundAuditService.ts`): auditoria **persistente por corrida** integrando as três automações, com **dois
+ relógios separados** (parede vs barra) e guarda contra ticks MT5 ao vivo no replay. Base do **Ciclo 14**
+ (`23cb03f`) mantida: a **`SavedStrategy` é banco de dados único** (config ativo é visão materializada, um só
+ editor, selo no header, telas em lista colapsável, régua de tempo dentro do gráfico). **A ponte ainda nunca
+ rodou contra a corretora de verdade — validação na demo XP segue o próximo marco, e nada do Ciclo 15 foi
+ conferido em tela.**
 
 ## 0. QUEM É O USUÁRIO E COMO TRABALHAR
 - Brasileiro, iniciante em programação. **Toda a UI, comentários e documentação em português.**
@@ -307,7 +310,30 @@ npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migraç
 ```
 
 ## 6. PENDÊNCIAS ABERTAS
-- 📍 **PONTO DE RETOMADA (fim do Ciclo 14, 03/11/2026 — commit `23cb03f`)**: **Fase A — estratégia como
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 15, 04/11/2026 — commit `d5d5a02`)**: **fluxo que adianta + Filtro de
+  Acumulação no EA + Livro de Rodadas**. (1) `RenkoFlowChart.tsx`: a **cor do candle Heikin-Ashi agora é
+  governada pelo delta real do box** contra `minDeltaThreshold * (regimeFactor ?? 1)` (a mesma porta do
+  histograma do robô — a forma HA vira só contexto; o painel é visual e não mexe nas ordens), e o **cinza
+  passou a marcar reversão E exaustão** (`EXHAUST_DECAY_RATIO = 0.7`, um único botão: mesma lado perdendo
+  força vira `REVERSAL`); o HUD espelha a regra. (2) `convergenceEvaluator.ts`: **Filtro de Acumulação (F2)**
+  no **funil único** `evaluateBoxConvergence` (vale para robô real + Sombra + Coletor) — `efficiencyRatio()`
+  (|deslocamento|/Σ|passo| sobre `consolidationLookbackBoxes`=10; abaixo de `consolidationErMax`=0.30 =
+  acumulação; warm-up nunca bloqueia) + `isExhaustedFlow()` (gate `exhaustionFilterEnabled`), combinados em
+  `regimeBlock` nos ramos PYRAMID e BUY/SELL. **5 chaves novas com default OFF** (`types/trading.ts`,
+  `eaConfigService.ts`), UI em `AutomationPanel.tsx` (bloco "Filtro de Acumulação": o **ER é a alavanca**) e
+  retrato em `StrategyStudio.tsx`. Bench A/B headless: **serrote 60/59/−590 → 9/8/−90 (−86%)**, tendência e
+  pullback **idênticos**. (3) `roundAuditService.ts` **novo**: **Livro de Rodadas** persistente por corrida
+  integrando as 3 automações, com **dois relógios** (`clock: 'wall'|'bar'`, ordenação agrupada), **`liveMix`**
+  (ticks MT5 CONNECTED não contaminam o snapshot do replay — banner na tela), parse defensivo e CSV honesto
+  (500). Textos defasados do replay ("dispara sozinho na abertura") corrigidos em `App.tsx` +
+  `SimulatorView.tsx`. **Verificado**: `tsc` limpo, `vite build` OK, asserts do livro 5/5 e bench do filtro 6/6
+  (scripts temporários apagados). **Nada conferido em tela nem na demo XP.**
+  **Voltar por**: (1) 👀 conferir em tela — fluxo sem atraso, cinza na exaustão, Livro gravando/retornando com
+  banner `liveMix`, bloco do filtro na UI; (2) 🎚️ **calibrar `consolidationErMax`/janela com 5 dias reais** (o
+  0.30 veio de sintético); (3) 🧪 testar o Filtro de Exaustão ligado junto na sombra (replay 5d); (4) 🧫
+  primeira coleta real na demo XP; (5) 🔧 resolver "Salvar como Perfil do Operador" (ainda no depósito
+  antigo — herança do Ciclo 14); demais pendências herdadas.
+- 📍 **PONTO DE RETOMADA anterior (fim do Ciclo 14, 03/11/2026 — commit `23cb03f` — superado pelo ponto acima, mantido como histórico)**: **Fase A — estratégia como
   banco de dados único — mais a leitura em listas**. (1) `strategyLibraryService.ts` ganhou
   `RUNTIME_KEYS`, `pickRuntime`, `splitStrategyPatch`, `resolveOperational`, `ensureActiveStrategy` e
   `updateStrategyConfig`: o config ativo (`fluxo_renko_ea_config_v3`) passou a ser **visão materializada**

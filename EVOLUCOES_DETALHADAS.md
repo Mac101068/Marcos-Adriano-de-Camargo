@@ -8,6 +8,63 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 15 — 04/11/2026 · O fluxo parou de atrasar e virou filtro de métricas; nasce o Livro de Rodadas
+
+**Causa raiz / diagnóstico**. Dois incômodos do operador: (a) o indicador de fluxo — Heikin-Ashi desenhado a
+partir do Time & Trades sobre o CVD — **parecia sempre atrasado**; (b) as perdas se concentravam em **regiões
+de acumulação com range curto**, onde o serrote batia vários stops. A leitura: o atraso é **intrínseco à
+transformada** (Heikin-Ashi é dupla média, e o CVD é acumulado — nada é bug), e o painel era **só visual** (o
+robô entra por direção + limiar de delta, não pelo estado HA). Decisão: fazer o visual **liderar** e depois
+promover essa leitura a **filtro nas métricas do EA** — nas palavras dele, "o visual nós adaptamos, mas as
+métricas do EA não".
+
+**O que foi implementado** (commit `d5d5a02`, 9 arquivos, 1048+/49−):
+
+1. **Indicador de fluxo sem atraso** (`RenkoFlowChart.tsx`): a **cor** do candle Heikin-Ashi passou a ser
+   governada pelo **delta real do box** contra `minDeltaThreshold * (b.regimeFactor ?? 1)` — **a mesma porta
+   do histograma do robô** — e a **forma** HA virou apenas contexto. Como o painel é visual, mudar a cor não
+   toca nas ordens. **Cinza = reversão E exaustão**: uma caixa no **mesmo lado** da anterior mas **perdendo
+   força** (`|Δ| ≤ |Δ_prev| · EXHAUST_DECAY_RATIO`, padrão **0.7**) também vira `REVERSAL`; o botão único
+   `EXHAUST_DECAY_RATIO` calibra a sensibilidade (baixo = só exaustão severa). O HUD (`activeBoxHaState`)
+   espelha exatamente a mesma regra.
+2. **Filtro de Acumulação (F2) no EA** (`convergenceEvaluator.ts` + `types/trading.ts` + `eaConfigService.ts`
+   + `AutomationPanel.tsx` + `StrategyStudio.tsx`): entra como **porta de sinal no funil único**
+   `evaluateBoxConvergence`, consumido igualmente por **robô real** (`RenkoFlowEngine.checkClosedBox`),
+   **Sombra** (`shadowRobotService.processClosedBox`) e **Coletor** (`paperStrategyBot.onClosedBox`) — uma
+   mudança só, três automações. `efficiencyRatio()` (Kaufman: |deslocamento líquido| / Σ|passo| sobre as
+   últimas `consolidationLookbackBoxes`=10 closes; abaixo de `consolidationErMax`=0.30 = acumulação; **warm-up
+   retorna 1 e nunca bloqueia**, mesma filosofia do limiar adaptativo) + `isExhaustedFlow()` (o gate de
+   exaustão), combinados em `regimeBlock` e aplicados nos ramos PYRAMID UP/DOWN e no BUY/SELL clássico. É
+   **adimensional**, coerente com a regra "threshold é calculado, não número físico". **5 chaves novas com
+   default OFF** (opt-in — nenhuma ordem muda até o operador ligar); propagam-se sozinhas à `SavedStrategy`
+   (`mergeConfig = {...DEFAULT, ...patch}` + `splitStrategyPatch`). UI: Ajustes → Gatilho de Disparo → bloco
+   **"Filtro de Acumulação"** (2 checkboxes + sliders de janela/ER/razão), com resumo na linha colapsável e
+   no retrato do Estúdio ("· anti-acumulação").
+3. **Livro de Rodadas** (`roundAuditService.ts` **novo** + `App.tsx` + `SimulatorView.tsx`): auditoria
+   **persistente por corrida** integrando as três automações (contagens, book, shadow, collector + linha do
+   tempo de ações). Após **revisão de código** (subagente único), ganhou robustez: **dois relógios separados**
+   (`RoundAction.clock = 'wall' | 'bar'`, ordenação **agrupada por relógio** — parede primeiro, barra depois,
+   nunca uma serial misturando os dois, pois ordens reais usam `Date.now` e PaperTrades usam `box.timeEnd`);
+   **`liveMix`** (MT5 CONNECTED durante replay não contamina o snapshot de sombra/coletor — a rodada é marcada
+   e um **banner** avisa); **parse defensivo** do `localStorage` (filtra registros malformados); legenda
+   honesta do **CSV** (primeiras 500 linhas quando o cap bate) e tooltip do **Livro real** (só posições
+   ABERTAS nesta corrida).
+
+**Textos defasados corrigidos**: a UI ainda dizia que o replay **"dispara sozinho na abertura"** — contradição
+direta com a regra do Ciclo 12 ("terminal acorda parado e vazio"). Corrigido em `SimulatorView.tsx` e em duas
+regiões de `App.tsx` (comentário JSX + tooltip `title`); o comentário **histórico** em `App.tsx:3040`, que
+narra um boot-replay **já removido**, foi mantido de propósito (descreve o passado com precisão).
+
+**Verificação**. `npx tsc --noEmit` limpo · `npx vite build` OK (2,79 s) · **asserts headless do Livro 5/5** e
+**bench A/B do Filtro 6/6** (scripts temporários `scripts/_*.ts` rodados contra os módulos reais e apagados
+depois). Bench do filtro em três pregões sintéticos: **SERRADO 60 entradas / 59 flips / PnL −590 → 9 / 8 /
+−90** (cortou ~86% do serrote); **TENDÊNCIA** e **TENDÊNCIA+PULLBACK** ficaram **idênticos** ligado/desligado
+(sem falso positivo, sem cortar movimento bom). ⚠️ **Limitação conhecida**: os defaults (ER 0.30, janela 10,
+razão 0.7) vieram de **dado sintético** — calibrar com pregões reais; e **nada foi conferido em tela nem na
+demo XP**.
+
+---
+
 ## 📆 Ciclo 14 — 03/11/2026 · Fase A: estratégia como banco de dados único, um só editor, telas em lista e a régua X dentro do gráfico
 
 Ciclo de **arquitetura + leitura**, aberto por uma reclamação do operador: "as alterações foram técnicas,
