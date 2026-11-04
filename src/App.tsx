@@ -203,6 +203,14 @@ const ALT_RENKO_SCALES: { key: 'renko15r' | 'renko20r' | 'renko25r'; pts: number
 const REPLAY_DAY_CHOICES = [1, 3, 5];
 
 /** Identifica se o símbolo recebido pela rede corresponde ao ativo atualmente em foco na tela. */
+function getAssetIdForSymbol(symbolStr?: string): AssetId {
+  if (!symbolStr) return 'WIN';
+  const s = symbolStr.toUpperCase();
+  if (s.includes('WDO') || s.includes('DOL')) return 'WDO';
+  if (s.includes('BIT') || s.includes('BTC') || s.includes('WBRA')) return 'BTCBR';
+  return 'WIN';
+}
+
 function isSameAssetSymbol(incomingSym: string, targetAsset: AssetSpec): boolean {
   if (!incomingSym) return true;
   const inc = incomingSym.toUpperCase().trim();
@@ -1783,7 +1791,85 @@ export default function App() {
 
   // Instâncias dos motores de cálculo
 
-  const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
+    // Repositório de feeds, motores e Times & Trades INDEPENDENTES por ativo
+  const assetStateRef = useRef<Record<AssetId, {
+    ticks: Tick[];
+    boxes: RenkoBox[];
+    currentBox: Partial<RenkoBox> | null;
+    currentPrice: number;
+    cvd: number;
+    rangeBoxes: RenkoBox[];
+    rangeCurrentBox: Partial<RenkoBox> | null;
+    timeBoxes: RenkoBox[];
+    timeCurrentBox: Partial<RenkoBox> | null;
+    engine: RenkoFlowEngine;
+    rangeEngine: RangeBarEngine;
+    timeEngine: TimeBarEngine;
+    allTicks: Tick[];
+  }>>({
+    WIN: {
+      ticks: [],
+      boxes: [],
+      currentBox: null,
+      currentPrice: referencePrice(ASSETS.WIN),
+      cvd: 0,
+      rangeBoxes: [],
+      rangeCurrentBox: null,
+      timeBoxes: [],
+      timeCurrentBox: null,
+      engine: new RenkoFlowEngine(50, ASSETS.WIN),
+      rangeEngine: new RangeBarEngine(100),
+      timeEngine: new TimeBarEngine(30000),
+      allTicks: [],
+    },
+    WDO: {
+      ticks: [],
+      boxes: [],
+      currentBox: null,
+      currentPrice: referencePrice(ASSETS.WDO),
+      cvd: 0,
+      rangeBoxes: [],
+      rangeCurrentBox: null,
+      timeBoxes: [],
+      timeCurrentBox: null,
+      engine: new RenkoFlowEngine(5, ASSETS.WDO),
+      rangeEngine: new RangeBarEngine(10),
+      timeEngine: new TimeBarEngine(30000),
+      allTicks: [],
+    },
+    BTCBR: {
+      ticks: [],
+      boxes: [],
+      currentBox: null,
+      currentPrice: referencePrice(ASSETS.BTCBR),
+      cvd: 0,
+      rangeBoxes: [],
+      rangeCurrentBox: null,
+      timeBoxes: [],
+      timeCurrentBox: null,
+      engine: new RenkoFlowEngine(100, ASSETS.BTCBR),
+      rangeEngine: new RangeBarEngine(400),
+      timeEngine: new TimeBarEngine(30000),
+      allTicks: [],
+    },
+    BTC: {
+      ticks: [],
+      boxes: [],
+      currentBox: null,
+      currentPrice: referencePrice(ASSETS.BTC),
+      cvd: 0,
+      rangeBoxes: [],
+      rangeCurrentBox: null,
+      timeBoxes: [],
+      timeCurrentBox: null,
+      engine: new RenkoFlowEngine(100, ASSETS.BTC),
+      rangeEngine: new RangeBarEngine(400),
+      timeEngine: new TimeBarEngine(30000),
+      allTicks: [],
+    },
+  });
+
+const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
   const simulatorRef = useRef<B3MarketSimulator>(new B3MarketSimulator(referencePrice(asset), asset));
 
@@ -4459,22 +4545,81 @@ export default function App() {
 
           } else if (payload.type === 'TICK') {
             const tickSym = String(payload.symbol || payload.data?.symbol || '').toUpperCase();
-            if (tickSym && !isSameAssetSymbol(tickSym, asset)) {
-              return; // Ignora ticks de outro ativo transmitido em paralelo
+            const tickAssetId = getAssetIdForSymbol(tickSym);
+            const targetState = assetStateRef.current[tickAssetId];
+            const rawTick: Tick = payload.data;
+
+            if (targetState && rawTick && rawTick.price > 0) {
+              // 1. Alimenta o Times & Trades estrito daquele ativo
+              targetState.ticks = [rawTick, ...targetState.ticks.slice(0, 99)];
+              targetState.currentPrice = rawTick.price;
+              if (targetState.allTicks.length < 50000) targetState.allTicks.push(rawTick);
+
+              // 2. Processa no motor Renko do respectivo ativo de forma autônoma
+              const renkoRes = targetState.engine.processTick(rawTick, config);
+              targetState.cvd = targetState.engine.getCvd();
+              targetState.currentBox = targetState.engine.getCurrentBox();
+              if (renkoRes.newBoxClosed && renkoRes.closedBox) {
+                targetState.boxes = [...targetState.engine.getBoxes()];
+              }
+
+              // 3. Processa no motor Range Bar daquele ativo
+              const rangeRes = targetState.rangeEngine.processTick(rawTick);
+              targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
+              if (rangeRes.newBarClosed) {
+                targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
+              }
+
+              // 4. Se for o ativo ativo na tela, sincroniza e atualiza o estado reativo do React
+              const isCurrent = tickAssetId === asset.id || (asset.id === 'BTC' && tickAssetId === 'BTCBR') || (asset.id === 'BTCBR' && tickAssetId === 'BTC');
+              if (isCurrent) {
+                engineRef.current = targetState.engine;
+                rangeEngineRef.current = targetState.rangeEngine;
+                timeEngineRef.current = targetState.timeEngine;
+                allTicksRef.current = targetState.allTicks;
+
+                handleIncomingTick(rawTick);
+              }
             }
-            handleIncomingTick(payload.data);
 
           } else if (payload.type === 'SESSION_BACKFILL') {
             const bfSym = String(payload.symbol || '').toUpperCase();
-            if (bfSym && !isSameAssetSymbol(bfSym, asset)) {
-              return; // Ignora backfill de outro ativo transmitido em paralelo
-            }
-
-            // Gráfico do dia (estimado de barras M1): só desenho — robô, coletor e Boleta ignoram
-
+            const bfAssetId = getAssetIdForSymbol(bfSym);
+            const targetState = assetStateRef.current[bfAssetId];
             const bfTicks: Tick[] = payload.data?.ticks || [];
 
-            handleBackfillTicks(bfTicks);
+            if (targetState && Array.isArray(bfTicks) && bfTicks.length > 0) {
+              const firstTick = bfTicks[0];
+              if (firstTick && firstTick.price > 0) {
+                targetState.engine.initialize(firstTick.price, firstTick.timestamp);
+                targetState.rangeEngine.initialize(firstTick.price);
+                targetState.timeEngine.initialize(firstTick.price);
+              }
+              targetState.allTicks = [...bfTicks];
+              targetState.ticks = [...bfTicks.slice(-100)].reverse();
+              for (const raw of bfTicks) {
+                if (!raw || !(raw.price > 0)) continue;
+                targetState.engine.processTick(raw, config);
+                targetState.rangeEngine.processTick(raw);
+                targetState.timeEngine.processTick(raw);
+              }
+              targetState.boxes = [...targetState.engine.getBoxes()];
+              targetState.currentBox = targetState.engine.getCurrentBox();
+              targetState.cvd = targetState.engine.getCvd();
+              targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
+              targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
+              targetState.currentPrice = bfTicks[bfTicks.length - 1].price;
+
+              const isCurrent = bfAssetId === asset.id || (asset.id === 'BTC' && bfAssetId === 'BTCBR') || (asset.id === 'BTCBR' && bfAssetId === 'BTC');
+              if (isCurrent) {
+                engineRef.current = targetState.engine;
+                rangeEngineRef.current = targetState.rangeEngine;
+                timeEngineRef.current = targetState.timeEngine;
+                allTicksRef.current = targetState.allTicks;
+
+                handleBackfillTicks(bfTicks);
+              }
+            }
 
             setLatestToast({
 
@@ -6878,12 +7023,27 @@ export default function App() {
     // Motores e eixos no preço de referência do ativo novo; o livro é o DELE (persistido à parte).
 
     const nextRangePts = next.id === 'WDO' ? 10 : (next.id === 'BTCBR' || next.id === 'BTC' ? 400 : 100);
-    handleResetData({
-      assetOverride: next,
-      keepAudit: true,
-      boxPointsOverride: box.points,
-      rangePointsOverride: nextRangePts,
-    });
+    const targetState = assetStateRef.current[id];
+    if (targetState && targetState.boxes.length > 0) {
+      engineRef.current = targetState.engine;
+      rangeEngineRef.current = targetState.rangeEngine;
+      timeEngineRef.current = targetState.timeEngine;
+      allTicksRef.current = targetState.allTicks;
+      setBoxes([...targetState.boxes]);
+      setCurrentBox(targetState.currentBox);
+      setCvd(targetState.cvd);
+      setTicks([...targetState.ticks]);
+      setRangeBoxes([...targetState.rangeBoxes]);
+      setRangeCurrentBox(targetState.rangeCurrentBox);
+      setCurrentPrice(targetState.currentPrice || referencePrice(next));
+    } else {
+      handleResetData({
+        assetOverride: next,
+        keepAudit: true,
+        boxPointsOverride: box.points,
+        rangePointsOverride: nextRangePts,
+      });
+    }
 
     setOrders(OrderAuditService.loadIntradayOrders(next) ?? []);
 
@@ -8243,7 +8403,7 @@ ${
 
               <div className="h-full w-full">
 
-                <TimesAndTrades ticks={ticks} cvd={cvd} />
+                <TimesAndTrades ticks={ticks} cvd={cvd} asset={asset} />
 
               </div>
 

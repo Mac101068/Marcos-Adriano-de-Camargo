@@ -1,15 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import { Tick } from '../types/trading';
+import { AssetSpec, formatPrice } from '../assets/assetRegistry';
 import { Filter, ArrowUpRight, ArrowDownRight, Zap } from 'lucide-react';
 
 interface TimesAndTradesProps {
   ticks: Tick[];
   cvd: number;
+  asset?: AssetSpec;
 }
 
-export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd }) => {
+export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd, asset }) => {
   const [minVolumeFilter, setMinVolumeFilter] = useState<number>(1);
   const [onlyInstitutional, setOnlyInstitutional] = useState<boolean>(false);
+
+  const instLimit = asset?.id === 'WDO' ? 20 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 5 : 40);
 
   // Estatísticas da fita
   const stats = useMemo(() => {
@@ -29,11 +33,11 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd }) =>
   const filteredTicks = useMemo(() => {
     return ticks
       .filter((t) => {
-        if (onlyInstitutional) return t.volume >= 40;
+        if (onlyInstitutional) return t.volume >= instLimit;
         return t.volume >= minVolumeFilter;
       })
       .slice(0, 80); // Mostra os 80 mais recentes
-  }, [ticks, minVolumeFilter, onlyInstitutional]);
+  }, [ticks, minVolumeFilter, onlyInstitutional, instLimit]);
 
   return (
     <div className="flex flex-col h-full bg-slate-950 border border-slate-800/80 rounded-lg overflow-hidden">
@@ -41,8 +45,10 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd }) =>
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-slate-900 border-b border-slate-800 text-xs">
         <div className="flex items-center gap-2">
           <Zap className="w-4 h-4 text-emerald-400" />
-          <span className="font-semibold text-slate-100">Times & Trades MT5 (Tick-a-Tick)</span>
-          <span className="text-slate-400 font-mono text-[11px]">· {ticks.length} negócios capturados</span>
+          <span className="font-semibold text-slate-100">
+            Times & Trades {asset ? `· ${asset.label}` : 'MT5'}
+          </span>
+          <span className="text-slate-400 font-mono text-[11px]">· {ticks.length} negócios</span>
         </div>
 
         {/* Filtros de Tamanho de Lote */}
@@ -66,29 +72,29 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd }) =>
             </button>
             <button
               onClick={() => {
-                setMinVolumeFilter(10);
+                setMinVolumeFilter(asset?.id === 'WDO' ? 5 : 10);
                 setOnlyInstitutional(false);
               }}
               className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${
-                minVolumeFilter === 10 && !onlyInstitutional
+                minVolumeFilter === (asset?.id === 'WDO' ? 5 : 10) && !onlyInstitutional
                   ? 'bg-emerald-500/20 text-emerald-300 font-semibold'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              ≥ 10
+              ≥ {asset?.id === 'WDO' ? 5 : 10}
             </button>
             <button
               onClick={() => {
-                setMinVolumeFilter(25);
+                setMinVolumeFilter(asset?.id === 'WDO' ? 10 : 25);
                 setOnlyInstitutional(false);
               }}
               className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${
-                minVolumeFilter === 25 && !onlyInstitutional
+                minVolumeFilter === (asset?.id === 'WDO' ? 10 : 25) && !onlyInstitutional
                   ? 'bg-emerald-500/20 text-emerald-300 font-semibold'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              ≥ 25
+              ≥ {asset?.id === 'WDO' ? 10 : 25}
             </button>
             <button
               onClick={() => setOnlyInstitutional(!onlyInstitutional)}
@@ -98,7 +104,7 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd }) =>
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              🏛️ Grandes Lotes (≥ 40)
+              🏛️ Institucional (≥ {instLimit})
             </button>
           </div>
         </div>
@@ -160,7 +166,7 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd }) =>
             ) : (
               filteredTicks.map((tick) => {
                 const isBuy = tick.aggressor === 'BUY';
-                const isBigLot = tick.volume >= 40;
+                const isBigLot = tick.volume >= instLimit;
                 return (
                   <tr
                     key={tick.id}
@@ -174,7 +180,7 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd }) =>
                         isBuy ? 'text-emerald-400' : 'text-rose-400'
                       }`}
                     >
-                      {tick.price.toLocaleString('pt-BR')}
+                      {asset ? formatPrice(tick.price, asset) : tick.price.toLocaleString('pt-BR')}
                     </td>
                     <td className="py-1 px-3 text-right">
                       <span
