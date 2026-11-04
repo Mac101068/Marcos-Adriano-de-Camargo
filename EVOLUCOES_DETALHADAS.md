@@ -8,6 +8,90 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 14 — 03/11/2026 · Fase A: estratégia como banco de dados único, um só editor, telas em lista e a régua X dentro do gráfico
+
+Ciclo de **arquitetura + leitura**, aberto por uma reclamação do operador: "as alterações foram técnicas,
+o visual não aconteceu — queria uma lógica mais coerente para programar e acessar as estratégias". O
+problema real era haver **dois lugares para guardar a mesma coisa** (a biblioteca do Estúdio e o config
+do EA) e **dois editores** (rascunho do Estúdio e Parâmetros). Nada aqui muda matemática de sinal, ponte
+ou portões.
+
+### 14.1 ✅ Config ativo virou **visão materializada** da estratégia (`strategyLibraryService.ts`, `types/trading.ts`, `eaConfigService.ts`)
+
+`SavedStrategy` (`fluxo_strategy_library_v1`) é agora a fonte autoritativa de **todos os campos de
+estratégia**; `fluxo_renko_ea_config_v3` é derivado. Mecanismo: conjunto `RUNTIME_KEYS` = `active`,
+`dataSourceMode`, `mt5Host`, `mt5Port`, `shadowRobot`, `lastSavedTimestamp`, `strategyId` — esses vivem
+só no config; todo o resto pertence à estratégia. `splitStrategyPatch(patch)` separa um patch nos dois
+sacos, `pickRuntime`/`mergeConfig` remontam, `resolveOperational(strategy, baseConfig)` é o **único
+funil que produz config ativo** (`{...strategy.config, ...runtime, strategyId}`), `ensureActiveStrategy`
+garante que todo config tenha estratégia por trás (por `strategyId` → por `profileName` → semeia
+"Estratégia ativa") e `updateStrategyConfig` escreve na biblioteca sem nunca deixar runtime vazar.
+`strategyId: string | null` entrou no `AutomationConfig` e é preservado em load/merge/import (sem isso o
+spread do DEFAULT apagava o vínculo). **Fase A verificada com 18 asserts headless** (script temporário
+com polyfill de `localStorage`, apagado após rodar): separação runtime↔estratégia, semente idempotente,
+migração de config antigo, F5 e ausência de leak.
+
+### 14.2 ✅ Funil único de escrita e de pacote (`App.tsx`)
+
+`patchActiveStrategy` é o **único** caminho de escrita: boleta, cada campo dos Parâmetros (via prop
+`onPatchStrategy`) e a documentação passam por ele → `updateStrategyConfig` na biblioteca →
+`resolveOperational` devolve o config. `handleApplyConfigBundle(cfg, name)` trata **pacote inteiro**:
+aplicar perfil 1-clique, restaurar padrões e importar JSON fazem upsert por **nome** (atualiza a
+homônima, senão cria) e ativam pelo funil de sempre, com `active: false` — a estratégia que estava em
+uso **não é destruída**, continua no Estúdio.
+
+### 14.3 ✅ Bug corrigido de brinde: **aplicar perfil / restaurar / importar ligavam o robô**
+
+`DEFAULT_EA_CONFIG.active === true`, e os três caminhos espalhavam esse objeto no config ativo — bastava
+tocar num perfil para o EA entrar em operação, contra a regra do terminal que acorda parado. Agora todos
+forçam `active: false` e persistem assim (inclusive no caminho de compatibilidade sem a prop). O modal de
+restauração também estava **mentindo**: prometia "Pullback na abertura, Parcial +50, SL 100, TP 150", mas
+a fábrica entrega Pirâmide & Confluência sem SL/TP fixos; reescrito com os números reais e com a nova
+semântica (cria/ativa "Padrão de Fábrica (Pirâmide 10R)").
+
+### 14.4 ✅ Um único editor: Estúdio gerencia, Parâmetros edita (`StrategyStudio.tsx`, `Header.tsx`)
+
+O editor de rascunho do Estúdio foi **removido** (852 → ~620 linhas), eliminando a duplicação com a tela
+de Parâmetros. O Estúdio ficou como a casa da biblioteca: criar (modal de nome), renomear, duplicar,
+ativar, excluir, importar, sincronizar e o **retrato somente-leitura** da estratégia escolhida. A ativação
+passou a comparar por **id** (nome só como fallback) e o card ativo mostra `AO VIVO` + "Rodando no Robô
+1" em vez do botão Ativar. No header, **selo da estratégia ativa** (Zona 1, visível no desktop e no
+celular, sem breakpoint): palette + "EA" + nome + `#id` curto + ponto **verde AO VIVO / âmbar SOLTO**,
+clique abre o Estúdio; a tira de status passou a dizer **"Trocar:"** e resolve a opção por `strategyId`.
+
+### 14.5 ✅ Telas em **lista colapsável** (`CollapsibleSection.tsx`, novo)
+
+Reclamação: "com os quadros fica muita informação na tela". Micropadrão compartilhado: linha com ícone +
+título + **resumo de uma linha dos valores atuais** + chip + chevron; os campos só existem no DOM quando
+aberto, um grupo abaixo do outro. **Parâmetros** perdeu a grade `lg:grid-cols-3` (três quadros sempre
+abertos) por uma coluna única com blocos 1, 1.5 (Robô 2), 2, 3, 4, Pirâmide, 5, 6, simulador e os **5
+perfis rápidos em `PresetRow`** (continua 1-clique; descrição virou tooltip; lixeira preservada).
+**Estúdio** usa o mesmo formato no retrato (Núcleo, Fluxo, Entrada, Gestão, Janela, Execução). Limitação
+do HTML descoberta e tratada: o gatilho é um `<button>`, então o checkbox da janela de horários e os
+botões de velocidade do simulador **desceram para o corpo** do grupo.
+
+### 14.6 ✅ Régua de tempo **dentro do painel de preço** (`RenkoFlowChart.tsx`)
+
+"Inverta: deixe o indicador livre e a escala no gráfico." A faixa de 24 px que o Ciclo 13 tinha posto no
+vão entre os painéis (roubando 28 px do indicador) passou a viver **no rodapé do painel de preço**, colada
+acima do divisor: `TIME_AXIS_BAND_H` 24 → **22**, `TIME_AXIS_BASELINE` 17 → **8** (medido para cima),
+`priceBottomMargin` 16 → 22. O painel de fluxo agora começa no divisor com folga `FLOW_TOP_PAD = 16` só
+para a etiqueta — Heikin-Ashi/histograma ganharam altura e o divisor interno (`histDividerY`) foi
+recalculado na mesma conta do hit-testing. **O gesto acompanhou o número**: arrastar na faixa da régua
+(zoom/rolagem do eixo X), duplo clique (reset horizontal) e cursor `ew-resize` agora ficam acima do
+divisor; a tolerância do divisor (±5) segue vencendo, então agarrar rente à linha ainda move o painel.
+
+### Verificação do Ciclo 14
+
+`npx tsc --noEmit` limpo · `npx vite build` OK (2,5–3,0 s) · **18/18 asserts headless da Fase A**
+(seed idempotente, patch dividido sem leak de runtime, materialização preservando conexão, import/sync
+por id). **Nada ainda conferido em tela**: selo após ativar, boleta escrevendo na biblioteca, F5
+mantendo o vínculo, sync entre navegadores com `strategyId`, acordeão no Android e o novo arrasto do
+eixo X. Pendência assumida e registrada: "Salvar como Perfil do Operador" ainda grava no depósito antigo
+de presets (aplicar já vai para o banco).
+
+---
+
 ## 📆 Ciclo 13 — 02/11/2026 · Refino de leitura: régua X no divisor, ZERAR agrupado, sombra acorda zerada e ▲C/▼V em todos os navegadores
 
 Ciclo de **conferência visual e semântica** pedido de dentro da tela, não por bug novo — cada ponto
@@ -26,6 +110,10 @@ divisores apertada de 8 → 5 px para a faixa nova continuar clicável (arrastar
 funciona); `handleMouseDown`, `handleDoubleClick` e `getCursorClass` deixaram de tratar
 `canvasH - 24` e agora usam a banda da própria régua. Rótulo `FLUXO` reancorado em
 `pricePaneHeight + TIME_AXIS_BAND_H + 4`.
+
+> ↩ **Atualizado no Ciclo 14 (14.6)**: a faixa saiu do vão entre os painéis e passou para **dentro do
+> painel de preço**, colada acima do divisor — `TIME_AXIS_BAND_H = 22`, `TIME_AXIS_BASELINE = 8`
+> (medido para cima) e `FLOW_TOP_PAD = 16` no topo do fluxo. O indicador voltou a ser dono da janela.
 
 ### 13.2 ✅ ZERAR TUDO agrupado com ZERAR C / ZERAR V (`BoletaTicket.tsx`)
 

@@ -3,14 +3,15 @@
 Você está assumindo o projeto **Fluxo & Renko 10R - MT5 Quant Terminal**: aplicação web de trading
 quantitativo que hoje roda no Mini-Índice B3 (`WIN$`) e está preparada para multi-mercado (WDO e BTC
 já têm linha no registro, mas seguem **`a_confirmar`**), enviando ordens automatizadas ao MetaTrader 5
-por uma ponte WebSocket em Python. **Fase atual: Ciclo 13 + hotfix d9e3824 — o terminal acorda
-parado e vazio (regra do operador), o limiar de sinal é calculado do próprio pregão (P60), o relógio
-do pregão só bloqueia ordens reais e replay (simulador ao vivo roda 24h), o balão ⚠ explica qualquer
-inação sem piscar, os navegadores interno/externo se sincronizam por um JSON, estratégia removida
-limpa as referências órfãs dos dois robôs, a Sombra (Robô 2) acorda ZERADA como a boleta, a régua X
-mora no divisor Renko ↔ Heikin-Ashi, os três ZERAR estão agrupados e os sinais são sempre ▲ C / ▼ V**
-(a ponte ainda nunca rodou contra a corretora de verdade
-— validação na demo XP segue o próximo marco).
+por uma ponte WebSocket em Python. **Fase atual: Ciclo 14 (commit `23cb03f`) — a estratégia virou banco
+ de dados único**: a `SavedStrategy` da biblioteca manda, o config ativo é **visão materializada** dela
+ (editar campo, aplicar perfil 1-clique, restaurar padrões e importar JSON escrevem na biblioteca),
+ **existe um único editor de parâmetros** (a aba Parâmetros; o Estúdio só gerencia a biblioteca), o
+ **header traz o selo da estratégia ativa** (EA + nome + `#id` + ponto verde AO VIVO / âmbar SOLTO),
+ **Estúdio e Parâmetros são listas colapsáveis** (uma linha por grupo, com o resumo dos números; o
+ clique abre os campos abaixo) e a **régua de tempo voltou para dentro do gráfico de preço**, deixando
+ o indicador livre abaixo do divisor (a ponte ainda nunca rodou contra a corretora de verdade
+ — validação na demo XP segue o próximo marco).
 
 ## 0. QUEM É O USUÁRIO E COMO TRABALHAR
 - Brasileiro, iniciante em programação. **Toda a UI, comentários e documentação em português.**
@@ -60,9 +61,21 @@ mora no divisor Renko ↔ Heikin-Ashi, os três ZERAR estão agrupados e os sina
      "mãe" foi abolida do gráfico (poluía a tela quando a Pirâmide despachava ordem-mãe) e o papel
      continua legível pelos prefixos **P1/P2/RET** que só aparecem em pirâmide/reteste. Log interno
      (App, auditoria, script Python) mantém "ORDEM MÃE" porque ali é semântica de gestão. A régua de
-     tempo mora na faixa `TIME_AXIS_BAND_H = 24` entre o painel de preço e o painel de fluxo
-     (clique/arraste na própria faixa move o eixo X); os três ZERAR ficam agrupados abaixo dos botões
-     COMPRA/VENDA — nunca depois do livro de hedge.
+     tempo mora na faixa `TIME_AXIS_BAND_H = 22` **dentro do painel de preço**, colada acima do divisor
+     (clicar/arrastar na faixa move o eixo X — o gesto acompanha o número); o painel de fluxo começa no
+     divisor e sobra só `FLOW_TOP_PAD = 16` para a etiqueta do painel. Os três ZERAR ficam agrupados
+     abaixo dos botões COMPRA/VENDA — nunca depois do livro de hedge.
+  15. **A `SavedStrategy` é o banco único; o config ativo é view** (Ciclo 14): nenhum campo de estratégia
+     se salva direto no config. Escrita de campo passa por `patchActiveStrategy` (App) →
+     `updateStrategyConfig`; pacote inteiro (perfil 1-clique, restaurar padrões, importar JSON) passa por
+     `handleApplyConfigBundle` → upsert por **nome** + ativação pelo funil de sempre. `RUNTIME_KEYS`
+     (`active`, `dataSourceMode`, `mt5Host/Port`, `shadowRobot`, `lastSavedTimestamp`, `strategyId`)
+     nunca entram dentro da estratégia. Consequência que já era bug: `DEFAULT_EA_CONFIG.active === true`,
+     então **todo caminho que carrega um config inteiro tem de forçar `active: false`** (regra 10).
+  16. **Quadro de informação virou linha colapsável** (`CollapsibleSection`): uma linha por grupo com o
+     resumo dos valores atuais; os campos abrem abaixo, um grupo após o outro, numa coluna única. Nada de
+     grade de quadros sempre abertos, e **nada de controle interativo (checkbox/botão) no cabeçalho** —
+     ele é um `<button>` e não pode conter outros.
 
 ## 1. PILARES DA ESTRATÉGIA
 1. **Renko 10R = 50 pontos** por box; reversão exige 2 boxes (100 pts); corpo 100% sólido
@@ -294,7 +307,37 @@ npx tsx scripts/<nome>.ts # checagem headless de lógica pura (registro, migraç
 ```
 
 ## 6. PENDÊNCIAS ABERTAS
-- 📍 **PONTO DE RETOMADA (fim do Ciclo 13, 02/11/2026 — hotfix d9e3824)**: **refino de leitura + sombra reset visível** — quatro ajustes
+- 📍 **PONTO DE RETOMADA (fim do Ciclo 14, 03/11/2026 — commit `23cb03f`)**: **Fase A — estratégia como
+  banco de dados único — mais a leitura em listas**. (1) `strategyLibraryService.ts` ganhou
+  `RUNTIME_KEYS`, `pickRuntime`, `splitStrategyPatch`, `resolveOperational`, `ensureActiveStrategy` e
+  `updateStrategyConfig`: o config ativo (`fluxo_renko_ea_config_v3`) passou a ser **visão materializada**
+  da `SavedStrategy` (`fluxo_strategy_library_v1`), e `strategyId` entrou no `AutomationConfig`.
+  (2) `App.tsx`: `patchActiveStrategy` é o **funil único de escrita** (boleta, Parâmetros e documentação
+  passam por ele) e `handleApplyConfigBundle` faz perfil 1-clique / restaurar padrões / importar JSON
+  virarem **upsert por nome + ativação** na biblioteca — antes esses três escreviam só no config e,
+  como `DEFAULT_EA_CONFIG.active === true`, **ligavam o robô silenciosamente** (corrigido: agora pausado).
+  Restaurar padrões **não sobrescreve mais a estratégia em uso**: cria/ativa "Padrão de Fábrica
+  (Pirâmide 10R)" e o modal foi reescrito (o texto antigo descrevia números que a fábrica não entrega).
+  (3) **Um único editor**: o rascunho do Estúdio foi removido — Estúdio gerencia (criar, renomear,
+  duplicar, ativar, excluir, importar, sincronizar) e mostra retrato **somente-leitura**; Parâmetros edita.
+  (4) **Selo da estratégia ativa** na Zona 1 do header (EA + nome + `#id` curto + ponto verde AO VIVO /
+  âmbar SOLTO, clique abre o Estúdio), visível no desktop e no celular; a tira diz "Trocar:" e resolve
+  por `strategyId`. (5) **`CollapsibleSection`** (novo) — Estúdio e Parâmetros viraram listas colapsáveis
+  de uma coluna (blocos 1, 1.5, 2, 3, 4, Pirâmide, 5, 6, simulador e os 5 perfis rápidos em `PresetRow`),
+  cada linha com resumo dos valores; checkbox e botões que viviam em cabeçalho desceram para o corpo.
+  (6) **Régua de tempo dentro do painel de preço** (`TIME_AXIS_BAND_H` 24→22, `TIME_AXIS_BASELINE` 17→8,
+  `FLOW_TOP_PAD = 16`), com o gesto do eixo X acompanhando e o indicador pegando a janela livre.
+  **Verificado**: `npx tsc --noEmit` limpo, `npx vite build` OK e 18/18 asserts headless da Fase A
+  (script temporário, apagado depois). **Nada disso foi conferido em tela ainda.**
+  **Voltar por**: (1) 👀 conferir em tela — boleta enchendo a biblioteca, selo após ativar, F5 mantendo o
+  vínculo, sync entre navegadores com `strategyId`, acordeão no celular Android e arrastar a régua nova;
+  (2) decidir o destino de "Salvar como Perfil do Operador" (ainda grava no depósito antigo de presets;
+  aplicar já vai para o banco) — a opção limpa é o botão criar direto uma estratégia no Estúdio;
+  (3) 🧫 conectar MT5 demo XP e coletar 5 dias reais pela ponte; (4) 🧪 testar as 5 estratégias
+  "Pirâmide 3/4/5/6/7 ctros" na sombra com replay 5d OPERA; (5) comparar Boleta (Range 50pts) vs. Sombra
+  (Renko 15R/75pts) no mesmo seed; (6) padronizar "mãe" na boleta/auditoria/Python; (7) demais
+  pendências herdadas dos Ciclos 12/13.
+- 📍 **PONTO DE RETOMADA anterior (fim do Ciclo 13, 02/11/2026 — hotfix d9e3824 — superado pelo ponto acima, mantido como histórico)**: **refino de leitura + sombra reset visível** — quatro ajustes
   pedidos de dentro da tela, sem tocar matemática de sinal nem portões. (1) régua de tempo do
   eixo X mora **no divisor Renko ↔ Heikin-Ashi** (faixa de 24 px clicável/arrastável —
   `TIME_AXIS_BAND_H = 24`, `TIME_AXIS_BASELINE = 17`); (2) os **três ZERAR** da boleta estão

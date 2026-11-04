@@ -23,7 +23,7 @@ O **Fluxo & Renko 10R - MT5 Quant Terminal** é uma plataforma quantitativa prof
 10. **Integração MetaTrader 5 (Python Bridge) blindada**: WebSocket com handshake de token, armamento `ARM`/`DISARM` e tetos de risco impostos pela própria ponte.
 11. **Auditoria Intraday & Compliance**: trilha de eventos por ordem, filtros, timeline e exportação CSV padrão brasileiro, com **livro separado por mercado** (`..._WIN`, `..._WDO`, `..._BTC`).
 12. **Módulo SaaS & Painel Master do Administrador**: licenciamento por dias, paywall com checkout PIX/Cartão e gestão de clientes (⚠️ ainda maquete em `localStorage`, sem backend).
-13. **Estúdio de Estratégias**: biblioteca versionada de snapshots do `AutomationConfig`, independente dos perfis do Ajustes — ativar uma estratégia é gesto explícito e o Robô continua PAUSADO.
+13. **Estratégia como banco de dados único (Ciclo 14)**: a biblioteca do Estúdio (`SavedStrategy`) é a fonte autoritativa de todo campo de estratégia; o config ativo é **visão materializada** dela. Escrita de campo passa por um único funil (`patchActiveStrategy`) e pacote inteiro (perfil, reset, import) por outro (`handleApplyConfigBundle` → upsert por nome + ativação), sempre com o Robô PAUSADO. **Um só editor** de parâmetros (a aba Parâmetros); o Estúdio gerencia a biblioteca.
 14. **Registro de Ativo (multi-mercado)**: todos os números que mudam de contrato para contrato (R$/ponto, tick, casas decimais, preço-base, janelas de sessão, escalas de Renko) moram em `src/assets/assetRegistry.ts`, junto da **taxonomia dos códigos** (série contínua `WIN$N` para teste longo × contrato vigente `WINZ26` para o pregão de hoje). WIN está homologado; **WDO e BTC aparecem no seletor como `A CONFIRMAR`** e só entram em **ensaio** (Robô OFF, ponte em SEGURO). O histórico do replay vem do MT5 quando a ponte está conectada, e do gerador sintético (rotulado) quando não está.
 15. **Identidade visual do posto de operação (Ciclo 9)**: a boleta é uma caixa em camadas (título âmbar com o ⚙ dos ajustes do gráfico na própria linha e a sub-caixa recolhível **Parâmetros** com os seis steppers da base), o cabeçalho mostra os **dois códigos do ativo rotulados pelo papel** e o gráfico pode **assinar o ativo** com uma marca d'água atrás dos tijolos — anexo opcional, persistido por preferência do operador.
 
@@ -364,8 +364,15 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
   `symbolRole()` classifica cada código em `série` / `vigente` / `venc.`. **Cabeçalho e tira de status
   lêem do mesmo memo**, então a tela nunca anuncia um símbolo e desenha outro. WDO e BTC **não têm**
   `activeContract` (vencimento não confirmado ≠ código inventado).
-- **Estúdio de Estratégias** (`fluxo_strategy_library_v1`): biblioteca separada dos perfis abaixo — salvar
-  ou editar ali **nunca** mexe no config ativo; ativar é um clique explícito, e o Robô continua PAUSADO.
+- **Estratégia é o banco; o config é a view (Ciclo 14)**: `fluxo_strategy_library_v1` (`SavedStrategy`)
+  guarda todos os campos de estratégia; `fluxo_renko_ea_config_v3` é derivado por
+  `StrategyLibraryService.resolveOperational` e carrega `strategyId`. Os campos de **runtime/conexão**
+  (`active`, `dataSourceMode`, `mt5Host`, `mt5Port`, `shadowRobot`, `lastSavedTimestamp`, `strategyId`)
+  ficam só no config e nunca entram na estratégia (`RUNTIME_KEYS` + `splitStrategyPatch`). Editar campo,
+  aplicar perfil 1-clique, restaurar padrões e importar JSON **escrevem na biblioteca** e re-materializam
+  o config; ativar/criar é gesto explícito e o Robô continua PAUSADO (perfil e import não ligam mais o
+  robô sozinhos). O Estúdio mostra o retrato **somente-leitura** em linhas colapsáveis; o header traz o
+  selo da estratégia ativa (nome + `#id` + ponto verde AO VIVO / âmbar SOLTO).
 - **Persistência Automática na Memória Local (`localStorage`)**:
   - Toda alteração feita pelo operador nos parâmetros é imediatamente registrada e persistida no navegador através do serviço `EaConfigService`.
   - Ao recarregar a página ou abrir o terminal em outra sessão, o EA restaura exatamente a última configuração estabelecida.
@@ -425,7 +432,7 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
     │   └── drawing.ts                # Formas desenhadas no canvas (linha, retângulo, fibra, zona)
     ├── services/
     │   ├── eaConfigService.ts        # Persistência do config, presets, perfis e merge defensivo (normaliza `assetId` no load E no import JSON)
-    │   ├── strategyLibraryService.ts # Biblioteca do Estúdio em `fluxo_strategy_library_v1` (CRUD defensivo, nunca toca o config ativo)
+    │   ├── strategyLibraryService.ts # Banco único em `fluxo_strategy_library_v1` (CRUD defensivo + `resolveOperational`/`ensureActiveStrategy`/`updateStrategyConfig` que materializam o config ativo)
     │   ├── authService.ts            # Licenças, contagem de dias e personas (⚠️ maquete em localStorage)
     │   ├── orderAuditService.ts      # Livro de auditoria intraday **por ativo** (`auditKeyForAsset`), métricas e CSV padrão BR
     │   ├── marketHistoryService.ts   # Pedido de histórico real: reqId, chunks, dedupe, timeout, `dispose` e suficiência de volume
@@ -481,6 +488,31 @@ Módulo analítico completo com aba dedicada na barra superior e no menu mobile 
 ## 🆕 9. Resumo dos últimos ciclos
 
 > Detalhamento completo, com causa raiz e evidência de verificação, em `EVOLUCOES_DETALHADAS.md`.
+
+### Ciclo 14 (03/11/2026) — Fase A: estratégia como banco de dados único, um só editor e telas em lista
+
+- ✅ **Banco único**: config ativo passou a ser **visão materializada** da `SavedStrategy`
+  (`RUNTIME_KEYS`, `splitStrategyPatch`, `resolveOperational`, `ensureActiveStrategy`,
+  `updateStrategyConfig`); `strategyId` entrou no `AutomationConfig` e sobrevive a load/merge/import.
+- ✅ **Funil único de escrita** (`patchActiveStrategy` para boleta/Parâmetros/docs) e de **pacote**
+  (`handleApplyConfigBundle`: perfil 1-clique, restaurar padrões e importar JSON viram upsert por nome +
+  ativação). Bug corrigido: os três **ligavam o robô** (`DEFAULT_EA_CONFIG.active === true`); agora
+  entram pausados, e o reset não sobrescreve mais a estratégia em uso (modal reescrito).
+- ✅ **Um só editor**: rascunho removido do Estúdio (852 → ~620 linhas); Estúdio gerencia, Parâmetros
+  edita. Selo da estratégia ativa no header (desktop e celular) e tira "Trocar:" resolvida por id.
+- ✅ **`CollapsibleSection`**: Estúdio e Parâmetros viraram listas colapsáveis de uma coluna com resumo
+  dos valores por linha (eram grades de até 3 quadros sempre abertos); perfis rápidos também (1-clique
+  preservado).
+- ✅ **Régua de tempo dentro do painel de preço** (`TIME_AXIS_BAND_H` 24→22, `TIME_AXIS_BASELINE` 17→8,
+  `FLOW_TOP_PAD` 16): o indicador ficou com a janela livre e o gesto do eixo X acompanhou a régua.
+- Verificado: `tsc` limpo, `vite build` OK, 18/18 asserts headless da Fase A. **Conferência em tela e na
+  demo XP pendentes.**
+
+### Ciclo 13 (02/11/2026) — Refino de leitura (resumo)
+
+- ✅ Régua X no divisor (↩ **superada no 14: voltou para dentro do painel de preço**), três ZERAR
+  agrupados, Sombra acordando zerada com aviso "Livro zerado", dropdown avisando biblioteca vazia e
+  ▲ C / ▼ V padronizados no canvas. Detalhe completo em `EVOLUCOES_DETALHADAS.md`.
 
 ### Ciclo 12 (02/11/2026) — Terminal confiável: acorda parado, limiar P60 do pregão e relógio só para ordens reais
 
