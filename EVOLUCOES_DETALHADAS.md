@@ -8,6 +8,76 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 16 — 05/11/2026 · O funil afrouxou por bench (A/B/D/Δ), o Renko parou de atrasar e a ponte passou a explicar a recusa
+
+**Causa raiz (o gatilho do ciclo)**: o operador reportou que o robô **"não estava enviando ordens
+automaticamente"**. A investigação headless (bench em `eaBaseReal`/`strategyLab`, 3 seeds) e o diagnóstico em
+código mostraram que **não era um bug só** — três frentes apertavam o funil ao mesmo tempo (**filtro de
+acumulação ER**, **corte adaptativo P60**, **piso Δ=150**), a **mãe ficava desprotegida** quando um TP de
+pirâmide fechava, e — descoberto no caminho — **a ponte MT5 falhava em silêncio**: a ordem passava da trava de
+risco, o `execute_market_order` retornava `(False, 0)` e **nada voltava para o app**, de modo que "não chega
+nada no MT5" era impossível de diagnosticar pela tela.
+
+### 16.1 ✅ Quatro alavancas nos defaults da Pirâmide + migração guardada + toast
+
+- **A — mãe no breakeven** (`moveMainToBreakevenOnPyramidTp = true`): a cada TP de pirâmide executado, a
+  posição-mãe sobe para o zero-a-zero. `mainBreakevenMigration.ts`.
+- **B — filtro de acumulação OFF** (`consolidationFilterEnabled = false`): o ER herdado do Ciclo 15
+  sobre-filtrava e silenciava scalps vencedores. `consolidationFilterMigration.ts`.
+- **D — limiar adaptativo OFF** (`adaptiveThresholdEnabled = false`): o corte P60 sufocava sinais ao vivo
+  (chip **"SINAL FRACO"**) e inflava o drawdown. `adaptiveThresholdMigration.ts`.
+- **Δ — piso 150→100** (`minDeltaThreshold = 100`, no **default e** no **preset Pirâmide**). Mais ordens e
+  maior fator no bench. `deltaThresholdMigration.ts`.
+- **Por que migração, não só default**: `loadSavedConfig` faz `{...DEFAULT, ...salvo}` — o valor **gravado
+  vence o default**, então trocar o default não alcança quem já salvou. Cada migração é **idempotente** (flag
+  de feito no `localStorage`) e **conservadora** (só toca a preset **PYRAMID** ainda com o
+  valor-intocado-de-default-antigo; quem mexeu manualmente não é tocado). O boot roda as 4 e cada uma que
+  alterou algo dispara um **toast**.
+- `convergenceEvaluator.ts` passou a ler `SESSION_PERCENTILE = config.adaptiveThresholdPercentile ?? 0.6`
+  (campo novo **opcional** em `types/trading.ts`); sem adaptativo, o gate é `Math.max(50, minDeltaThreshold)`.
+- **Onde**: `src/services/eaConfigService.ts`, `src/types/trading.ts`, `src/utils/convergenceEvaluator.ts`,
+  `src/utils/{mainBreakeven,consolidationFilter,adaptiveThreshold,deltaThreshold}Migration.ts`, `src/App.tsx`.
+- **Bench 3 seeds**: A+B expectativa **R$1,98 → 5,44/tr**, PF **1,17 → 1,68**, DD **680 → 544**; adaptativo
+  OFF@Δ150 derruba o DD ~30% com mais ordens e PF igual/melhor; Δ100 domina (PF **1,71 → 1,90**).
+
+### 16.2 ✅ Renko sem atraso e sem gaps: um tick fecha TODOS os boxes (`renkoCalculator.ts`)
+
+- **Causa**: fechar **no máximo um box por tick** fazia a coluna **atrasar** o preço e **abrir gaps** quando um
+  tick varria vários níveis (cascata real, ou agressão no sintético calibrado).
+- **Implementado**: `processTick` ganhou um **laço de preenchimento** (cap 1000) que fecha todos os boxes que o
+  preço cobriu, na ordem, e devolve **`closedBoxes[]`** (+ `closedBox` "de cara" para retrocompatibilidade).
+  `App.tsx` e `scripts/strategyLab.ts` iteram `closedBoxes`, dando a **cada box o sinal do próprio box** —
+  nunca o "último sinal" do tick.
+
+### 16.3 ✅ A ponte deixa de ser muda: `ORDER_RESULT` com o motivo real (`pythonScriptGenerator.ts` + `App.tsx`)
+
+- **Causa-raiz do "não chega nada no MT5"**: `execute_market_order` tinha caminhos de **falha silenciosa** —
+  `check_schedule` (janela de horário **compilada no `.py`**), `symbol_info`/`symbol_info_tick` nulos, e
+  `order_send` com RetCode de recusa — todos retornando `(False, 0)` **sem mensagem de volta**. O app só tratava
+  `RISK_REJECT`, nunca o motivo da execução.
+- **Implementado**: global `ORDER_EXEC_NOTE` grava o motivo em cada ramo; o **router devolve
+  `ORDER_RESULT {ok, ticket, reason, comment}`** após cada ordem; `App.tsx` trata `ORDER_RESULT` e mostra
+  **toast** (✅ executada / ⛔ recusada + motivo legível). Motivos: fora da janela de horários do `.py`,
+  símbolo fora do Market Watch, sem cotação agora, **RetCode** (ex. 10027/10004 = sem Algo Trading).
+- **Consequência prática**: ao mudar horário/Δ/adaptativo, é preciso **re-baixar e rodar o `.py`** — a janela de
+  horários e os parâmetros vão gravados no script.
+
+### 16.4 ✅ Veredito da base real (`scripts/eaBaseReal.ts` → `vereditoBase`)
+
+- A base baixada pela ponte chega como **`M1_RATE`** (proxy de preço OHLC), **não Time & Trades genuíno** →
+  **não-calibrável** para limiares de fluxo. Fica registrado: calibrar P60/Δ no real exige **T&T real**.
+
+### Verificação do Ciclo 16
+
+- ✅ `npx tsc --noEmit` limpo · ✅ `npx vite build` OK · ✅ asserts das migrações (idempotentes e
+  conservadoras) · ✅ `.py` gerado passa em `python -m py_compile` (scripts temporários apagados depois).
+- ⚠️ **Nada foi conferido em tela nem na demo XP.**
+- 🎯 **Bloqueio atual (fora do código)**: a ponte **MT5↔corretora não está conectando**; o operador vai
+  resolver no lado dele. Ao voltar: **re-baixar o `.py` novo** (Δ100 + adaptativo OFF + `ORDER_RESULT`) e
+  clicar comprar/vender para **ler o toast do motivo**.
+
+---
+
 ## 📆 Ciclo 15 — 04/11/2026 · O fluxo parou de atrasar e virou filtro de métricas; nasce o Livro de Rodadas
 
 **Causa raiz / diagnóstico**. Dois incômodos do operador: (a) o indicador de fluxo — Heikin-Ashi desenhado a
