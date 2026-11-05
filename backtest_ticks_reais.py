@@ -160,12 +160,14 @@ def run_backtest_date(target_date_str, symbol="WINZ26", renko_r=10, strategy="PY
 
     
 
-    is_csv = target_date_str.endswith(".csv") or "data/" in target_date_str or "data\\" in target_date_str
+    is_csv = target_date_str.endswith(".csv") or target_date_str.endswith(".gz") or "data/" in target_date_str or "data\\" in target_date_str
 
     if is_csv:
 
         csv_path = target_date_str
 
+        if not os.path.exists(csv_path) and os.path.exists(csv_path + ".gz"):
+            csv_path = csv_path + ".gz"
         if not os.path.isabs(csv_path) and not os.path.exists(csv_path):
 
             for candidate_dir in [r"C:\Users\Lucas\Documents\RoboFluxoB3", r"C:\Users\Lucas\Documents\robo_renko"]:

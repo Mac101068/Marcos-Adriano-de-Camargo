@@ -15,5 +15,7 @@ interface_github/dist/
 backups/
 *.zip
 *.csv
+!data/*.csv
+!data/*.gz
 .vscode/
 .agents/
