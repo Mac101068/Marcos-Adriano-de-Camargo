@@ -106,12 +106,17 @@ export class RenkoFlowEngine {
   }
 
   /**
-   * Processa um tick do Times & Trades
-   * Retorna se um novo box fechou e se gerou sinal de convergência
+   * Processa um tick do Times & Trades.
+   * Um único tick pode varrer VÁRIOS níveis de box (cascata de ticks reais, ou agressão que
+   * varre o book no sintético calibrado): o laço fecha TODOS os boxes que o preço cobriu, na
+   * ordem, até faltar menos de um box para o próximo nível — fim do atraso e dos gaps.
+   * Retorna os boxes fechados (`closedBoxes`), o box "de cara" para os consumidores antigos
+   * (`closedBox`, pareado com o último sinal) e o sinal de convergência, se houve.
    */
   public processTick(tick: Tick, config: AutomationConfig): {
     newBoxClosed: boolean;
     closedBox?: RenkoBox;
+    closedBoxes: RenkoBox[];
     signal?: 'BUY' | 'SELL';
     signalReason?: string;
   } {
@@ -171,242 +176,129 @@ export class RenkoFlowEngine {
     curr.cvdAtClose = this.currentCvd;
 
     let newBoxClosed = false;
-    let closedBox: RenkoBox | undefined;
+    const closedBoxes: RenkoBox[] = [];
     let signal: 'BUY' | 'SELL' | undefined;
     let signalReason: string | undefined;
+    let signalBox: RenkoBox | undefined;
 
-    // Checagem de formação de Renko
-    const lastDirection = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1].direction : 'UP';
-    // Origem do último fechamento: só vale o fechamento do box anterior se ele for DO MESMO dia.
-    // Na virada de sessão a referência passa a ser a abertura real de hoje — o gap não vira caixa.
-    const sameSession =
-      this.boxes.length > 0 && this.sessionKey(this.boxes[this.boxes.length - 1].timeEnd) === tickSession;
-    const lastClose = sameSession ? this.boxes[this.boxes.length - 1].close : curr.open!;
+    // ------------------------------------------------------------------
+    // Formação Renko clássica (com preenchimento): cada volta fecha UM box
+    // e só para quando o preço já não cobre o nível seguinte. Antes, fechar
+    // no máximo um box por tick fazia a coluna ATRASAR o preço e ABRIR GAPS:
+    // se a virada vinha antes dos ticks "recuperarem" os níveis pulados,
+    // eles nunca viravam caixa.
+    // A acumulação pendiente (`curr`) pertence ao PRIMEIRO box da volta.
+    // Os boxes seguintes são de PREENCHIMENTO: a fita não conta o caminho
+    // percorrido, então nascem com fluxo zerado — nunca duplicando o tick.
+    // ------------------------------------------------------------------
+    for (let lap = 0; lap < 1000; lap++) {
+      const last = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1] : undefined;
+      const lastDirection = last ? last.direction : 'UP';
+      // Origem do último fechamento: só vale o fechamento do box anterior se ele for DO MESMO dia.
+      // Na virada de sessão a referência passa a ser a abertura real de hoje — o gap não vira caixa.
+      const sameSession = !!last && this.sessionKey(last.timeEnd) === tickSession;
+      const lastClose = sameSession ? last!.close : curr.open!;
 
-    if (lastDirection === 'UP') {
-      // Continuação de alta: subiu 50 pontos acima do fechamento anterior
-      if (tick.price >= lastClose + this.boxPoints) {
-        const newBoxOpen = lastClose;
-        const newBoxClose = lastClose + this.boxPoints;
+      let direction: 'UP' | 'DOWN' | undefined;
+      let boxOpen = 0;
+      let boxClose = 0;
 
-        closedBox = {
-          index: this.boxes.length,
-          direction: 'UP',
-          open: newBoxOpen,
-          close: newBoxClose,
-          high: Math.max(curr.high || newBoxClose, newBoxClose),
-          low: Math.min(curr.low || newBoxOpen, newBoxOpen),
-          timeStart: curr.timeStart || tick.timestamp,
-          timeEnd: tick.timestamp,
-          ticksCount: curr.ticksCount || 1,
-          totalVolume: curr.totalVolume || tick.volume,
-          buyVolume: curr.buyVolume || 0,
-          sellVolume: curr.sellVolume || 0,
-          delta: curr.delta || 0,
-          cvdAtClose: this.currentCvd,
-          isConvergence: false,
-        };
-
-        // Validação de convergência (com regime: mede, anota o fator e adapta o limiar)
-        const convergenceCheck = this.checkClosedBox(closedBox, config);
-        closedBox.isConvergence = convergenceCheck.isConvergence;
-        closedBox.convergenceType = convergenceCheck.type;
-        if (convergenceCheck.signal) {
-          signal = convergenceCheck.signal;
-          signalReason = convergenceCheck.reason;
-          closedBox.orderDispatched = signal;
+      if (lastDirection === 'UP') {
+        if (tick.price >= lastClose + this.boxPoints) {
+          // Continuação de alta: subiu um box acima do fechamento anterior
+          direction = 'UP';
+          boxOpen = lastClose;
+          boxClose = lastClose + this.boxPoints;
+        } else if (tick.price <= lastClose - this.boxPoints * 2) {
+          // Reversão para baixa: caiu 2x o tamanho do box a partir do fechamento
+          direction = 'DOWN';
+          boxOpen = sameSession ? last!.open : lastClose + this.boxPoints;
+          boxClose = boxOpen - this.boxPoints;
         }
-
-        this.boxes.push(closedBox);
-        newBoxClosed = true;
-
-        // Inicia novo box
-        this.currentBox = {
-          index: this.boxes.length,
-          direction: 'UP',
-          open: newBoxClose,
-          close: tick.price,
-          high: tick.price,
-          low: tick.price,
-          timeStart: tick.timestamp,
-          timeEnd: tick.timestamp,
-          ticksCount: 0,
-          totalVolume: 0,
-          buyVolume: 0,
-          sellVolume: 0,
-          delta: 0,
-          cvdAtClose: this.currentCvd,
-          isConvergence: false,
-        };
-      }
-      // Reversão para baixa: caiu 2x o tamanho (100 pontos) a partir do fechamento
-      else if (tick.price <= lastClose - (this.boxPoints * 2)) {
-        const prevOpen = sameSession ? this.boxes[this.boxes.length - 1].open : lastClose + this.boxPoints;
-        const newBoxOpen = prevOpen;
-        const newBoxClose = prevOpen - this.boxPoints;
-
-        closedBox = {
-          index: this.boxes.length,
-          direction: 'DOWN',
-          open: newBoxOpen,
-          close: newBoxClose,
-          high: Math.max(curr.high || newBoxOpen, newBoxOpen),
-          low: Math.min(curr.low || newBoxClose, newBoxClose),
-          timeStart: curr.timeStart || tick.timestamp,
-          timeEnd: tick.timestamp,
-          ticksCount: curr.ticksCount || 1,
-          totalVolume: curr.totalVolume || tick.volume,
-          buyVolume: curr.buyVolume || 0,
-          sellVolume: curr.sellVolume || 0,
-          delta: curr.delta || 0,
-          cvdAtClose: this.currentCvd,
-          isConvergence: false,
-        };
-
-        const convergenceCheck = this.checkClosedBox(closedBox, config);
-        closedBox.isConvergence = convergenceCheck.isConvergence;
-        closedBox.convergenceType = convergenceCheck.type;
-        if (convergenceCheck.signal) {
-          signal = convergenceCheck.signal;
-          signalReason = convergenceCheck.reason;
-          closedBox.orderDispatched = signal;
+      } else {
+        if (tick.price <= lastClose - this.boxPoints) {
+          // Continuação de baixa: caiu um box abaixo do fechamento anterior
+          direction = 'DOWN';
+          boxOpen = lastClose;
+          boxClose = lastClose - this.boxPoints;
+        } else if (tick.price >= lastClose + this.boxPoints * 2) {
+          // Reversão para alta: subiu 2x o tamanho do box a partir do fechamento
+          direction = 'UP';
+          boxOpen = sameSession ? last!.open : lastClose - this.boxPoints;
+          boxClose = boxOpen + this.boxPoints;
         }
-
-        this.boxes.push(closedBox);
-        newBoxClosed = true;
-
-        this.currentBox = {
-          index: this.boxes.length,
-          direction: 'DOWN',
-          open: newBoxClose,
-          close: tick.price,
-          high: tick.price,
-          low: tick.price,
-          timeStart: tick.timestamp,
-          timeEnd: tick.timestamp,
-          ticksCount: 0,
-          totalVolume: 0,
-          buyVolume: 0,
-          sellVolume: 0,
-          delta: 0,
-          cvdAtClose: this.currentCvd,
-          isConvergence: false,
-        };
       }
-    } else {
-      // Direção anterior era DOWN
-      // Continuação de baixa: caiu 50 pontos
-      if (tick.price <= lastClose - this.boxPoints) {
-        const newBoxOpen = lastClose;
-        const newBoxClose = lastClose - this.boxPoints;
+      if (!direction) break;
 
-        closedBox = {
-          index: this.boxes.length,
-          direction: 'DOWN',
-          open: newBoxOpen,
-          close: newBoxClose,
-          high: Math.max(curr.high || newBoxOpen, newBoxOpen),
-          low: Math.min(curr.low || newBoxClose, newBoxClose),
-          timeStart: curr.timeStart || tick.timestamp,
-          timeEnd: tick.timestamp,
-          ticksCount: curr.ticksCount || 1,
-          totalVolume: curr.totalVolume || tick.volume,
-          buyVolume: curr.buyVolume || 0,
-          sellVolume: curr.sellVolume || 0,
-          delta: curr.delta || 0,
-          cvdAtClose: this.currentCvd,
-          isConvergence: false,
-        };
+      const top = Math.max(boxOpen, boxClose);
+      const bottom = Math.min(boxOpen, boxClose);
+      const firstBoxOfLap = closedBoxes.length === 0;
 
-        const convergenceCheck = this.checkClosedBox(closedBox, config);
-        closedBox.isConvergence = convergenceCheck.isConvergence;
-        closedBox.convergenceType = convergenceCheck.type;
-        if (convergenceCheck.signal) {
-          signal = convergenceCheck.signal;
-          signalReason = convergenceCheck.reason;
-          closedBox.orderDispatched = signal;
-        }
+      const closedBox: RenkoBox = {
+        index: this.boxes.length,
+        direction,
+        open: boxOpen,
+        close: boxClose,
+        high: Math.max(firstBoxOfLap ? curr.high || top : top, top),
+        low: Math.min(firstBoxOfLap ? curr.low || bottom : bottom, bottom),
+        timeStart: firstBoxOfLap ? curr.timeStart || tick.timestamp : tick.timestamp,
+        timeEnd: tick.timestamp,
+        ticksCount: firstBoxOfLap ? curr.ticksCount || 1 : 0,
+        totalVolume: firstBoxOfLap ? curr.totalVolume || tick.volume : 0,
+        buyVolume: firstBoxOfLap ? curr.buyVolume || 0 : 0,
+        sellVolume: firstBoxOfLap ? curr.sellVolume || 0 : 0,
+        delta: firstBoxOfLap ? curr.delta || 0 : 0,
+        cvdAtClose: this.currentCvd,
+        isConvergence: false,
+      };
 
-        this.boxes.push(closedBox);
-        newBoxClosed = true;
-
-        this.currentBox = {
-          index: this.boxes.length,
-          direction: 'DOWN',
-          open: newBoxClose,
-          close: tick.price,
-          high: tick.price,
-          low: tick.price,
-          timeStart: tick.timestamp,
-          timeEnd: tick.timestamp,
-          ticksCount: 0,
-          totalVolume: 0,
-          buyVolume: 0,
-          sellVolume: 0,
-          delta: 0,
-          cvdAtClose: this.currentCvd,
-          isConvergence: false,
-        };
+      // Validação de convergência (com regime: mede, anota o fator e adapta o limiar)
+      const convergenceCheck = this.checkClosedBox(closedBox, config);
+      closedBox.isConvergence = convergenceCheck.isConvergence;
+      closedBox.convergenceType = convergenceCheck.type;
+      if (convergenceCheck.signal) {
+        signal = convergenceCheck.signal;
+        signalReason = convergenceCheck.reason;
+        signalBox = closedBox;
+        closedBox.orderDispatched = signal;
       }
-      // Reversão para alta: subiu 2x o tamanho (100 pontos) a partir do fechamento
-      else if (tick.price >= lastClose + (this.boxPoints * 2)) {
-        const prevOpen = sameSession ? this.boxes[this.boxes.length - 1].open : lastClose - this.boxPoints;
-        const newBoxOpen = prevOpen;
-        const newBoxClose = prevOpen + this.boxPoints;
 
-        closedBox = {
-          index: this.boxes.length,
-          direction: 'UP',
-          open: newBoxOpen,
-          close: newBoxClose,
-          high: Math.max(curr.high || newBoxClose, newBoxClose),
-          low: Math.min(curr.low || newBoxOpen, newBoxOpen),
-          timeStart: curr.timeStart || tick.timestamp,
-          timeEnd: tick.timestamp,
-          ticksCount: curr.ticksCount || 1,
-          totalVolume: curr.totalVolume || tick.volume,
-          buyVolume: curr.buyVolume || 0,
-          sellVolume: curr.sellVolume || 0,
-          delta: curr.delta || 0,
-          cvdAtClose: this.currentCvd,
-          isConvergence: false,
-        };
-
-        const convergenceCheck = this.checkClosedBox(closedBox, config);
-        closedBox.isConvergence = convergenceCheck.isConvergence;
-        closedBox.convergenceType = convergenceCheck.type;
-        if (convergenceCheck.signal) {
-          signal = convergenceCheck.signal;
-          signalReason = convergenceCheck.reason;
-          closedBox.orderDispatched = signal;
-        }
-
-        this.boxes.push(closedBox);
-        newBoxClosed = true;
-
-        this.currentBox = {
-          index: this.boxes.length,
-          direction: 'UP',
-          open: newBoxClose,
-          close: tick.price,
-          high: tick.price,
-          low: tick.price,
-          timeStart: tick.timestamp,
-          timeEnd: tick.timestamp,
-          ticksCount: 0,
-          totalVolume: 0,
-          buyVolume: 0,
-          sellVolume: 0,
-          delta: 0,
-          cvdAtClose: this.currentCvd,
-          isConvergence: false,
-        };
-      }
+      this.boxes.push(closedBox);
+      closedBoxes.push(closedBox);
+      newBoxClosed = true;
     }
+
+    if (newBoxClosed) {
+      const lastClosed = closedBoxes[closedBoxes.length - 1];
+      // Box em formação: nasce no fechamento do último box fechado e já aponta para o
+      // preço real do tick (o caminho que sobrou dentro do próximo nível).
+      this.currentBox = {
+        index: this.boxes.length,
+        direction: lastClosed.direction,
+        open: lastClosed.close,
+        close: tick.price,
+        high: tick.price,
+        low: tick.price,
+        timeStart: tick.timestamp,
+        timeEnd: tick.timestamp,
+        ticksCount: 0,
+        totalVolume: 0,
+        buyVolume: 0,
+        sellVolume: 0,
+        delta: 0,
+        cvdAtClose: this.currentCvd,
+        isConvergence: false,
+      };
+    }
+
+    // `closedBox` (legado): o box que PAREIA com o sinal devolvido — o disparo do robô ancora
+    // limite/leitura nesse box; sem sinal, é o último box fechado.
+    const closedBox = signalBox ?? closedBoxes[closedBoxes.length - 1];
 
     return {
       newBoxClosed,
       closedBox,
+      closedBoxes,
       signal,
       signalReason,
     };

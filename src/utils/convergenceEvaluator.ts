@@ -68,9 +68,10 @@ export function evaluateBoxConvergence(
   const gainUp = labels.gainLabelUp ?? `+${config.boxPoints} pts`;
   const gainDown = labels.gainLabelDown ?? `-${config.boxPoints} pts`;
 
-  // Corte do momento: adaptativo (P60 das agressões) ou limiar estático da config
+  // Corte do momento: adaptativo (percentil das agressões do pregão) ou limiar estático da config
   const adaptive = config.adaptiveThresholdEnabled === true && meter !== undefined;
-  const SESSION_PERCENTILE = 0.6;
+  // Percentil efetivo configurável (funil seletivo). Sem o campo, mantém o P60 histórico.
+  const SESSION_PERCENTILE = config.adaptiveThresholdPercentile ?? 0.6;
   const limitBuy = adaptive ? meter!.getPercentileLimit('BUY', SESSION_PERCENTILE, config.minDeltaThreshold) : config.minDeltaThreshold;
   const limitSell = adaptive ? meter!.getPercentileLimit('SELL', SESSION_PERCENTILE, config.minDeltaThreshold) : config.minDeltaThreshold;
   const factorLabel = adaptive ? ' | limiar = P60 do pregão' : '';

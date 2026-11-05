@@ -14,6 +14,14 @@ import { isSessionCloseLock, sessionCloseLockLabel, parseHHMM, setEnforceTimeGat
 
 import { migrateLegacyTradingWindow } from './utils/tradingWindowMigration';
 
+import { migrateMainBreakevenOnPyramidTp } from './utils/mainBreakevenMigration';
+
+import { migrateConsolidationFilterOff } from './utils/consolidationFilterMigration';
+
+import { migrateAdaptiveThresholdOff } from './utils/adaptiveThresholdMigration';
+
+import { migrateDeltaThresholdTo100 } from './utils/deltaThresholdMigration';
+
 import {
 
   ASSETS,
@@ -337,6 +345,18 @@ export default function App() {
 
   const windowMigrationRef = useRef<{ config: boolean; strategies: number } | null>(null);
 
+  // Alavanca A: aviso de que mães desprotegidas foram postas no breakeven (config + biblioteca).
+  const mainBreakevenRef = useRef<{ config: boolean; strategies: number } | null>(null);
+
+  // Alavanca B: aviso de que o Filtro de Acumulação (ER) foi desligado por sobre-filtrar (config + biblioteca).
+  const consolidationOffRef = useRef<{ config: boolean; strategies: number } | null>(null);
+
+  // Limiar adaptativo (P60): aviso de que ele foi desligado — sufocava sinais ao vivo e piorava o DD.
+  const adaptiveOffRef = useRef<{ config: boolean; strategies: number } | null>(null);
+
+  // Δ físico do funil (150 → 100): aviso de que ele baixou — com o adaptativo OFF, foi o melhor nas 3 seeds.
+  const delta100Ref = useRef<{ config: boolean; strategies: number } | null>(null);
+
   // Idem para a migração do preço de referência do ativo (128.500 → ajuste atual do contrato).
 
   const assetMigrationRef = useRef<AssetBaselineMigration | null>(null);
@@ -370,6 +390,24 @@ export default function App() {
     // uma única vez, antes de a primeira leitura do storage.
 
     windowMigrationRef.current = migrateLegacyTradingWindow();
+
+    // Alavanca A (bench A/B): mães de Pirâmide 100% desprotegidas vão ao breakeven a cada TP.
+    // Antes da primeira leitura do storage, pela mesma razão da trava de horário: gravado vence default.
+
+    mainBreakevenRef.current = migrateMainBreakevenOnPyramidTp();
+
+    // Alavanca B (bench A/B 3 seeds): o Filtro de Acumulação ER estava sobre-filtrando e derrubando
+    // a expectativa da pirâmide. Pilamos no mesmo motivo da A: gravado vence default, então a
+    // migração roda antes da primeira leitura do storage.
+    consolidationOffRef.current = migrateConsolidationFilterOff();
+
+    // Limiar adaptativo OFF (bench A/B 3 seeds): o corte P60 sufocava sinais ("SINAL FRACO") e
+    // inflava o DD. Mesma razão da A e da B: gravado vence default, então migra antes da 1ª leitura.
+    adaptiveOffRef.current = migrateAdaptiveThresholdOff();
+
+    // Δ físico 150 → 100 (mesmo bench 3 seeds): com o adaptativo OFF, 100 deu mais ordens e maior fator.
+    // Roda depois da migração do adaptativo (que não mexe no Δ), então o Δ ainda está em 150 aqui.
+    delta100Ref.current = migrateDeltaThresholdTo100();
 
     // A seleção de ativo precisa estar gravada ANTES do loadSavedConfig lá embaixo: o storage
 
@@ -1239,9 +1277,12 @@ export default function App() {
 
     const res = eng.processTick(tick, eff);
 
-    if (res.newBoxClosed && res.closedBox) {
+    // Um tick pode fechar vários boxes (preenchimento Renko): cada um alimenta a sombra
+    // com o histórico ANTERIOR a ele — nunca com a lista inteira já empurrada.
 
-      shadowRobotService.processClosedBox(res.closedBox, eng.getBoxes().slice(0, -1), eff, eng.getRegimeMeter());
+    for (const box of res.closedBoxes) {
+
+      shadowRobotService.processClosedBox(box, eng.getBoxes().slice(0, box.index), eff, eng.getRegimeMeter());
 
     }
 
@@ -2391,25 +2432,33 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           : `${Math.round(timeframeSec / 3600)}h`;
 
-      if (renkoRes.newBoxClosed && renkoRes.closedBox) {
+      if (renkoRes.newBoxClosed) {
 
         setBoxes([...engine.getBoxes()]);
 
-        seriesCollectorService.ingest(
+        // Preenchimento Renko: um tick pode fechar vários boxes — o coletor recebe TODOS,
 
-          'renko',
+        // cada um com o histórico anterior ao próprio box.
 
-          renkoRes.closedBox,
+        for (const box of renkoRes.closedBoxes) {
 
-          engine.getBoxes().slice(0, -1),
+          seriesCollectorService.ingest(
 
-          config,
+            'renko',
 
-          renkoScaleLabel(config.boxPoints, asset),
+            box,
 
-          engine.getRegimeMeter()
+            engine.getBoxes().slice(0, box.index),
 
-        );
+            config,
+
+            renkoScaleLabel(config.boxPoints, asset),
+
+            engine.getRegimeMeter()
+
+          );
+
+        }
 
       }
 
@@ -2443,9 +2492,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
         const altRes = altEng.processTick(tick, config);
 
-        if (altRes.newBoxClosed && altRes.closedBox) {
+        for (const box of altRes.closedBoxes) {
 
-          seriesCollectorService.ingest(alt.key, altRes.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`, altEng.getRegimeMeter());
+          seriesCollectorService.ingest(alt.key, box, altEng.getBoxes().slice(0, box.index), config, `${alt.pts} pts`, altEng.getRegimeMeter());
 
         }
 
@@ -4583,6 +4632,31 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             });
 
+          } else if (payload.type === 'ORDER_RESULT') {
+
+            // A ponte executou (ou não) no MT5. Antes isso era mudo: a ordem saía do app, passava
+            // pela trava de risco e morria no execute_market_order sem a tela dizer nada.
+
+            const ok = Boolean(payload.data?.ok);
+
+            setLatestToast({
+
+              id: `mt5-order-${Date.now()}`,
+
+              type: ok ? 'BUY' : 'SELL',
+
+              title: ok ? '✅ ORDEM EXECUTADA NO MT5' : '⛔ MT5 NÃO ACEITOU A ORDEM',
+
+              description: ok
+
+                ? `A ponte confirmou a entrada no terminal (Ticket ${payload.data?.ticket ?? ''}).`
+
+                : `${payload.data?.reason || 'motivo não informado pelo script'} — a ordem chegou à ponte, mas o MT5 não executou.`,
+
+              timestamp: Date.now(),
+
+            });
+
           } else if (payload.type === 'TICK') {
             const tickSym = String(payload.symbol || payload.data?.symbol || '').toUpperCase();
             const tickAssetId = getAssetIdForSymbol(tickSym);
@@ -6300,9 +6374,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
         const r = engine.processTick(t, config);
 
-        if (r.newBoxClosed && r.closedBox) {
+        for (const box of r.closedBoxes) {
 
-          seriesCollectorService.ingest('renko', r.closedBox, engine.getBoxes().slice(0, -1), config, renkoScale, engine.getRegimeMeter());
+          seriesCollectorService.ingest('renko', box, engine.getBoxes().slice(0, box.index), config, renkoScale, engine.getRegimeMeter());
 
         }
 
@@ -6336,9 +6410,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           const ar = altEng.processTick(t, config);
 
-          if (ar.newBoxClosed && ar.closedBox) {
+          for (const box of ar.closedBoxes) {
 
-            seriesCollectorService.ingest(alt.key, ar.closedBox, altEng.getBoxes().slice(0, -1), config, `${alt.pts} pts`, altEng.getRegimeMeter());
+            seriesCollectorService.ingest(alt.key, box, altEng.getBoxes().slice(0, box.index), config, `${alt.pts} pts`, altEng.getRegimeMeter());
 
           }
 
@@ -6629,6 +6703,122 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
 
+  }, []);
+
+
+
+  // AVISO DA ALAVANCA A (mãe no breakeven): roda uma vez por versão de flag e só fala de quem
+  // estava com a mãe de Pirâmide 100% desprotegida. Estratégia que você já protegeu não é tocada.
+
+  useEffect(() => {
+
+    const m = mainBreakevenRef.current;
+
+    if (!m || (!m.config && m.strategies === 0)) return;
+
+    const timer = setTimeout(() => {
+
+      setLatestToast({
+
+        id: `main-breakeven-migration-${Date.now()}`,
+
+        type: 'INFO',
+
+        title: `PIRÂMIDE: MÃE AGORA PROTEGIDA NO BREAKEVEN`,
+
+        description: `${[
+
+          m.config ? 'A estratégia ativa' : '',
+
+          m.strategies > 0 ? `${m.strategies} estratégia(s) salvas do Estúdio` : '',
+
+        ]
+
+          .filter(Boolean)
+
+          .join(' e ')} estavam com a ordem mãe sem nenhuma proteção (o lucro da pirâmide voltava na virada de fluxo). Agora, a cada TP de pirâmide o stop da mãe sobe para o breakeven (+ as taxas). O banco A/B triplicou a mesa no pregão sintético. Você pode reverter na caixinha em Ajustes → Pirâmide.`,
+
+        timestamp: Date.now(),
+
+      });
+
+    }, 1000);
+
+    return () => clearTimeout(timer);
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+  }, []);
+
+
+
+  // AVISO DA ALAVANCA B (filtro de acumulação ER desligado): roda uma vez por versão de flag e só
+  // fala de quem estava com o filtro no default intocado. Filtro que você calibrou não é tocado.
+  useEffect(() => {
+    const m = consolidationOffRef.current;
+    if (!m || (!m.config && m.strategies === 0)) return;
+    const timer = setTimeout(() => {
+      setLatestToast({
+        id: `consolidation-off-migration-${Date.now()}`,
+        type: 'INFO',
+        title: `PIRÂMIDE: FILTRO DE ACUMULAÇÃO (ER) DESLIGADO`,
+        description: `${[
+          m.config ? 'A estratégia ativa' : '',
+          m.strategies > 0 ? `${m.strategies} estratégia(s) salvas do Estúdio` : '',
+        ]
+          .filter(Boolean)
+          .join(' e ')} tinham o Filtro de Acumulação ligado no valor padrão. O banco A/B (3 pregões sintéticos + real) mostrou que ele estava sobre-filtrando: silenciava scalps de pirâmide que fechavam alvo. Sem o filtro, a expectativa quase triplica e o rebaixamento cai. Você pode religar em Ajustes → Filtros de Regime.`,
+        timestamp: Date.now(),
+      });
+    }, 2000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // AVISO DO LIMIAR ADAPTATIVO (P60) DESLIGADO: roda uma vez por versão de flag e só fala de quem
+  // estava com o adaptativo ligado no Δ padrão. Quem calibrou o Δ por conta própria não é tocado.
+  useEffect(() => {
+    const m = adaptiveOffRef.current;
+    if (!m || (!m.config && m.strategies === 0)) return;
+    const timer = setTimeout(() => {
+      setLatestToast({
+        id: `adaptive-off-migration-${Date.now()}`,
+        type: 'INFO',
+        title: `PIRÂMIDE: LIMIAR ADAPTATIVO (P60) DESLIGADO`,
+        description: `${[
+          m.config ? 'A estratégia ativa' : '',
+          m.strategies > 0 ? `${m.strategies} estratégia(s) salvas do Estúdio` : '',
+        ]
+          .filter(Boolean)
+          .join(' e ')} tinham o limiar adaptativo ligado no valor padrão. Em testes ao vivo, o corte pelo P60 do pregão subia acima do Δ dos boxes e travava as entradas (o "SINAL FRACO"). No banco A/B (3 seeds), desligá-lo deu mais ordens, rebaixamento ~30% menor e expectativa igual ou melhor. Revertido quando quiser: Ajustes → Gatilho → "Limiar adaptativo".`,
+        timestamp: Date.now(),
+      });
+    }, 2600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // AVISO DO Δ FÍSICO DO FUNIL (150 → 100): roda uma vez por versão de flag e só fala de quem
+  // estava com o Δ no padrão antigo. Quem calibrou o Δ por conta própria não é tocado.
+  useEffect(() => {
+    const m = delta100Ref.current;
+    if (!m || (!m.config && m.strategies === 0)) return;
+    const timer = setTimeout(() => {
+      setLatestToast({
+        id: `delta-100-migration-${Date.now()}`,
+        type: 'INFO',
+        title: `PIRÂMIDE: Δ MÍNIMO DO FUNIL BAIXOU PARA 100`,
+        description: `${[
+          m.config ? 'A estratégia ativa' : '',
+          m.strategies > 0 ? `${m.strategies} estratégia(s) salvas do Estúdio` : '',
+        ]
+          .filter(Boolean)
+          .join(' e ')} estavam com o Δ físico no padrão antigo (150). Com o limiar adaptativo desligado, o banco de 3 seeds mostrou que Δ 100 domina: mais ordens, maior fator de lucro e rebaixamento menor. Revertido quando quiser: Ajustes → Gatilho → "Delta mínimo".`,
+        timestamp: Date.now(),
+      });
+    }, 3200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 

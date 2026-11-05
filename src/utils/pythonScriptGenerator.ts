@@ -169,6 +169,10 @@ MAX_ORDERS_PER_MINUTE = ${config.mt5MaxOrdersPerMinute || 12}
 ENTRY_ACTIONS = {"ORDER_SEND"}
 TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_POSITIONS"}
 
+# Nota do último execute_market_order: o router devolve ao app como ORDER_RESULT, para a tela
+# mostrar o motivo real quando o MT5 não executa (horário, símbolo ausente ou RetCode).
+ORDER_EXEC_NOTE = {"msg": ""}
+
 # HISTÓRICO REAL (rota REQUEST_HISTORY): teto de dias corridos por pedido e tamanho do chunk
 # transmitido. A corretora demo limita a profundidade disponível — pedir mais dias que isso
 # simplesmente volta vazio, e o app cai no gerador sintético ROTULANDO a origem na tela.
@@ -724,13 +728,20 @@ class MT5OrderManager:
     def execute_market_order(self, order_type, comment="", volume=None, sl_points=None, tp_points=None, magic=None):
         """Execução direta a mercado com suporte a TP/SL customizados (ex: Pirâmide ou Ordem Mãe).
         'magic' identifica o robô que carimbou a ordem (multi-robô); sem ele, a placa do robô."""
+        ORDER_EXEC_NOTE["msg"] = ""
         can_trade, _ = self.check_schedule()
         if not can_trade:
+            ORDER_EXEC_NOTE["msg"] = "fora da janela de horários gravada no script — desligue o horário em Ajustes e rebaixe o .py, ou opere dentro da janela"
             return False, 0
 
-        point = mt5.symbol_info(self.symbol).point
+        info = mt5.symbol_info(self.symbol)
+        if not info:
+            ORDER_EXEC_NOTE["msg"] = f"símbolo {self.symbol} não existe/não está no Market Watch do MT5"
+            return False, 0
+        point = info.point
         tick = mt5.symbol_info_tick(self.symbol)
         if not tick:
+            ORDER_EXEC_NOTE["msg"] = f"sem cotação de {self.symbol} agora (mercado fechado ou símbolo fora do Market Watch)"
             return False, 0
 
         use_volume = float(volume) if volume is not None else self.contracts
@@ -769,9 +780,11 @@ class MT5OrderManager:
         }
         res = mt5.order_send(request)
         if res.retcode == mt5.TRADE_RETCODE_DONE:
+            ORDER_EXEC_NOTE["msg"] = f"Ticket #{res.order}"
             print(f"✅ ORDEM EXECUTADA: {order_type} {use_volume} ctros @ {entry_price:.1f} | SL: {sl_price:.1f} | TP: {tp_price:.1f} | Ticket #{res.order}")
             return True, res.order
         else:
+            ORDER_EXEC_NOTE["msg"] = f"MT5 recusou: RetCode {res.retcode} — {res.comment}"
             print(f"[ERRO MT5] RetCode={res.retcode}, Desc={res.comment}")
         return False, 0
 
@@ -1108,7 +1121,7 @@ async def ws_handler(websocket):
                             magic=order_magic
                         )
                     else:
-                        ORDER_MANAGER.execute_market_order(
+                        ok, ticket = ORDER_MANAGER.execute_market_order(
                             data.get("type", "BUY"),
                             comment=data.get("comment", "WEB_ORDER"),
                             volume=data.get("contracts", 1),
@@ -1116,6 +1129,15 @@ async def ws_handler(websocket):
                             tp_points=data.get("tp", 0) or 0,
                             magic=order_magic
                         )
+                        await send_json(websocket, {
+                            "type": "ORDER_RESULT",
+                            "data": {
+                                "ok": bool(ok),
+                                "ticket": ticket,
+                                "reason": ORDER_EXEC_NOTE.get("msg", ""),
+                                "comment": data.get("comment", ""),
+                            }
+                        })
                 elif action == "ORDER_PARTIAL_CLOSE":
                     ORDER_MANAGER.close_partial_position(
                         data.get("ticket"), data.get("partialVolume"), data.get("newSL"),

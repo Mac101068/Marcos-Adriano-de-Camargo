@@ -168,7 +168,7 @@ function rodaEA(nome: string, ticks: Tick[], cfg: AutomationConfig): Resultado {
   for (const t of ticks) {
     const r = eng.processTick(t, cfg);
     i++;
-    if (r.newBoxClosed && r.closedBox) bot.onClosedBox(r.closedBox, r.signal, cfg);
+    for (const box of r.closedBoxes) bot.onClosedBox(box, box.orderDispatched, cfg);
   }
   const stats = bot.getStats();
   const trades = bot.getTrades();
@@ -252,7 +252,7 @@ function mede(ticks: Tick[], c: AutomationConfig) {
   const eng = new RenkoFlowEngine(c.boxPoints);
   for (const t of ticks) {
     const r = eng.processTick(t, c);
-    if (r.newBoxClosed && r.closedBox) bot.onClosedBox(r.closedBox, r.signal, c);
+    for (const box of r.closedBoxes) bot.onClosedBox(box, box.orderDispatched, c);
   }
   const s = bot.getStats();
   const fechados = eng.getBoxes().filter((b) => b.timeEnd > 0);
@@ -287,3 +287,44 @@ for (const [rotuloBox, pts] of ESCALAS) {
   const m = mede(reais, { ...cfg, boxPoints: pts, adaptiveThresholdEnabled: true });
   console.log(`   ${rotuloBox}: trades ${m.trades} · win ${fix(m.wr, 1)}% · PnL R$ ${fix(m.pnl, 0)} · FatorL ${fix(m.pf, 2)} · DD R$ ${fix(m.dd, 0)}`);
 }
+
+// ---------------------------------------------------------------------------
+// VEREDITO DA BASE — pré-requisito de calibração (Alavanca C)
+// ---------------------------------------------------------------------------
+// Este bloco existe porque a ALAVANCA A (mãe no breakeven) e a ALAVANCA B (funil / filtro ER)
+// foram validadas no SINTÉTICO, não no real. O real baixado pela ponte chega com volume
+// sintetizado da barra de 1min (M1_RATE) e agressor deduzido por uptick/downtick — então DELTA,
+// CVD e o percentil do funil são PROXY DE DIREÇÃO DO PREÇO, não agressão real. Calibrar limiar
+// sobre esses dados é calibrar sobre ruído. O veredito abaixo grita quando a base não presta para
+// calibrar e o que é preciso baixar para ela passar a prestar.
+function vereditoBase(ticks: Tick[], volumeSource: string | undefined) {
+  let repete = 0;
+  for (let i = 1; i < ticks.length; i++) if (ticks[i].volume === ticks[i - 1].volume) repete++;
+  const repeatPct = (repete / Math.max(1, ticks.length)) * 100;
+  // ticks por box: base real com M1_RATE + densidade rala forma caixa quase só por cascata
+  // de preenchimento (fluxo 0). Mediana ≤ 2 denuncia que quase nenhum box tem fluxo próprio.
+  const eng = new RenkoFlowEngine(cfg.boxPoints);
+  for (const t of ticks) eng.processTick(t, cfg);
+  const fechados = eng.getBoxes().filter((b) => b.timeEnd > 0);
+  const medianaTicksBox = pct(fechados.map((b) => b.ticksCount), 0.5);
+
+  const calibravel = volumeSource === 'TICK' && repeatPct < 25 && medianaTicksBox >= 3;
+
+  console.log('\n╔════ VEREDITO DA BASE REAL ════════');
+  console.log(`║ volumeSource=${volumeSource ?? 'desconhecido'} · ${fix(repeatPct, 1)}% repetem volume · mediana ${fix(medianaTicksBox, 0)} ticks/box`);
+  if (calibravel) {
+    console.log('║ ✅ BASE CALIBRÁVEL — delta parece real; os limiares aqui valem como verdade de mercado.');
+  } else {
+    console.log('║ ⚠️  BASE NÃO-CALIBRÁVEL — o "delta" é proxy de preço (M1_RATE), não agressão de T&T.');
+    console.log('║    → As alavancas A/B foram decididas pelo SINTÉTICO honesto; o REAL é só DIREÇÃO.');
+    console.log('║    → PRÉ-REQUISITO para calibrar no real: baixar Time & Trades genuíno, com');
+    console.log('║      VOLUME POR NEGÓCIO e AGRESSOR (buy/sell na iniciativa) por tick. No MT5 isso');
+    console.log('║      significa usar copy_ticks com volume real da corretora (fonte TICK) OU capturar');
+    console.log('║      a fita AO VIVO pela ponte durante pregões (o stream traz aggressor + volume).');
+    console.log('║      Sem isso, nenhum limiar de funil pode ser confiado ao mercado real.');
+  }
+  console.log('╚════════════════════════════════════');
+}
+
+vereditoBase(reais, envelope.auditoria?.volumeSource);
+

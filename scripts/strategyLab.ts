@@ -231,7 +231,9 @@ function runVariant(v: Variant, ticks: Tick[], statsOut: (s: PaperStats, trades:
     const eng = new RenkoFlowEngine(v.points ?? 50);
     for (const t of ticks) {
       const r = eng.processTick(t, v.config);
-      if (r.newBoxClosed && r.closedBox) bot.onClosedBox(r.closedBox, r.signal, v.config);
+      // Preenchimento Renko: um tick pode fechar vários boxes — o bot recebe todos,
+      // cada um com o sinal do PRÓPRIO box (nunca o sinal "último" do tick).
+      for (const box of r.closedBoxes) bot.onClosedBox(box, box.orderDispatched, v.config);
     }
   } else {
     const eng = v.engine === 'range' ? new RangeBarEngine(v.points ?? 50) : new TimeBarEngine(v.intervalMs ?? 180000);

@@ -154,6 +154,13 @@ export interface AutomationConfig {
   contracts: number; // Lote (ex: 1, 2, 5 contratos)
   minDeltaThreshold: number; // Delta mínimo para validar convergência (ex: 200 contratos)
   adaptiveThresholdEnabled: boolean; // Limiar adaptativo: ±minDeltaThreshold × fator de regime do momento
+  /**
+   * Percentil do pregão usado pelo corte adaptativo (0..0.95). P60 = "os 40% boxes mais
+   * agressivos deste lado sinalizam". Subir (P70/P75/P80) torna o funil mais SELETIVO: só as
+   * viradas com agressão acima da média do próprio pregão disparam. Opcional: config antigo
+   * sem o campo cai no 0.60 histórico (mesmo comportamento de antes).
+   */
+  adaptiveThresholdPercentile?: number;
   regimeLookbackBoxes: number; // Nº de boxes recentes na janela do medidor de regime (padrão 20)
   /**
    * Filtro de ACUMULAÇÃO (range curto). Com LIGADO, um sinal só vale se o mercado estiver

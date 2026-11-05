@@ -48,7 +48,8 @@ for (let s = 1; s <= SEEDS; s++) {
     totPath += path; totFaixa += hi - lo; totLiq += Math.abs(liq); n++;
   }
   for (const t of ticks) {
-    if (renko.processTick(t, cfg).newBoxClosed) totBoxes++;
+    // Conta TODOS os boxes fechados (um tick pode fechar vários no preenchimento Renko)
+    totBoxes += renko.processTick(t, cfg).closedBoxes.length;
   }
 }
 

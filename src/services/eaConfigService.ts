@@ -37,10 +37,10 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   symbol: chartSymbolFor(ASSETS[DEFAULT_ASSET_ID]),
   boxPoints: 50, // 10R no Mini-Índice
   contracts: 1, // 1 contrato padrão na Ordem Mãe
-  minDeltaThreshold: 150, // Delta mínimo de agressão líquida
-  adaptiveThresholdEnabled: true, // Limiar adaptativo ligado por padrão: ±mín × fator de regime do momento
+  minDeltaThreshold: 100, // Delta mínimo de agressão líquida (limiar FÍSICO; vale com o adaptativo desligado). 100 foi o melhor nas 3 seeds (mais ordens e maior fator que 150)
+  adaptiveThresholdEnabled: false, // OFF por padrão: no bench (3 seeds) o corte P60 sufocava sinais e subia o DD; com ele desligado o Δ físico acima (100) governa o disparo
   regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
-  consolidationFilterEnabled: true,
+  consolidationFilterEnabled: false, // Bench A/B (3 seeds × real): o filtro ER silencia scalps de pirâmide lucrativos — ligado derruba a expectativa de +5,4 para +2,0 R$/tr e sobe o DD. Voltamos ao "Padrão DESLIGADO" que o tipo documenta.
   consolidationLookbackBoxes: 10, // Janela da Efficiency Ratio (boxes recentes)
   consolidationErMax: 0.35, // ER abaixo disso = range curto/acumulação (sinal silenciado)
   exhaustionFilterEnabled: false, // Filtro de exaustão: opcional, ligado só por decisão do operador
@@ -92,7 +92,7 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   pyramidSlPoints: 0, // Sem stop fixo na pirâmide por padrão (saída por inversão)
   pyramidContracts: 1, // 1 contrato por pirâmide
   pyramidEntryType: 'MARKET_ON_CLOSE', // Entrada a mercado no fechamento do box (padrão clássico)
-  moveMainToBreakevenOnPyramidTp: false, // Sem breakeven forçado (ordem mãe surfa livre até a virada do fluxo)
+  moveMainToBreakevenOnPyramidTp: true, // Mãe protegida no breakeven a cada TP de pirâmide (bench A/B: triplica a mesa cortando a devolução da virada)
   holdMainUntilFlip: true,
   closeAllOnFlowFlip: true,
   flipConfirmBoxes: 1, // 1 = vira no 1º sinal contrário (regra histórica); N>1 exige confirmação (bench do Laboratório)
@@ -109,7 +109,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
     id: 'preset-pyramid-flow-10r',
     name: '10R Pirâmide & Confluência (TP 50p + Surfe)',
     badge: 'PIRÂMIDE 50P',
-    description: 'Compra no fechamento de cada bloco verde com TP de 50 pts na pirâmide. Mantém a ordem principal aberta surfando até a virada do fluxo (sem breakeven forçado). Zeragem total por inversão sem SL fixo.',
+    description: 'Compra no fechamento de cada bloco verde com TP de 50 pts na pirâmide. Mantém a ordem principal aberta surfando até a virada do fluxo, com proteção: a cada TP de pirâmide o stop da mãe vai ao breakeven (a virada não devolve o lucro já colhido). Zeragem por inversão sem SL fixo.',
     config: {
       ...DEFAULT_EA_CONFIG,
       profileName: '10R Pirâmide & Confluência',
@@ -118,7 +118,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       contracts: 1,
       pyramidContracts: 1,
       pyramidTpPoints: 50,
-      moveMainToBreakevenOnPyramidTp: false, // Sem breakeven forçado: surfe contínuo
+      moveMainToBreakevenOnPyramidTp: true, // Mãe no breakeven a cada TP de pirâmide (proteção padrão contra a devolução da virada)
       holdMainUntilFlip: true,
       closeAllOnFlowFlip: true,
       noFixedStopLoss: true,
@@ -129,7 +129,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       accountMode: 'HEDGE',
       maxSimultaneousPositions: 15,
       hedgeOppositeAction: 'CLOSE_OPPOSITE',
-      minDeltaThreshold: 150,
+      minDeltaThreshold: 100, // Δ físico do funil (adaptativo OFF): 100 dá mais ordens que 150 no bench
     },
   },
   {
