@@ -79,8 +79,10 @@ export class B3MarketSimulator {
       this.trend = (Math.random() - 0.5) * 1.5;
     }
 
-    // Agressor baseado na tendência e ruído de mercado
-    const buyProb = 0.5 + this.trend * 0.25;
+    // Agressor baseado na tendência e ruído de mercado.
+    // Peso reduzido (0.25 → 0.10): deriva calibrada contra a base real WINZ26 — o pregão
+    // real serra muito e anda pouco líquido (~735 pts de movimento líquido por dia).
+    const buyProb = 0.5 + this.trend * 0.1;
     const isBuy = Math.random() < buyProb;
     const aggressor: 'BUY' | 'SELL' = isBuy ? 'BUY' : 'SELL';
 
@@ -99,10 +101,12 @@ export class B3MarketSimulator {
     }
 
     // Movimentação de preço do ativo (passo = variação mínima do spec)
-    // Se o volume da agressão for forte, maior chance de deslocar a fila
-    const moveChance = Math.min(0.85, 0.25 + (volume / 150));
+    // Varredura de book calibrada contra a base real WINZ26 (2026-11-03/04): a agressão
+    // percorre vários níveis da fila, proporcional ao volume — ~600 boxes 10R por pregão.
+    const moveChance = Math.min(0.95, (0.45 + volume / 150) * this.volatility);
     if (Math.random() < moveChance) {
-      const step = this.asset.tickSize;
+      const levels = 1 + Math.floor(Math.random() * (2 + volume / 30));
+      const step = levels * this.asset.tickSize;
       if (aggressor === 'BUY') {
         this.currentPrice += step;
       } else {
@@ -187,11 +191,18 @@ function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: nu
   const ticks: Tick[] = [];
   let price = startPrice;
   let counter = 0;
+  // ÂNCORA INTRADIANÁRIA (calibração base real WINZ26): o preço do pregão real ORBILITA em
+  // torno de um nível que deriva devagar — não é random walk puro, que acumula deriva e faixa
+  // irreais. Cada virada de minuto move a âncora; dentro do minuto o preço é puxado de volta.
+  let anchor = startPrice;
+  let anchorBucket = -1;
 
   for (const day of sessionDays) {
-    // Gap de abertura do dia
-    price += (Math.random() - 0.5) * 80;
+    // Gap de abertura do dia (faixa calhada na base real: dias de ±200-400 pts)
+    price += (Math.random() - 0.5) * 400;
     price = snapToTick(price, asset);
+    anchor = price;
+    anchorBucket = -1;
 
     // Tipo de dia EQUILIBRADO (a base precisa ter dias baixistas para testar o limiar adaptativo):
     // ~40% dia de ALTA, ~40% dia de BAIXA, ~20% LATERAL. O viés do dia vale a sessão inteira
@@ -220,15 +231,17 @@ function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: nu
       else if (minutes < 16 * 60 + 30) activity = 1.0;
       else activity = 1.5; // fechamento / decruzação D+1
 
-      // Mudanças de regime de tendência (mais frequentes fora do almoço) — neutras, sem deriva comprador
-      if (Math.random() < 0.04 * activity) {
-        trend = (Math.random() - 0.5) * 1.5;
+      // Mudanças de regime de tendência (pernas longas = boxes 10R como no real) — neutras
+      if (Math.random() < 0.012 * activity) {
+        trend = (Math.random() - 0.5) * 2.5;
       }
-      // O viés do dia (dayBias) permeia a sessão toda; no almoço perde força (mercado quieto/lateral)
+      // O viés do dia (dayBias) permeia a sessão toda; no almoço perde força (mercado quieto/lateral).
+      // Pesos calibrados contra a base real WINZ26: deriva líquida modesta (~700-900 pts/dia),
+      // com a "energia" do pregão vindo da serração (varredura de book), não da tendência.
       const lunchDamp = minutes >= 11 * 60 + 30 && minutes < 13 * 60 + 30 ? 0.35 : 1.0;
-      const effectiveTrend = trend + dayBias * 0.55 * lunchDamp;
+      const effectiveTrend = (trend + dayBias * 0.25 * lunchDamp) * 0.5;
 
-      const buyProb = 0.5 + effectiveTrend * 0.25;
+      const buyProb = 0.5 + effectiveTrend * 0.42;
       const isBuy = Math.random() < buyProb;
       const aggressor: 'BUY' | 'SELL' = isBuy ? 'BUY' : 'SELL';
 
@@ -242,11 +255,28 @@ function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: nu
         volume = (Math.floor(Math.random() * 8 * activity) + 2) * 25; // bancada
       }
 
-      const moveChance = Math.min(0.9, (0.25 + volume / 150) * activity);
+      const moveChance = Math.min(0.95, (0.45 + volume / 150) * activity);
       if (Math.random() < moveChance) {
-        // Nos picos de atividade o mercado salta 2 variações mínimas em vez de 1
-        const step = activity > 1.2 && Math.random() < 0.3 ? asset.tickSize * 2 : asset.tickSize;
-        price += aggressor === 'BUY' ? step : -step;
+        // Varredura de book calibrada contra a base real WINZ26 (~600 boxes 10R e
+        // ~118k pts de caminho por pregão): volume e atividade mandam os níveis percorridos
+        const levels = 1 + Math.floor(Math.random() * (2 + volume / 24) * (activity > 1.2 ? 1.5 : 1));
+        price += aggressor === 'BUY' ? levels * asset.tickSize : -levels * asset.tickSize;
+      }
+
+      // Dinâmica da âncora (calibração base real): a virada de minuto move o nível com o viés
+      // do dia + ruído; entre ticks o preço é puxado de volta para a âncora. O pregão real
+      // ORBITA um nível — serra muito (caminho ~118k) e anda pouco líquido (~735).
+      const minuteBucket = Math.floor(ts / 60000);
+      if (minuteBucket !== anchorBucket) {
+        anchorBucket = minuteBucket;
+        anchor = snapToTick(
+          anchor + effectiveTrend * 4 * activity + (Math.random() - 0.5) * 110 * activity,
+          asset,
+        );
+      }
+      const toAnchor = (anchor - price) * 0.015;
+      if (Math.abs(toAnchor) >= asset.tickSize) {
+        price += Math.sign(toAnchor) * Math.min(Math.abs(toAnchor), 120);
       }
 
       const buyerBroker = BROKERS[Math.floor(Math.random() * BROKERS.length)];
