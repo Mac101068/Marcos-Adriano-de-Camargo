@@ -2645,7 +2645,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               // Apenas se o robô estiver ativo e dentro do horário configurado
 
-              if (!config.active) {
+              if (!config.active && !(isReplaying && replayOperates)) {
 
                 return updatedPrev;
 
@@ -2851,7 +2851,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                   const pyramidLevel = pyramidOrders.length + 1;
 
-                  const tpPoints = config.pyramidTpPoints || 50;
+                  const tpPoints = config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE'
+                    ? Math.max(config.boxPoints, config.pyramidTpPoints || config.boxPoints)
+                    : (config.pyramidTpPoints || 50);
 
                   // TP/SL são ancorados no preço real de entrada (fechamento ou nível do Limit)
 
@@ -5901,9 +5903,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     }> => {
 
+      const daysToRequest = targetDays === 1 ? 1 : Math.max(1, Math.min(10, targetDays));
+
       const synthetic = () =>
 
-        generateHistoricalTicks(targetDays + 1, referencePrice(asset), seed, asset);
+        generateHistoricalTicks(daysToRequest, referencePrice(asset), seed, asset);
 
       const socket = wsRef.current;
 
@@ -5927,7 +5931,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           symbol: asset.primarySymbol,
 
-          days: targetDays + 1,
+          days: daysToRequest,
 
           asset,
 
@@ -6155,22 +6159,54 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       const run = await resolveReplayTicks(replayTargetDays, seedForRun);
 
-      const ticks = run.ticks;
-      if (ticks.length > 0) {
-        const lastTick = ticks[ticks.length - 1];
-        const d = new Date(lastTick.timestamp);
-        const dayStr = d.toLocaleDateString('pt-BR');
-        const isToday = dayStr.includes('04/11') || dayStr === new Date().toLocaleDateString('pt-BR');
-        setReplayDateLabel(`${dayStr}${isToday ? ' (Hoje)' : ''}`);
-      }
+      const rawTicks = run.ticks;
 
-      if (ticks.length === 0) {
+      if (rawTicks.length === 0) {
 
         setIsReplaying(false);
 
         return;
 
       }
+
+      // Organiza e agrupa os ticks por data de pregão (YYYY-MM-DD local)
+      const daysMap = new Map<string, Tick[]>();
+      for (const t of rawTicks) {
+        const d = new Date(t.timestamp);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const key = `${y}-${m}-${day}`;
+        if (!daysMap.has(key)) daysMap.set(key, []);
+        daysMap.get(key)!.push(t);
+      }
+      const sortedDays = Array.from(daysMap.keys()).sort();
+
+      let ticks: Tick[] = rawTicks;
+      let label = '';
+
+      if (replayTargetDays === 1) {
+        // Seleção Hoje: isola 100% o pregão mais recente retornado (04/11)
+        const latestDayKey = sortedDays[sortedDays.length - 1];
+        ticks = (latestDayKey && daysMap.get(latestDayKey)) || rawTicks;
+        const [y, m, d] = (latestDayKey || '').split('-');
+        const isToday = !latestDayKey || new Date().toISOString().startsWith(latestDayKey) || (d === '04' && m === '11');
+        label = latestDayKey ? `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''}` : 'Hoje (04/11)';
+      } else if (replayTargetDays === 2) {
+        // Seleção Ontem: se houver mais de um pregão, isola o pregão imediatamente anterior
+        const yesterdayKey = sortedDays.length > 1 ? sortedDays[sortedDays.length - 2] : sortedDays[0];
+        ticks = (yesterdayKey && daysMap.get(yesterdayKey)) || rawTicks;
+        const [y, m, d] = (yesterdayKey || '').split('-');
+        label = yesterdayKey ? `${d}/${m}/${y} (Ontem)` : 'Ontem (03/11)';
+      } else {
+        // 3 ou 5 dias: série contínua
+        ticks = rawTicks;
+        const firstKey = sortedDays[0];
+        const lastKey = sortedDays[sortedDays.length - 1];
+        label = `${replayTargetDays} pregões (${firstKey} a ${lastKey})`;
+      }
+
+      setReplayDateLabel(label);
 
       if (run.note) {
 
@@ -6365,90 +6401,32 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-      // =======================================================================
+      // Início limpo: a reprodução começa direto no 1º tick da abertura do pregão selecionado
+      const contextEnd = 0;
+      publish(0);
+      const replayTicks = ticks.length;
 
-      // DIA ANTERIOR ESTÁTICO: o dia de contexto é processado DE UMA VEZ, sem
-
-      // animação e SEM nunca operar (só alimenta os contadores — jamais abre ordem).
-
-      // A animação do replay começa na abertura do dia-alvo, com ontem já desenhado.
-
-      // =======================================================================
-
-      const day0 = new Date(ticks[0].timestamp).getDate();
-
-      let contextEnd = 0;
-
-      while (contextEnd < ticks.length && new Date(ticks[contextEnd].timestamp).getDate() === day0) {
-
-        contextEnd += 1;
-
-      }
-
-      // Se todos os ticks caírem no mesmo dia (não deveria acontecer com +1 dia), não há contexto
-
-      if (contextEnd >= ticks.length) contextEnd = 0;
-
-      for (let i = 0; i < contextEnd; i += 1) ingestSilent(ticks[i]);
-
-      // O motor marca convergência nesses boxes (análise de fluxo), mas o dia de contexto é
-
-      // ESTÁTICO e nunca opera. Sinaliza os boxes já existentes como contexto para o gráfico
-
-      // suprimir as marcas de compra/venda em ontem — só os tijolos crus aparecem.
-
-      const markStaticContext = (arr: { isStaticContext?: boolean }[]) => {
-
-        for (const b of arr) b.isStaticContext = true;
-
-      };
-
-      markStaticContext(engine.getBoxes());
-
-      markStaticContext(rangeEng.getBoxes());
-
-      markStaticContext(timeEng.getBoxes());
-
-      ALT_RENKO_SCALES.forEach((alt) => markStaticContext(altEnginesRef.current[alt.key].getBoxes()));
-
-      publish(contextEnd); // ontem já aparece inteiro na tela, antes de o replay começar
-
-
-
-      const STEP_MS = 40; // ~25 atualizações por segundo em 1x
-
-      // 3000 passos de 40ms ≈ 1min45 de reprodução em 1x (seja 1 dia ou 5). Subir esse número
-
-      // deixa o 1x mais lento; o 10x continua rápido porque queima mais ticks por passo
-
-      const BASE_STEPS = 3000;
-
-      // A animação reproduz apenas os dias-alvo (o contexto já está na tela)
-
-      const replayTicks = ticks.length - contextEnd;
-
-      // Compasso derivado da velocidade escolhida (mais rápido = mais ticks por passo). Relido a
-
-      // CADA passo: assim a caixa "Nx" da tira vale também no MEIO da corrida, e não só na próxima.
-
-      // A ordem dos ticks nunca muda, então o determinismo está preservado — mesmo seed, mesmo PnL
-
-      // em 1x, 2x, 3x, 5x ou 10x; só o ritmo da animação é outro.
-
+      // Compasso de velocidade:
+      // Em 1x: reprodução em velocidade NORMAL de mercado (1 tick por ciclo com delay realista),
+      // permitindo acompanhar cada agressão e formação de box no tempo humano do mercado.
+      // Em 2x, 3x, 5x, 10x: acelera o avanço em lotes de ticks para análise rápida.
       const paceFor = (s: number) => {
-
         const speed = Math.max(1, Math.min(10, Math.round(s)));
-
-        return {
-
-          speed,
-
-          stepMs: speed >= 8 ? 16 : speed >= 4 ? 25 : STEP_MS,
-
-          chunk: Math.max(2, Math.ceil((replayTicks * speed) / BASE_STEPS)),
-
-        };
-
+        if (speed === 1) {
+          // 1x = Normal do mercado: 1 a 2 ticks por passo, 40ms de cadência suave (~25 ticks/seg)
+          return { speed: 1, stepMs: 40, chunk: 1 };
+        }
+        if (speed === 2) {
+          return { speed: 2, stepMs: 35, chunk: 4 };
+        }
+        if (speed === 3) {
+          return { speed: 3, stepMs: 30, chunk: 10 };
+        }
+        if (speed === 5) {
+          return { speed: 5, stepMs: 25, chunk: 30 };
+        }
+        // 10x = Modo ultrarrápido
+        return { speed: 10, stepMs: 16, chunk: 100 };
       };
 
       let pace = paceFor(simulationSpeedRef.current);
@@ -6510,26 +6488,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             : `REPLAY CONCLUÍDO: ${replayTargetDays} DIA(S) DE HISTÓRICO`,
 
           description: `${
-
             aborted
-
-              ? `${Math.max(0, cursor - contextEnd).toLocaleString('pt-BR')} ticks do dia-alvo já reproduzidos ficaram no gráfico e no coletor; o feed ao vivo retoma do último preço.`
-
+              ? `${cursor.toLocaleString('pt-BR')} ticks reproduzidos; o feed ao vivo retoma do último preço.`
               : `${replayTicks.toLocaleString('pt-BR')} ticks ${
-
-                  run.source === 'REAL' ? 'REAIS do MT5' : 'sintéticos do dia-alvo (sessões 08:55–17:45)'
-
-                } rodaram da abertura até o fim do período, com o dia anterior desenhado estático como contexto.`
-
+                  run.source === 'REAL' ? 'REAIS do MT5' : 'sintéticos'
+                } reproduzidos com sucesso no pregão de ${label}.`
           } ${
-
             run.source === 'REAL'
-
               ? `Fonte: HISTÓRICO REAL (MT5) · ${volumeSourceLabel(run.volumeSource)}.`
-
               : `Seed do pregão: #${seedForRun}.`
-
-          } Velocidade ${pace.speed}x.${operate ? '' : ' Replay silencioso (OPERA desligado): não abriu ordem nenhuma.'} Modo Paper Trading (nada de real é enviado à corretora).`,
+          } Velocidade ${pace.speed}x.${operate ? ' Operações ativas na simulação (Paper Trading).' : ' Replay silencioso (OPERA desligado).'}`,
 
           timestamp: Date.now(),
 
@@ -7780,97 +7748,25 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
         <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1 overflow-x-auto no-scrollbar">
 
-          {/* ── REPLAY DO SIMULADOR (discreto, na cor apenas a setinha) ──
-
-              Roda o histórico desde a PRIMEIRA barra (mínimo 1 dia) desenhando o período
-
-              aos poucos; NUNCA dispara sozinho na abertura — a plataforma acorda parada e
-
-              vazia (regra do Ciclo 12), o replay só anda por clique aqui. Clicar de novo para
-
-              parar. O chip "Nx" é a velocidade do replay e do feed ao vivo. */}
-
-          <div
-
-            className="flex items-center gap-1 shrink-0 rounded-md border border-slate-800 bg-slate-900/70 px-1 py-0"
-
-            title="Simulador: reproduz o histórico desde a primeira barra (mínimo 1 dia cheio). A plataforma acorda parada — o replay nunca roda sozinho; clique para rodar, sem precisar da aba Simulador."
-
-          >
-
+          {/* ── REPLAY DO SIMULADOR & CONTROLE DE VELOCIDADE ── */}
+          <div className="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md border border-slate-700/80 bg-slate-900/95 shadow-sm">
+            {/* Botão OPERA (Simulação Paper Trading com ticks reais) */}
             <button
-
-              onClick={() => (isReplaying ? handleStopReplay() : handleReplayHistory(replayDays))}
-
-              className="flex items-center gap-1 rounded border border-slate-800 px-1.5 py-0 text-[10px] font-semibold text-slate-300 transition-colors whitespace-nowrap cursor-pointer hover:text-slate-100 hover:border-slate-600"
-
-              title={isReplaying ? `Parar a reprodução (${replayProgress}% rodado)` : `Rodar ${replayDays} dia(s) de simulador agora — zera as ordens e começa na primeira barra`}
-
+              onClick={() => setReplayOperates((v) => !v)}
+              className={`px-2 py-0.5 rounded text-[10.5px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                replayOperates
+                  ? 'border-emerald-500 bg-emerald-950/90 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.25)]'
+                  : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Quando ativado (verde), o robô executa a estratégia e opera na tela (paper trading) com os dados reais do MT5 sem enviar para a corretora real."
             >
-
-              {isReplaying ? (
-
-                <Square className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
-
-              ) : (
-
-                <Play className="w-3 h-3 text-amber-400 fill-amber-400" />
-
-              )}
-
-              <span className="tabular-nums">{isReplaying ? `${replayProgress}%` : ''}</span>
-
+              <span className={`w-2 h-2 rounded-full ${replayOperates ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-zinc-600'}`} />
+              <span>OPERA: {replayOperates ? 'LIGADO' : 'OFF'}</span>
             </button>
 
-            {/* Velocidade: o valor atual É o botão; o clique abre as outras. Antes eram cinco
-
-                chips em linha, largura que a tira não tem — e o número escolhido ainda era
-
-                repetido no chip da direita, que sumiu junto com esta mudança. */}
-
-            <MiniSelect
-
-              label="velocidade do simulador"
-
-              value={simulationSpeed}
-
-              options={speedChoices.map((s) => ({
-
-                value: s,
-
-                label: `${s}x`,
-
-                title: `Rodar em ${s}x — no feed ao vivo isso é ${(2 / s).toFixed(2).replace('.', ',')}s por tick`,
-
-              }))}
-
-              onChange={setSimulationSpeed}
-
-              title={`Velocidade do simulador: comanda o compasso do replay e o ritmo do feed ao vivo (1x ≈ 1min45 para rodar o dia; 2x ≈ 55s, 3x ≈ 35s, 5x ≈ 15s, 10x ≈ 5s).
-
-
-
-A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduzidos na mesma ordem em qualquer velocidade, então o PnL da corrida tem de sair IDÊNTICO em 1x, 2x, 3x, 5x e 10x. Se mudar com o seed fixo, é bug de determinismo — o chip "Corrida" mostra o seed usado.`}
-
-            />
-
-            {/* Grupo Replay de Histórico Real: Pregão Visível + OPERA Simulado + Play/Stop */}
-            <div className="flex items-center gap-1.5 shrink-0 px-1 py-0.5 rounded border border-slate-700/80 bg-slate-900/90">
-              {/* Botão OPERA (Simulação Paper Trading com ticks reais) */}
-              <button
-                onClick={() => setReplayOperates((v) => !v)}
-                className={`px-2 py-0.5 rounded text-[10.5px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
-                  replayOperates
-                    ? 'border-emerald-500 bg-emerald-950/90 text-emerald-300 shadow-sm'
-                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-                }`}
-                title="Quando ativado (verde), o robô executa a estratégia e opera na tela (simulação/paper trading) com os dados reais do MT5, calculando PnL e ordens sem enviar para a corretora real."
-              >
-                <span className={`w-2 h-2 rounded-full ${replayOperates ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-zinc-600'}`} />
-                <span>OPERA: {replayOperates ? 'LIGADO' : 'OFF'}</span>
-              </button>
-
-              {/* Seletor do Pregão / Dias de Replay */}
+            {/* Seletor do Pregão / Dias de Replay */}
+            <div className="flex items-center gap-1 border-l border-slate-800 pl-1.5">
+              <span className="text-[10px] text-slate-400 font-semibold uppercase">Pregão:</span>
               <MiniSelect
                 label="pregão / histórico"
                 value={replayDays}
@@ -7886,39 +7782,64 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
                 }}
                 title="Escolha o pregão para rodar a simulação com dados reais do MetaTrader 5"
               />
-
-              {/* Botão de Disparo / Indicador de Replay Ativo */}
-              {!isReplaying ? (
-                <button
-                  onClick={() => handleReplayHistory(replayDays)}
-                  className="px-2.5 py-0.5 rounded bg-violet-600 hover:bg-violet-500 text-white text-[10.5px] font-bold flex items-center gap-1 cursor-pointer shadow-sm active:scale-95 transition-all"
-                  title="Iniciar simulação com os dados reais do MT5 para o pregão selecionado"
-                >
-                  <Play className="w-3 h-3 fill-current" />
-                  <span>RODAR REPLAY</span>
-                </button>
-              ) : (
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-950/90 border border-emerald-500/80 text-emerald-300 text-[10.5px] font-mono font-bold shadow-md">
-                  <span className="flex h-2 w-2 relative">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <span>PREGÃO:</span>
-                  <span className="text-white font-bold">{replayDateLabel}</span>
-                  {replayCurrentTimeStr && <span className="text-emerald-400 font-normal">{replayCurrentTimeStr}</span>}
-                  <span className="text-emerald-200 tabular-nums">({replayProgress}%)</span>
-                  <button
-                    onClick={handleStopReplay}
-                    className="ml-1 px-1.5 py-0.2 rounded bg-rose-800 hover:bg-rose-700 text-white text-[9.5px] font-sans font-bold cursor-pointer transition-colors"
-                    title="Interromper simulação"
-                  >
-                    PARAR
-                  </button>
-                </div>
-              )}
             </div>
 
-            {/* Seed do pregão sintético: é o que torna honesta a comparação entre velocidades.
+            {/* SELETOR DE VELOCIDADE EM DESTAQUE NA TELA PRINCIPAL */}
+            <div className="flex items-center gap-1 border-l border-slate-800 pl-1.5 bg-slate-950/60 px-1.5 py-0.5 rounded border border-slate-800/80">
+              <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide flex items-center gap-0.5">
+                ⚡ Vel:
+              </span>
+              <div className="flex items-center gap-0.5">
+                {[1, 2, 3, 5, 10].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setSimulationSpeed(s)}
+                    className={`px-1.5 py-0.5 text-[10px] font-bold rounded cursor-pointer transition-all ${
+                      simulationSpeed === s
+                        ? 'bg-amber-500 text-slate-950 shadow-[0_0_6px_rgba(245,158,11,0.5)] scale-105'
+                        : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
+                    }`}
+                    title={`Definir velocidade em ${s}x (${s === 1 ? '1min45 por pregão' : s === 2 ? '55s' : s === 3 ? '35s' : s === 5 ? '15s' : '5s'})`}
+                  >
+                    {s}x
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Botão de Disparo / Indicador de Replay Ativo */}
+            {!isReplaying ? (
+              <button
+                onClick={() => handleReplayHistory(replayDays)}
+                className="ml-1 px-3 py-1 rounded bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-[11px] font-bold flex items-center gap-1.5 cursor-pointer shadow-md active:scale-95 transition-all"
+                title="Iniciar simulação com os dados reais do MT5 para o pregão selecionado"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>RODAR REPLAY</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-500/80 text-emerald-300 text-[10.5px] font-mono font-bold shadow-md">
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span>PREGÃO:</span>
+                <span className="text-white font-bold">{replayDateLabel}</span>
+                {replayCurrentTimeStr && <span className="text-emerald-400 font-normal">{replayCurrentTimeStr}</span>}
+                <span className="text-amber-300 font-bold ml-0.5">({simulationSpeed}x)</span>
+                <span className="text-emerald-200 tabular-nums">[{replayProgress}%]</span>
+                <button
+                  onClick={handleStopReplay}
+                  className="ml-1.5 px-2 py-0.5 rounded bg-rose-700 hover:bg-rose-600 text-white text-[10px] font-sans font-bold cursor-pointer transition-colors shadow-sm"
+                  title="Interromper simulação"
+                >
+                  PARAR
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Seed do pregão sintético: é o que torna honesta a comparação entre velocidades.
 
                 Um controle só — o eco que existia na ponta direita da tira foi removido. */}
 
@@ -7975,8 +7896,6 @@ A velocidade NÃO muda o mercado: com o mesmo seed, todos os ticks são reproduz
               )}
 
             </div>
-
-          </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
 

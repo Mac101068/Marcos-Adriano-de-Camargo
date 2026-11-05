@@ -37,12 +37,14 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   symbol: chartSymbolFor(ASSETS[DEFAULT_ASSET_ID]),
   boxPoints: 50, // 10R no Mini-Índice
   contracts: 1, // 1 contrato padrão na Ordem Mãe
-  minDeltaThreshold: 100, // Delta mínimo de agressão líquida
+  minDeltaThreshold: 150, // Delta mínimo de agressão líquida
   adaptiveThresholdEnabled: true, // Limiar adaptativo ligado por padrão: ±mín × fator de regime do momento
   regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
-  consolidationFilterEnabled: false, // Filtro de acumulação: desligado até o bench A/B provar o corte de stops
+  consolidationFilterEnabled: true,
+  trendFilterEnabled: true,
+  trendFilterPeriod: 20, // Filtro de acumulação: desligado até o bench A/B provar o corte de stops
   consolidationLookbackBoxes: 10, // Janela da Efficiency Ratio (boxes recentes)
-  consolidationErMax: 0.3, // ER abaixo disso = range curto/acumulação (sinal silenciado)
+  consolidationErMax: 0.35, // ER abaixo disso = range curto/acumulação (sinal silenciado)
   exhaustionFilterEnabled: false, // Filtro de exaustão: opcional, ligado só por decisão do operador
   exhaustionDeltaRatio: 0.7, // Agressão abaixo disto x box anterior do mesmo lado = exausto
   requireCvdNewExtreme: false,
@@ -92,7 +94,7 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   pyramidSlPoints: 0, // Sem stop fixo na pirâmide por padrão (saída por inversão)
   pyramidContracts: 1, // 1 contrato por pirâmide
   pyramidEntryType: 'MARKET_ON_CLOSE', // Entrada a mercado no fechamento do box (padrão clássico)
-  moveMainToBreakevenOnPyramidTp: false, // Breakeven da ordem mãe ao bater TP de pirâmide (opcional)
+  moveMainToBreakevenOnPyramidTp: false, // Sem breakeven forçado (ordem mãe surfa livre até a virada do fluxo)
   holdMainUntilFlip: true,
   closeAllOnFlowFlip: true,
   noFixedStopLoss: true,
@@ -108,7 +110,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
     id: 'preset-pyramid-flow-10r',
     name: '10R Pirâmide & Confluência (TP 50p + Surfe)',
     badge: 'PIRÂMIDE 50P',
-    description: 'Compra no fechamento de cada bloco verde com TP de 50 pts na pirâmide. Mantém a ordem principal aberta até a virada do fluxo e, a cada TP batido, protege a ordem mãe no breakeven. Zeragem total por inversão sem SL fixo.',
+    description: 'Compra no fechamento de cada bloco verde com TP de 50 pts na pirâmide. Mantém a ordem principal aberta surfando até a virada do fluxo (sem breakeven forçado). Zeragem total por inversão sem SL fixo.',
     config: {
       ...DEFAULT_EA_CONFIG,
       profileName: '10R Pirâmide & Confluência',
@@ -117,7 +119,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       contracts: 1,
       pyramidContracts: 1,
       pyramidTpPoints: 50,
-      moveMainToBreakevenOnPyramidTp: true, // Protege a ordem mãe no breakeven a cada TP de pirâmide batido
+      moveMainToBreakevenOnPyramidTp: false, // Sem breakeven forçado: surfe contínuo
       holdMainUntilFlip: true,
       closeAllOnFlowFlip: true,
       noFixedStopLoss: true,
@@ -128,7 +130,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       accountMode: 'HEDGE',
       maxSimultaneousPositions: 15,
       hedgeOppositeAction: 'CLOSE_OPPOSITE',
-      minDeltaThreshold: 100,
+      minDeltaThreshold: 150,
     },
   },
   {
@@ -261,6 +263,8 @@ export class EaConfigService {
           consolidationFilterEnabled: parsed.consolidationFilterEnabled ?? DEFAULT_EA_CONFIG.consolidationFilterEnabled,
           consolidationLookbackBoxes: parsed.consolidationLookbackBoxes ?? DEFAULT_EA_CONFIG.consolidationLookbackBoxes,
           consolidationErMax: parsed.consolidationErMax ?? DEFAULT_EA_CONFIG.consolidationErMax,
+          trendFilterEnabled: parsed.trendFilterEnabled ?? DEFAULT_EA_CONFIG.trendFilterEnabled,
+          trendFilterPeriod: parsed.trendFilterPeriod ?? DEFAULT_EA_CONFIG.trendFilterPeriod,
           exhaustionFilterEnabled: parsed.exhaustionFilterEnabled ?? DEFAULT_EA_CONFIG.exhaustionFilterEnabled,
           exhaustionDeltaRatio: parsed.exhaustionDeltaRatio ?? DEFAULT_EA_CONFIG.exhaustionDeltaRatio,
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,

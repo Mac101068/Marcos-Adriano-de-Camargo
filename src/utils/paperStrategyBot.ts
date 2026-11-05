@@ -391,7 +391,7 @@ export class PaperStrategyBot {
     }
 
     // 3) Saídas: TP das pirâmides (+pyramidTpPoints), stop opcional e breakeven liberado na ordem mãe
-    const tpPts = Math.max(1, config.pyramidTpPoints);
+    const tpPts = Math.max(config.boxPoints, config.pyramidTpPoints || config.boxPoints);
     const pyrSlPts = (config.pyramidSlPoints ?? 0) > 0 ? config.pyramidSlPoints : 0;
     for (const pos of [...this.openPositions]) {
       const isBuy = pos.trade.direction === 'BUY';
