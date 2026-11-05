@@ -169,8 +169,6 @@ export interface AutomationConfig {
    * caiu a `exhaustionDeltaRatio` (ou menos) da do último box do MESMO lado — movimento perdendo força.
    */
   exhaustionFilterEnabled: boolean;
-  trendFilterEnabled?: boolean;
-  trendFilterPeriod?: number;
   exhaustionDeltaRatio: number; // Fração da força do box anterior que ainda vale (padrão 0.7)
   requireCvdNewExtreme: boolean; // Exige que o CVD faça nova máxima/mínima
   confirmationMode: 'BOX_CLOSE' | 'TICK_BREAKOUT'; // Disparar no fechamento ou no rompimento

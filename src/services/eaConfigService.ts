@@ -41,8 +41,6 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   adaptiveThresholdEnabled: true, // Limiar adaptativo ligado por padrão: ±mín × fator de regime do momento
   regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
   consolidationFilterEnabled: true,
-  trendFilterEnabled: true,
-  trendFilterPeriod: 20, // Filtro de acumulação: desligado até o bench A/B provar o corte de stops
   consolidationLookbackBoxes: 10, // Janela da Efficiency Ratio (boxes recentes)
   consolidationErMax: 0.35, // ER abaixo disso = range curto/acumulação (sinal silenciado)
   exhaustionFilterEnabled: false, // Filtro de exaustão: opcional, ligado só por decisão do operador
@@ -263,8 +261,6 @@ export class EaConfigService {
           consolidationFilterEnabled: parsed.consolidationFilterEnabled ?? DEFAULT_EA_CONFIG.consolidationFilterEnabled,
           consolidationLookbackBoxes: parsed.consolidationLookbackBoxes ?? DEFAULT_EA_CONFIG.consolidationLookbackBoxes,
           consolidationErMax: parsed.consolidationErMax ?? DEFAULT_EA_CONFIG.consolidationErMax,
-          trendFilterEnabled: parsed.trendFilterEnabled ?? DEFAULT_EA_CONFIG.trendFilterEnabled,
-          trendFilterPeriod: parsed.trendFilterPeriod ?? DEFAULT_EA_CONFIG.trendFilterPeriod,
           exhaustionFilterEnabled: parsed.exhaustionFilterEnabled ?? DEFAULT_EA_CONFIG.exhaustionFilterEnabled,
           exhaustionDeltaRatio: parsed.exhaustionDeltaRatio ?? DEFAULT_EA_CONFIG.exhaustionDeltaRatio,
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
