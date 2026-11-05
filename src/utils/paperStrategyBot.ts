@@ -136,6 +136,9 @@ export class PaperStrategyBot {
   private equityCurve: EquityPoint[] = [];
   private openPositions: OpenPosition[] = [];
   private pendingEntries: PendingEntry[] = []; // apenas na Pirâmide com entrada Limit
+  // Confirmadores da virada (bench flipConfirmBoxes): direção e qtde de boxes consecutivos
+  private lastBoxDir?: 'UP' | 'DOWN';
+  private consecutiveDir = 0;
   private livePrice = 0; // último preço visto (para marcação a mercado das posições abertas)
   // Acumulados contínuos: sobrevivem ao truncamento da lista de trades (replay de dias)
   private bookedCount = 0;
@@ -345,6 +348,8 @@ export class PaperStrategyBot {
       }
       this.openPositions = [];
       this.pendingEntries = [];
+      this.lastBoxDir = undefined;
+      this.consecutiveDir = 0;
       return;
     }
     if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
@@ -361,8 +366,23 @@ export class PaperStrategyBot {
     const entryType = config.pyramidEntryType || 'MARKET_ON_CLOSE';
     const useLimitEntry = entryType !== 'MARKET_ON_CLOSE';
 
-    // 1) Zera o lado contrário na virada de fluxo (posições abertas e limitadas pendentes)
+    // Contador de boxes consecutivos na mesma direção (confirmadores da virada).
+    if (box.direction === this.lastBoxDir) this.consecutiveDir++;
+    else {
+      this.lastBoxDir = box.direction;
+      this.consecutiveDir = 1;
+    }
+
+    // 1) Zera o lado contrário na virada de fluxo (posições abertas e limitadas pendentes).
+    // flipConfirmBoxes > 1 (bench): só vira após N boxes CONSECUTIVOS na direção do sinal;
+    // sinal contrário não confirmado é ignorado por completo (sem flip E sem entrada — não vira hedge).
     if (signal && config.closeAllOnFlowFlip) {
+      const wantDir = signal === 'BUY' ? 'UP' : 'DOWN';
+      const need = Math.max(1, Math.round(config.flipConfirmBoxes ?? 1));
+      const hasOpposite =
+        this.openPositions.some((p) => p.trade.direction !== signal) ||
+        this.pendingEntries.some((p) => p.direction !== signal);
+      if (hasOpposite && (box.direction !== wantDir || this.consecutiveDir < need)) return;
       const opposite = this.openPositions.filter((p) => p.trade.direction !== signal);
       for (const pos of opposite) {
         this.book(pos.trade, box.close, box.timeEnd, 'FLIP_REVERSAL');
@@ -747,6 +767,8 @@ export class PaperStrategyBot {
     this.equity = 0;
     this.openPositions = [];
     this.pendingEntries = [];
+    this.lastBoxDir = undefined;
+    this.consecutiveDir = 0;
     this.bookedCount = 0;
     this.winsCount = 0;
     this.lossesCount = 0;

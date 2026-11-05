@@ -105,6 +105,29 @@ const VARIANTS: Variant[] = [
     engine: 'renko', seriesKey: 'renko', points: 50,
     config: cfg({ boxPoints: 50, strategyMode: 'PYRAMID_FLOW_CONFLUENCE', adaptiveThresholdEnabled: false, contracts: 1 }),
   },
+  // Revalidação pós-calibração: a causa mortis da Pirâmide é o FLIP_REVERSAL (2.661t → −R$ 38,6 mil
+  // no lote da calibração). Estas variantes só deixam a virada zerar o lado contrário após N boxes
+  // CONSECUTIVOS na direção do sinal (sinal contrário não confirmado é ignorado por completo).
+  {
+    id: 'PIR-10R-ADAPT-FLIP2', label: 'Pirâmide 10R adaptativo · flip confirmado 2 boxes', group: 'Pirâmide',
+    engine: 'renko', seriesKey: 'renko', points: 50,
+    config: cfg({ boxPoints: 50, strategyMode: 'PYRAMID_FLOW_CONFLUENCE', adaptiveThresholdEnabled: true, contracts: 1, flipConfirmBoxes: 2 }),
+  },
+  {
+    id: 'PIR-10R-ADAPT-FLIP3', label: 'Pirâmide 10R adaptativo · flip confirmado 3 boxes', group: 'Pirâmide',
+    engine: 'renko', seriesKey: 'renko', points: 50,
+    config: cfg({ boxPoints: 50, strategyMode: 'PYRAMID_FLOW_CONFLUENCE', adaptiveThresholdEnabled: true, contracts: 1, flipConfirmBoxes: 3 }),
+  },
+  {
+    id: 'PIR-10R-FIXO-FLIP2', label: 'Pirâmide 10R fixo · flip confirmado 2 boxes', group: 'Pirâmide',
+    engine: 'renko', seriesKey: 'renko', points: 50,
+    config: cfg({ boxPoints: 50, strategyMode: 'PYRAMID_FLOW_CONFLUENCE', adaptiveThresholdEnabled: false, contracts: 1, flipConfirmBoxes: 2 }),
+  },
+  {
+    id: 'PIR-10R-FIXO-FLIP3', label: 'Pirâmide 10R fixo · flip confirmado 3 boxes', group: 'Pirâmide',
+    engine: 'renko', seriesKey: 'renko', points: 50,
+    config: cfg({ boxPoints: 50, strategyMode: 'PYRAMID_FLOW_CONFLUENCE', adaptiveThresholdEnabled: false, contracts: 1, flipConfirmBoxes: 3 }),
+  },
   {
     id: 'PIR-10R-LIMIT50', label: 'Pirâmide 10R · pirâmides a LIMIT 50% do box', group: 'Pirâmide',
     engine: 'renko', seriesKey: 'renko', points: 50,

@@ -232,6 +232,12 @@ export interface AutomationConfig {
   moveMainToBreakevenOnPyramidTp: boolean; // Ao bater o TP de uma pirâmide, mover o SL da ordem mãe para o breakeven (+offset de taxas)
   holdMainUntilFlip: boolean; // Manter a entrada principal aberta surfando até a virada de fluxo
   closeAllOnFlowFlip: boolean; // Zerar a entrada principal e qualquer ordem da pirâmide aberta na virada do fluxo
+  /**
+   * Confirmação da virada (revalidação pós-calibração): nº de boxes CONSECUTIVOS na direção
+   * do sinal novo exigidos antes de deixar o flip zerar o lado contrário. Padrão 1 = regra atual.
+   * Com N>1 o sinal contrário não confirmado é ignorado (sem flip E sem entrada — não vira hedge).
+   */
+  flipConfirmBoxes?: number;
   noFixedStopLoss: boolean; // Elimina stops fixos: saídas 100% governadas por inversão do mercado
 
   /**

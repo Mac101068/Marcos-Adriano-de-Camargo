@@ -95,6 +95,7 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   moveMainToBreakevenOnPyramidTp: false, // Sem breakeven forçado (ordem mãe surfa livre até a virada do fluxo)
   holdMainUntilFlip: true,
   closeAllOnFlowFlip: true,
+  flipConfirmBoxes: 1, // 1 = vira no 1º sinal contrário (regra histórica); N>1 exige confirmação (bench do Laboratório)
   noFixedStopLoss: true,
   shadowRobot: { ...DEFAULT_SHADOW_ROBOT },
   profileName: '10R Pirâmide & Confluência',
@@ -255,6 +256,7 @@ export class EaConfigService {
           moveMainToBreakevenOnPyramidTp: parsed.moveMainToBreakevenOnPyramidTp ?? DEFAULT_EA_CONFIG.moveMainToBreakevenOnPyramidTp,
           holdMainUntilFlip: parsed.holdMainUntilFlip ?? DEFAULT_EA_CONFIG.holdMainUntilFlip,
           closeAllOnFlowFlip: parsed.closeAllOnFlowFlip ?? DEFAULT_EA_CONFIG.closeAllOnFlowFlip,
+          flipConfirmBoxes: parsed.flipConfirmBoxes ?? DEFAULT_EA_CONFIG.flipConfirmBoxes,
           noFixedStopLoss: parsed.noFixedStopLoss ?? DEFAULT_EA_CONFIG.noFixedStopLoss,
           adaptiveThresholdEnabled: parsed.adaptiveThresholdEnabled ?? DEFAULT_EA_CONFIG.adaptiveThresholdEnabled,
           regimeLookbackBoxes: parsed.regimeLookbackBoxes ?? DEFAULT_EA_CONFIG.regimeLookbackBoxes,
