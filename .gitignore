@@ -34,5 +34,10 @@ backups/
 # ('!data/*.gz') depois de excluir o diretório pai: o Git nem desce nele.
 data/
 
+# Token local sincronizado entre ponte e interface
+bridge_token.txt
+interface_github/public/bridge_token.txt
+
+
 .vscode/
 .agents/

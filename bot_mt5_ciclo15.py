@@ -24,6 +24,8 @@ Ponte WebSocket: ws://0.0.0.0:8765
 import sys
 
 import os
+from pathlib import Path
+
 
 if hasattr(sys.stdout, "reconfigure"):
 
@@ -273,7 +275,9 @@ EVAL_CONFIG = {
     "strategy_mode": STRATEGY_MODE,
     "adaptive": ADAPTIVE_THRESHOLD_ENABLED,
     "regime_lookback": REGIME_LOOKBACK_BOXES,
-    "percentile": SESSION_PERCENTILE,
+    "percentile": 0.7,
+    "floor_multiple": 1.6,
+    "flow_divergence_min": 0.5,
     "pyramid_static_floor": PYRAMID_STATIC_FLOOR,
     "consolidation_enabled": CONSOLIDATION_FILTER_ENABLED,
     "consolidation_lookback": CONSOLIDATION_LOOKBACK_BOXES,
@@ -343,12 +347,54 @@ CLOSE_ALL_TIME = "17:30"
 
 # ==============================================================================
 
-# Comeca VAZIA de proposito: vazio significa "ainda sem pino". Um sentinela texto
-# (era "AUTO_PIN_ON_FIRST_CONNECT") era autenticavel -- quem mandasse a propria
-# string do sentinela passava no compare_digest antes de qualquer cliente legitimo.
-AUTH_TOKEN = ""
+def sync_token_files(token: str, paths=None):
+    if not token or len(token) < 16:
+        return
+    if paths is None:
+        base_dir = Path(__file__).resolve().parent
+        paths = [
+            base_dir / "bridge_token.txt",
+            base_dir / "interface_github" / "public" / "bridge_token.txt"
+        ]
+    for p in paths:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(token, encoding="utf-8")
+        except Exception:
+            pass
+
+def load_or_create_bridge_token() -> str:
+    env_token = os.getenv("BRIDGE_TOKEN", "").strip()
+    if env_token and len(env_token) >= 16:
+        sync_token_files(env_token)
+        return env_token
+
+    base_dir = Path(__file__).resolve().parent
+    token_paths = [
+        base_dir / "bridge_token.txt",
+        base_dir / "interface_github" / "public" / "bridge_token.txt"
+    ]
+
+    for p in token_paths:
+        if p.is_file():
+            try:
+                content = p.read_text(encoding="utf-8").strip()
+                if len(content) >= 16:
+                    sync_token_files(content, token_paths)
+                    return content
+            except Exception:
+                pass
+
+    alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+    token = ''.join(secrets.choice(alphabet) for _ in range(28))
+    sync_token_files(token, token_paths)
+    return token
+
+# Token carregado/criado de forma sincronizada com o frontend
+AUTH_TOKEN = load_or_create_bridge_token()
 
 REQUIRE_AUTH = True
+
 
 
 
@@ -659,19 +705,54 @@ class RegimeMeter:
 
 
 
+    def set_lookback(self, lookback_boxes):
+        self.lookback = max(3, min(100, int(lookback_boxes) or 20))
+
+    def get_self_calibrated_limit(self, base_threshold, side, percentile=0.7, floor_multiple=1.6):
+        """Limiar AUTO-CALIBRADO do pregão (Ciclos 17/18 SEL-A):
+        Maior entre o percentil das agressões na janela móvel dos últimos `lookback` boxes
+        e o piso relativo de `floor_multiple` × média do dia inteiro daquele lado.
+        Atualizado automaticamente a cada box fechado com base na janela configurada.
+        """
+        win = self.records[-max(3, self.lookback):]
+        if side == "BUY":
+            mags = sorted(r[2] for r in win if r[2] > 0)
+            day_n = self.day_pos_n
+            day_sum = self.day_pos_sum
+        else:
+            mags = sorted(-r[2] for r in win if r[2] < 0)
+            day_n = self.day_neg_n
+            day_sum = self.day_neg_sum
+
+        day_mean = day_sum / day_n if day_n >= 5 else None
+        floor_mult = self._clamp(float(floor_multiple), 1.0, 5.0)
+        floor_value = day_mean * floor_mult if day_mean is not None else None
+
+        min_records = min(10, max(3, self.lookback))
+        min_samples = min(5, max(2, self.lookback // 3))
+
+        if len(self.records) < min_records or len(mags) < min_samples:
+            return max(1, int(round(base_threshold)))
+
+        pct = self._clamp(float(percentile), 0.0, 0.95)
+        idx = min(len(mags) - 1, int(pct * len(mags)))
+        p = mags[idx]
+
+        use_floor = floor_value is not None and floor_value > p
+        effective = floor_value if use_floor else p
+        return max(1, int(round(effective)))
+
     def get_percentile_limit(self, base_threshold, side, percentile=0.6):
         """Limiar CALCULADO do pregão: percentil `percentile` das agressões do próprio lado.
 
-        É a réplica exata de SessionRegimeMeter.getPercentileLimit() do app: P60 de compra
-        significa "os 40% boxes verdes mais agressivos deste pregão sinalizam". O corte sobe
-        na abertura e desce no almoço sem depender de nenhum valor físico fixo. Sem
-        estatística (menos de 10 boxes fechados, ou menos de 5 do lado pedido) cai no
-        fixo × fator — que é também o comportamento de warm-up da tela.
+        É a réplica de SessionRegimeMeter.getPercentileLimit() do app: corte baseado no
+        percentil das agressões dos últimos `lookback` boxes.
         """
-        if len(self.records) < 10:
+        min_records = min(10, max(3, self.lookback))
+        if len(self.records) < min_records:
             return self.get_adaptive_limit(base_threshold, side)
 
-        win = self.records[-max(self.lookback, 20):]
+        win = self.records[-max(3, self.lookback):]
 
         # records[i] = (hour, volume, delta, fator): agressão líquida do box está no índice 2
         if side == "BUY":
@@ -679,7 +760,8 @@ class RegimeMeter:
         else:
             mags = sorted(-r[2] for r in win if r[2] < 0)
 
-        if len(mags) < 5:
+        min_samples = min(5, max(2, self.lookback // 3))
+        if len(mags) < min_samples:
             return self.get_adaptive_limit(base_threshold, side)
 
         pct = self._clamp(float(percentile), 0.0, 0.95)
@@ -950,17 +1032,25 @@ class RenkoFlowEngine:
         adaptive = bool(cfg["adaptive"])
         base_thresh = self.min_delta_threshold
         pyramid = cfg["strategy_mode"] == "PYRAMID_FLOW_CONFLUENCE"
+        pct = float(cfg.get("percentile", 0.7))
+        flr = float(cfg.get("floor_multiple", 1.6))
         limit_buy = (
-            self.regime_meter.get_percentile_limit(base_thresh, "BUY", cfg["percentile"])
+            self.regime_meter.get_self_calibrated_limit(base_thresh, "BUY", pct, flr)
             if adaptive else base_thresh
         )
         limit_sell = (
-            self.regime_meter.get_percentile_limit(base_thresh, "SELL", cfg["percentile"])
+            self.regime_meter.get_self_calibrated_limit(base_thresh, "SELL", pct, flr)
             if adaptive else base_thresh
         )
-        # Com adaptativo o corte é o P60 puro; na Pirâmide estática o app usa max(50, minDelta)
+        # Com adaptativo o corte é o auto-calibrado; na Pirâmide estática o app usa max(50, minDelta)
         req_buy = limit_buy if (adaptive or not pyramid) else max(cfg["pyramid_static_floor"], base_thresh)
         req_sell = limit_sell if (adaptive or not pyramid) else max(cfg["pyramid_static_floor"], base_thresh)
+
+        # Filtro de divergência de fluxo (SEL-A: |Δ| ÷ volume >= min)
+        div_min = float(cfg.get("flow_divergence_min", 0.5)) if pyramid else 0.0
+        tot_vol = max(1, int(box.get("total_volume") or box.get("volume") or 0))
+        divergence = abs(delta) / tot_vol
+        divergence_ok = (divergence >= div_min) if (pyramid and div_min > 0) else True
 
         # O Efficiency Ratio é medido SEMPRE, com o filtro ligado ou não: é a coluna que permite
         # auditar depois se o filtro de acumulação teria ajudado. Custa ~10 subtrações por box.
@@ -970,7 +1060,7 @@ class RenkoFlowEngine:
             previous_boxes, box, cfg["exhaustion_ratio"])
         regime_block = consolidating or exhausting
 
-        factor_lbl = " | limiar = P60 do pregão" if adaptive else ""
+        factor_lbl = f" | limiar = P{int(pct * 100)} SEL-A (janela {self.regime_meter.lookback}b)" if adaptive else ""
 
         # Vereditão completo vai para o diário (auditoria_diario). Um sinal que não sai deixa
         # rastro com o MOTIVO: sem a metade dos calados, nenhum filtro é auditável.
@@ -991,6 +1081,8 @@ class RenkoFlowEngine:
                 # 1. Delta institucional: abaixo do limiar não existe sinal, seja qual for o regime
                 if delta < req_buy:
                     audit["motivo"] = f"CALADO_DELTA | Δ {delta} < limiar {req_buy}"
+                elif not divergence_ok:
+                    audit["motivo"] = f"CALADO_DIVERGENCIA | div {divergence:.2f} < {div_min}"
                 # 2. Regime: verde dentro de range curto ou fluxo exausto não é confluência
                 elif regime_block:
                     audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
@@ -1001,6 +1093,8 @@ class RenkoFlowEngine:
             elif direction == "DOWN":
                 if delta > -req_sell:
                     audit["motivo"] = f"CALADO_DELTA | Δ {delta} > limiar {-req_sell}"
+                elif not divergence_ok:
+                    audit["motivo"] = f"CALADO_DIVERGENCIA | div {divergence:.2f} < {div_min}"
                 elif regime_block:
                     audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
                 else:
@@ -2112,6 +2206,16 @@ def apply_ea_config(payload):
     _num("consolidationErMax", "consolidation_er_max", float)
     _num("exhaustionDeltaRatio", "exhaustion_ratio", float)
     _num("sessionPercentile", "percentile", float)
+    _num("adaptiveThresholdPercentile", "percentile", float)
+    _num("adaptiveFloorMultiple", "floor_multiple", float)
+    _num("flowDivergenceMin", "flow_divergence_min", float)
+
+    # Propaga o lookback de boxes para todos os motores de regime ativos
+    if "regime_lookback" in EVAL_CONFIG:
+        new_lb = EVAL_CONFIG["regime_lookback"]
+        for eng in ENGINES.values():
+            if hasattr(eng, "regime_meter") and hasattr(eng.regime_meter, "set_lookback"):
+                eng.regime_meter.set_lookback(new_lb)
 
     # A base de Delta é calibrada por ativo (cada mercado tem outra liquidez por tijolo),
     # então o número global da tela só se aplica ao ativo que está no gráfico.
@@ -2521,8 +2625,8 @@ async def ws_handler(websocket):
                 # mesmo e virava dono da conta logada no MT5 (comprovado do Mac em 06/11/2026).
 
                 if not AUTH_TOKEN and len(provided) >= 16:
-
                     AUTH_TOKEN = provided
+                    sync_token_files(AUTH_TOKEN)
 
                 matches = bool(AUTH_TOKEN) and secrets.compare_digest(provided, AUTH_TOKEN)
 
@@ -2871,13 +2975,16 @@ async def ws_handler(websocket):
 
                     continue
 
+                target_sym = data.get("symbol") or SYMBOL
+                mgr = get_or_create_order_manager(target_sym)
+
                 if action == "ORDER_SEND":
 
                     order_magic = data.get("magic") or None
 
                     if data.get("isLimit"):
 
-                        ORDER_MANAGER.place_websocket_limit_order(
+                        mgr.place_websocket_limit_order(
 
                             data.get("type", "BUY"),
 
@@ -2899,7 +3006,7 @@ async def ws_handler(websocket):
 
                         try:
 
-                            ORDER_MANAGER.execute_market_order(
+                            mgr.execute_market_order(
 
                                 data.get("type", "BUY"),
 
@@ -2922,15 +3029,15 @@ async def ws_handler(websocket):
                             # Clique manual na tela: a falha tem de aparecer no diário e no console da
                             # ponte, não derrubar o handler da conexão (o operador ficaria sem resposta).
 
-                            ORDER_MANAGER._audit_ordem("APP_ORDER_SEND", data.get("type", "BUY"),
+                            mgr._audit_ordem("APP_ORDER_SEND", data.get("type", "BUY"),
                                                        data.get("contracts", 1), None, None, None, None, None,
                                                        False, f"EXCECAO_ANTES_DO_SEND | {type(exc).__name__}: {exc}")
 
-                            print(f"❌ [ORDEM DA TELA ABORTADA ANTES DO ENVIO] {type(exc).__name__}: {exc}", flush=True)
+                            print(f"❌ [ORDEM DA TELA ABORTADA ANTES DO ENVIO [{target_sym}]] {type(exc).__name__}: {exc}", flush=True)
 
                 elif action == "ORDER_PARTIAL_CLOSE":
 
-                    ORDER_MANAGER.close_partial_position(
+                    mgr.close_partial_position(
 
                         data.get("ticket"), data.get("partialVolume"), data.get("newSL"),
 
@@ -2940,7 +3047,7 @@ async def ws_handler(websocket):
 
                 elif action == "ORDER_MODIFY_SL":
 
-                    ORDER_MANAGER.modify_stop_loss(
+                    mgr.modify_stop_loss(
 
                         data.get("ticket"), data.get("newSL"),
 
@@ -2950,7 +3057,7 @@ async def ws_handler(websocket):
 
                 elif action == "CLOSE_POSITIONS":
 
-                    ORDER_MANAGER.close_all_positions(
+                    mgr.close_all_positions(
 
                         data.get("type"),
 
@@ -3492,6 +3599,7 @@ async def mt5_stream_loop():
                     eng = get_or_create_engine(s)
                     mgr = get_or_create_order_manager(s)
                     corte = cursor_de_ingestao(ticks, ultimo_msc, LAST_TICK_OCC.get(s))
+                    batch_ticks = []
                     for tick in ticks[corte:]:
                         raw_msc = int(tick['time_msc'])
                         cursor_seguinte(s, raw_msc)
@@ -3504,19 +3612,14 @@ async def mt5_stream_loop():
                         aggressor = "BUY" if (flags & mt5.TICK_FLAG_BUY) else ("SELL" if (flags & mt5.TICK_FLAG_SELL) else "CROSS")
                         ts_msc = raw_msc + MT5_BRT_OFFSET_MSC
 
-                        # Transmissão do TICK independente para a fita de Times & Trades daquele ativo
-                        await broadcast_to_web({
-                            "type": "TICK",
+                        batch_ticks.append({
+                            "id": f"mt5-{s}-{ts_msc}",
                             "symbol": s,
-                            "data": {
-                                "id": f"mt5-{s}-{ts_msc}",
-                                "symbol": s,
-                                "timestamp": ts_msc,
-                                "timeStr": datetime.fromtimestamp(ts_msc / 1000).strftime('%H:%M:%S.%f')[:-3],
-                                "price": price,
-                                "volume": volume,
-                                "aggressor": aggressor
-                            }
+                            "timestamp": ts_msc,
+                            "timeStr": datetime.fromtimestamp(ts_msc / 1000).strftime('%H:%M:%S.%f')[:-3],
+                            "price": price,
+                            "volume": volume,
+                            "aggressor": aggressor
                         })
 
                         # O motor Renko de CADA ativo processa o tick concorrentemente
@@ -3556,6 +3659,20 @@ async def mt5_stream_loop():
                                           flush=True)
                                 elif any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
                                     mgr.execute_pyramid_confluence(signal, new_box)
+
+                    if batch_ticks:
+                        if len(batch_ticks) == 1:
+                            await broadcast_to_web({
+                                "type": "TICK",
+                                "symbol": s,
+                                "data": batch_ticks[0]
+                            })
+                        else:
+                            await broadcast_to_web({
+                                "type": "TICKS_BATCH",
+                                "symbol": s,
+                                "data": batch_ticks
+                            })
 
             await asyncio.sleep(0.01)
         except Exception as exc:
