@@ -1,0 +1,31 @@
+# ── Fim de linha ────────────────────────────────────────────────────────────
+# Este repositório é editado em DUAS máquinas (macOS e Windows) por dois agentes.
+# O Windows cria CRLF; sem esta regra, a próxima edição de um arquivo grande
+# (App.tsx tem ~9.000 linhas) geraria um diff de arquivo inteiro, ilegível.
+# Todo texto é armazenado e entregue em LF.
+* text=auto eol=lf
+
+# Batch/PowerShell: o cmd.exe interpreta rótulos (goto/labels) de forma
+# inconsistente com LF puro, então estes continuam com CRLF no disco.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# ── Binários: nunca processar como texto ────────────────────────────────────
+# Os corpus do replay (dados/*.json.gz) são compactados: diff e normalização de
+# linha não fazem sentido aqui e só custam tempo de checkout.
+*.gz binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text
+*.pdf binary
+
+# ── Diff legível para os formatos do projeto ────────────────────────────────
+# (sem driver customizado: o texto puro já diff-a bem em TS/JSON/MD)
+*.json text
+*.md text
+*.csv text
