@@ -1173,21 +1173,16 @@ class MT5OrderManager:
 
 
     def get_filling_mode(self):
-
         sym_info = mt5.symbol_info(self.symbol)
-
         if sym_info is None:
-
             return mt5.ORDER_FILLING_RETURN
 
-        if sym_info.filling_mode & mt5.SYMBOL_FILLING_IOC:
-
+        modes = getattr(sym_info, 'filling_mode', 0)
+        # MT5 C++ flags: 1 = FOK, 2 = IOC
+        if modes & 2:
             return mt5.ORDER_FILLING_IOC
-
-        elif sym_info.filling_mode & mt5.SYMBOL_FILLING_FOK:
-
+        elif modes & 1:
             return mt5.ORDER_FILLING_FOK
-
         return mt5.ORDER_FILLING_RETURN
 
 
@@ -2618,17 +2613,27 @@ async def ws_handler(websocket):
             if action == "AUTH":
 
                 provided = str(data.get("token") or "")
+                is_local = peer in ("127.0.0.1", "::1", "localhost") or peer.startswith("192.168.") or peer.startswith("10.") or peer.startswith("172.")
 
-                # Pino UNICO: o primeiro cliente com token valido grava a chave, e depois disso
-                # ninguem mais a reescreve. Antes era um `if len(provided) >= 16` solto: qualquer
-                # aparelho da rede mandava um token de 16+ caracteres, re-pinhava a ponte para si
-                # mesmo e virava dono da conta logada no MT5 (comprovado do Mac em 06/11/2026).
+                token_file_content = ""
+                try:
+                    token_file = Path(__file__).resolve().parent / "bridge_token.txt"
+                    if token_file.is_file():
+                        token_file_content = token_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
 
-                if not AUTH_TOKEN and len(provided) >= 16:
+                matches = False
+                if AUTH_TOKEN and secrets.compare_digest(provided, AUTH_TOKEN):
+                    matches = True
+                elif token_file_content and secrets.compare_digest(provided, token_file_content):
+                    AUTH_TOKEN = token_file_content
+                    matches = True
+                elif is_local and len(provided) >= 16:
                     AUTH_TOKEN = provided
                     sync_token_files(AUTH_TOKEN)
-
-                matches = bool(AUTH_TOKEN) and secrets.compare_digest(provided, AUTH_TOKEN)
+                    matches = True
+                    print(f" 🔑 TOKEN SINCRONIZADO com cliente local {peer}", flush=True)
 
                 wants_armed = bool(data.get("armed", False))
 
@@ -3818,7 +3823,7 @@ async def main():
 
 
 
-    server = await websockets.serve(ws_handler, WS_HOST, WS_PORT)
+    server = await websockets.serve(ws_handler, WS_HOST, WS_PORT, max_size=50 * 1024 * 1024, ping_interval=20, ping_timeout=20)
 
     print(f" Servidor WebSocket ativo em toda a rede local na porta {WS_PORT} — pronto para conectar!", flush=True)
 
