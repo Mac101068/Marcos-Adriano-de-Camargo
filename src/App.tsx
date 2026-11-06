@@ -1901,7 +1901,10 @@ export default function App() {
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  const userDisconnectedRef = useRef(false);
+  // Começa em `true`: sem pedido do operador, a ponte NÃO é tocada (regra do Ciclo 12 — o
+  // terminal acorda parado). Só vira `false` quando ele clica em Conectar; a partir daí a
+  // reconexão automática cuida de quedas, e clicar em Desconectar fecha a porta de novo.
+  const userDisconnectedRef = useRef(true);
 
 
 
@@ -4379,7 +4382,17 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
   const toggleMT5Connect = useCallback((manualAction?: 'CONNECT' | 'DISCONNECT') => {
 
-    if (manualAction === 'DISCONNECT' || (manualAction === undefined && (mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING'))) {
+    // Quem ligar esta função direto em onClick (sem arrow) recebe o MouseEvent como primeiro
+
+    // argumento. Um objeto de evento não é pedido de conexão: ele tem que ser tratado como
+
+    // "toggle", senão o botão de desconectar passa reto no ramo de CONNECT e abre outra ponte.
+
+    const pedido = manualAction === 'CONNECT' || manualAction === 'DISCONNECT' ? manualAction : undefined;
+
+
+
+    if (pedido === 'DISCONNECT' || (pedido === undefined && (mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING'))) {
 
       userDisconnectedRef.current = true;
 
@@ -4968,9 +4981,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-  // AUTO-CONEXÃO CONTÍNUA COM O MT5:
+  // RECONEXÃO CONTÍNUA COM O MT5 (só depois de o operador conectar nesta sessão):
 
-  // Toda vez que a ponte MT5 estiver ativa no PC, conecta imediatamente sem exigir clique manual.
+  // Se a ponte cair (Wi-Fi do PC, restart do script), o app religa sozinho em até 3s. No boot
+
+  // frio ele NÃO conecta: foi assim que uma aba abriu armada, recebendo o pregão inteiro da
+
+  // corretora sem ninguém pedir (userDisconnectedRef começa `true`).
 
   useEffect(() => {
 

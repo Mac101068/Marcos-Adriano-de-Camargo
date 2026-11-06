@@ -46,6 +46,11 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
   const [bridgeToken, setBridgeTokenState] = useState<string>(() => getBridgeToken());
   const [tokenVisible, setTokenVisible] = useState<boolean>(false);
   const [copiedToken, setCopiedToken] = useState<boolean>(false);
+  // Endereço da ponte: rascunho até "Aplicar" — gravar a cada tecla re-geraria o script .py
+  // e deixaria um host inválido virar o endereço real da conexão.
+  const [hostDraft, setHostDraft] = useState<string>(config.mt5Host || 'localhost');
+  const [portDraft, setPortDraft] = useState<string>(String(config.mt5Port || 8765));
+  const [addressError, setAddressError] = useState<string | null>(null);
 
   const scriptContent = generatePythonMT5Script(config);
 
@@ -108,6 +113,27 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
       setIsTesting(false);
       setTestResult('ERROR: Falha ao inicializar WebSocket.');
     }
+  };
+
+  // Aplicar o endereço: valida antes de gravar, porque um host torto viraria o alvo real
+  // da conexão (e do script baixado, no caso da porta).
+  const handleApplyAddress = () => {
+    const host = hostDraft.trim();
+    const port = Number(portDraft.trim());
+    if (!host) {
+      setAddressError('Diga o endereço do PC do MT5 — ex.: 192.168.18.154, meu-pc.local ou localhost.');
+      return;
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(host)) {
+      setAddressError('Só o nome ou o IP, sem "ws://", sem barra e sem espaço. Ex.: 192.168.18.154');
+      return;
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setAddressError('A porta precisa ser um número inteiro entre 1 e 65535.');
+      return;
+    }
+    setAddressError(null);
+    onConfigChange?.({ mt5Host: host, mt5Port: port });
   };
 
   return (
@@ -179,6 +205,66 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
             </button>
           </div>
         </div>
+
+        {/* ENDEREÇO DA PONTE — era fixo em localhost:8765, sem campo na tela */}
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_120px_auto] gap-2 items-end pt-1">
+          <div className="space-y-1">
+            <label htmlFor="bridge-host" className="text-[10px] uppercase tracking-wider text-slate-500">
+              Endereço do PC do MT5
+            </label>
+            <input
+              id="bridge-host"
+              type="text"
+              value={hostDraft}
+              onChange={(e) => setHostDraft(e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="192.168.18.154"
+              className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-700 hover:border-slate-600 focus:border-emerald-500/60 focus:outline-none font-mono text-[11px] text-slate-100"
+              title="IP da máquina onde o MT5 e o script .py rodam. Para o celular usar, precisa do IP do PC, não de localhost."
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="bridge-port" className="text-[10px] uppercase tracking-wider text-slate-500">
+              Porta
+            </label>
+            <input
+              id="bridge-port"
+              type="number"
+              min={1}
+              max={65535}
+              value={portDraft}
+              onChange={(e) => setPortDraft(e.target.value)}
+              className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-700 hover:border-slate-600 focus:border-emerald-500/60 focus:outline-none font-mono text-[11px] text-slate-100"
+              title="Porta do servidor WebSocket do script .py"
+            />
+          </div>
+          <button
+            onClick={handleApplyAddress}
+            className="px-3 py-1.5 text-xs font-semibold rounded bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer whitespace-nowrap"
+            title="Gravar o endereço (host vai só para o config; a porta também muda o script)"
+          >
+            Aplicar
+          </button>
+        </div>
+
+        {addressError && (
+          <p className="text-[11px] text-rose-300 leading-relaxed flex items-start gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0" />
+            {addressError}
+          </p>
+        )}
+
+        <p className="text-[11px] text-slate-400 leading-relaxed">
+          Vale para a próxima conexão: se o MT5 já estiver conectado, desconecte e conecte de novo
+          para o endereço novo entrar. <b>Para abrir o terminal pelo celular</b>, ponha aqui o IP do
+          PC na rede (nunca <code className="text-slate-300 font-mono">localhost</code>, que aponta
+          para o próprio celular) e libere a porta no firewall do Windows (o comando está escrito no
+          passo de rede deste Guia) — o script já escuta em
+          <code className="text-slate-300 font-mono">0.0.0.0</code>. Mudou a
+          <b> porta</b>? Baixe o script de novo, porque o número vai gravado dentro dele; o
+          <b> endereço</b> não afeta o arquivo.
+        </p>
 
         {testResult && (
           <div

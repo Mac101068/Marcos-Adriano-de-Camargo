@@ -536,7 +536,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
         {/* Botão de Conexão MT5 Live Bridge */}
         <button
-          onClick={onToggleMT5Connect}
+          onClick={() => onToggleMT5Connect()}
           className={`hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
             mt5State.status === 'CONNECTED'
               ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
