@@ -599,18 +599,52 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     }
   }, [spacingMode]);
 
+  const isBoxSane = useCallback(
+    (b: RenkoBox) =>
+      Number.isFinite(b.close) &&
+      b.close > 0 &&
+      Math.abs(b.close - asset.basePrice) / asset.basePrice < 0.4 &&
+      Number.isFinite(b.open) &&
+      b.open > 0 &&
+      Math.abs(b.open - asset.basePrice) / asset.basePrice < 0.4 &&
+      (!Number.isFinite(b.high) || Math.abs(b.high - asset.basePrice) / asset.basePrice < 0.4) &&
+      (!Number.isFinite(b.low) || Math.abs(b.low - asset.basePrice) / asset.basePrice < 0.4),
+    [asset.basePrice]
+  );
+
+  const isPriceSane = useCallback(
+    (p?: number) =>
+      Number.isFinite(p) && (p || 0) > 0 && Math.abs((p || 0) - asset.basePrice) / asset.basePrice < 0.4,
+    [asset.basePrice]
+  );
+
   // Lista unificada incluindo o box em formação se houver
   const allBoxes = useMemo(() => {
-    if (!currentBox || currentBox.open === undefined || currentBox.close === undefined) {
-      return boxes;
+    // 1. Filtra qualquer box histórico ou contaminado por outro ativo
+    const validBoxes = boxes.filter(isBoxSane);
+
+    // 2. Se o preço atual ou o box em formação não forem compatíveis com o ativo em tela, ignora o formingBox
+    const effectivePrice = isPriceSane(currentPrice)
+      ? currentPrice
+      : validBoxes.length > 0
+      ? validBoxes[validBoxes.length - 1].close
+      : asset.basePrice;
+
+    if (
+      !currentBox ||
+      currentBox.open === undefined ||
+      !isPriceSane(currentBox.open)
+    ) {
+      return validBoxes;
     }
+
     const formingBox: RenkoBox = {
-      index: boxes.length,
-      direction: currentPrice >= currentBox.open ? 'UP' : 'DOWN',
+      index: validBoxes.length,
+      direction: effectivePrice >= currentBox.open ? 'UP' : 'DOWN',
       open: currentBox.open,
-      close: currentPrice,
-      high: Math.max(currentBox.high || currentPrice, currentPrice),
-      low: Math.min(currentBox.low || currentPrice, currentPrice),
+      close: effectivePrice,
+      high: isPriceSane(currentBox.high) ? Math.max(currentBox.high!, effectivePrice) : effectivePrice,
+      low: isPriceSane(currentBox.low) ? Math.min(currentBox.low!, effectivePrice) : effectivePrice,
       timeStart: currentBox.timeStart || Date.now(),
       timeEnd: Date.now(),
       ticksCount: currentBox.ticksCount || 0,
@@ -621,8 +655,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       cvdAtClose: currentBox.cvdAtClose || 0,
       isConvergence: false,
     };
-    return [...boxes, formingBox];
-  }, [boxes, currentBox, currentPrice]);
+    return [...validBoxes, formingBox];
+  }, [boxes, currentBox, currentPrice, isBoxSane, isPriceSane, asset.basePrice]);
 
   // Box ativo exibido no quadro fixo
   const activeBox = hoveredBox || (allBoxes.length > 0 ? allBoxes[allBoxes.length - 1] : null);
@@ -1050,7 +1084,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
     if (!isFinite(boxMin) || !isFinite(boxMax) || boxMin >= boxMax) {
       // eixo Y sem nenhum box na tela: a régua do ativo (preço real fresco ou basePrice do registro)
-      const fallbackCenter = currentPrice > 0 ? currentPrice : referencePrice(asset);
+      const isCurrSane = isPriceSane(currentPrice);
+      const fallbackCenter = isCurrSane ? currentPrice : referencePrice(asset);
       const span = asset?.id === 'WDO' ? 10 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 500 : 100);
       boxMin = fallbackCenter - span;
       boxMax = fallbackCenter + span;
@@ -1059,19 +1094,20 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     let minPrice = boxMin;
     let maxPrice = boxMax;
 
-    // Apenas expande a escala para ordens abertas se estiverem a até a distância máxima permitida
+    // Apenas expande a escala para ordens abertas se estiverem a até a distância máxima permitida E compatíveis com o ativo
     const maxAllowedOrderDist = asset?.id === 'WDO' ? 25 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 1500 : 350);
     openOrders.forEach((o) => {
       const isPending = o.status === 'PENDING_LIMIT';
       const effPrice = isPending && o.limitPrice ? o.limitPrice : o.entryPrice;
-      if (effPrice > 0 && Math.abs(effPrice - currentPrice) <= maxAllowedOrderDist) {
+      if (!isPriceSane(effPrice)) return;
+      if (Math.abs(effPrice - currentPrice) <= maxAllowedOrderDist) {
         minPrice = Math.min(minPrice, effPrice);
         maxPrice = Math.max(maxPrice, effPrice);
       }
-      if (o.stopLoss > 0 && Math.abs(o.stopLoss - currentPrice) <= maxAllowedOrderDist) {
+      if (isPriceSane(o.stopLoss) && Math.abs(o.stopLoss - currentPrice) <= maxAllowedOrderDist) {
         minPrice = Math.min(minPrice, o.stopLoss);
       }
-      if (o.takeProfit > 0 && Math.abs(o.takeProfit - currentPrice) <= maxAllowedOrderDist) {
+      if (isPriceSane(o.takeProfit) && Math.abs(o.takeProfit - currentPrice) <= maxAllowedOrderDist) {
         maxPrice = Math.max(maxPrice, o.takeProfit);
       }
       if (enablePartialExit && o.role !== 'MAIN' && o.role !== 'PYRAMID' && !o.partialExecuted && o.contracts > 1 && !isPending && effPrice > 0) {
@@ -1647,6 +1683,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     let lastSellSignalX = -999;
 
     displayedBoxes.forEach((b, i) => {
+      if (!isBoxSane(b)) return;
       const centerX = xs[i];
       if (centerX < -30 || centerX > plotRight + 30) return;
 
@@ -2261,7 +2298,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // =======================================================================
     // LINHA DO PREÇO ATUAL E ORDENS ABERTAS (MTM)
     // =======================================================================
-    const currentPriceY = priceToY(currentPrice);
+    const isCurrPriceSane = Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - asset.basePrice) / asset.basePrice < 0.4;
+    const effCurrentPrice = isCurrPriceSane ? currentPrice : referencePrice(asset);
+    const currentPriceY = priceToY(effCurrentPrice);
     if (currentPriceY >= 0 && currentPriceY <= pricePaneHeight) {
       ctx.strokeStyle = '#38bdf8';
       ctx.lineWidth = 1;
@@ -2280,7 +2319,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.font = isMobile ? 'bold 8.5px "JetBrains Mono", monospace' : 'bold 11px "JetBrains Mono", monospace';
       ctx.textAlign = 'center';
       ctx.fillText(
-        currentPrice.toLocaleString('pt-BR'),
+        formatPrice(effCurrentPrice, asset),
         chartWidth + rightAxisWidth / 2,
         currentPriceY + 3.5
       );
@@ -3488,7 +3527,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         {/* ========================================================================= */}
         {onManualOrder && (
           <BoletaTicket
-            currentPrice={currentPrice}
+            currentPrice={isPriceSane(currentPrice) ? currentPrice : (allBoxes.length > 0 ? allBoxes[allBoxes.length - 1].close : asset.basePrice)}
             contracts={contracts}
             stopLossPoints={stopLossPoints}
             takeProfitPoints={takeProfitPoints}

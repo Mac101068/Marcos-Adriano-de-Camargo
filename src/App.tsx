@@ -2040,6 +2040,10 @@ export default function App() {
   });
 
 const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
+  const activeAssetIdRef = useRef<AssetId>(asset.id);
+  useEffect(() => {
+    activeAssetIdRef.current = asset.id;
+  }, [asset.id]);
 
   const simulatorRef = useRef<B3MarketSimulator>(new B3MarketSimulator(referencePrice(asset), asset));
 
@@ -2449,8 +2453,18 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
   const handleIncomingTick = useCallback(
-
     (tick: Tick) => {
+      const currentActiveId = activeAssetIdRef.current;
+      const currentAssetSpec = ASSETS[currentActiveId] || asset;
+      // Guarda de sanidade: rejeita ticks de ativos diferentes para não contaminar o motor da tela
+      if (
+        !tick ||
+        !Number.isFinite(tick.price) ||
+        tick.price <= 0 ||
+        Math.abs(tick.price - currentAssetSpec.basePrice) / currentAssetSpec.basePrice >= 0.4
+      ) {
+        return;
+      }
 
       // Tick vindo do MT5 (corretora): marca o coletor como "dia real." Assim um replay
 
@@ -4803,6 +4817,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               if (!rawTick || !(rawTick.price > 0)) continue;
               const tickSym = String(payload.symbol || (rawTick as any).symbol || '').toUpperCase();
               const tickAssetId = getAssetIdForSymbol(tickSym);
+              const targetSpec = ASSETS[tickAssetId] || (tickAssetId === 'BTC' ? ASSETS.BTCBR : undefined);
+              if (!targetSpec) continue;
+              // Rejeita qualquer tick com preço incompatível com este ativo (ex: tick de WIN caindo em WDO)
+              if (Math.abs(rawTick.price - targetSpec.basePrice) / targetSpec.basePrice >= 0.4) {
+                continue;
+              }
               const targetState = assetStateRef.current[tickAssetId] || (tickAssetId === 'BTC' ? assetStateRef.current.BTCBR : tickAssetId === 'BTCBR' ? assetStateRef.current.BTC : undefined);
 
               // O timeStr da ponte vem do relógio do servidor MT5; a fita deve bater com o gráfico
@@ -4810,7 +4830,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 rawTick.timeStr = formatTickTimeStr(Number(rawTick.timestamp));
               }
 
-              const isCurrent = tickAssetId === asset.id || (asset.id === 'BTC' && tickAssetId === 'BTCBR') || (asset.id === 'BTCBR' && tickAssetId === 'BTC');
+              const currentActiveId = activeAssetIdRef.current;
+              const isCurrent = tickAssetId === currentActiveId || (currentActiveId === 'BTC' && tickAssetId === 'BTCBR') || (currentActiveId === 'BTCBR' && tickAssetId === 'BTC');
 
               if (isCurrent) {
                 // Sincroniza referências e histórico do ativo ativo na tela
@@ -4858,9 +4879,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const bfSym = String(payload.symbol || '').toUpperCase();
             const bfAssetId = getAssetIdForSymbol(bfSym);
             const targetState = assetStateRef.current[bfAssetId] || (bfAssetId === 'BTC' ? assetStateRef.current.BTCBR : bfAssetId === 'BTCBR' ? assetStateRef.current.BTC : undefined);
-            const bfTicks: Tick[] = (payload.data?.ticks || []).map((t: Tick) =>
-              t && Number.isFinite(Number(t.timestamp)) ? { ...t, timeStr: formatTickTimeStr(Number(t.timestamp)) } : t,
-            );
+            const bfAssetSpec = ASSETS[bfAssetId] || (bfAssetId === 'BTC' ? ASSETS.BTCBR : undefined) || asset;
+            const bfTicks: Tick[] = (payload.data?.ticks || [])
+              .filter((t: Tick) => t && Number.isFinite(t.price) && t.price > 0 && Math.abs(t.price - bfAssetSpec.basePrice) / bfAssetSpec.basePrice < 0.4)
+              .map((t: Tick) =>
+                t && Number.isFinite(Number(t.timestamp)) ? { ...t, timeStr: formatTickTimeStr(Number(t.timestamp)) } : t,
+              );
 
             if (targetState && Array.isArray(bfTicks) && bfTicks.length > 0) {
               const bfAssetSpec = ASSETS[bfAssetId] || asset;
@@ -4898,7 +4922,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               targetState.timeCurrentBox = targetState.timeEngine.getCurrentBox();
               targetState.currentPrice = bfTicks[bfTicks.length - 1].price;
 
-              const isCurrent = bfAssetId === asset.id || (asset.id === 'BTC' && bfAssetId === 'BTCBR') || (asset.id === 'BTCBR' && bfAssetId === 'BTC');
+              const currentActiveId = activeAssetIdRef.current;
+              const isCurrent = bfAssetId === currentActiveId || (currentActiveId === 'BTC' && bfAssetId === 'BTCBR') || (currentActiveId === 'BTCBR' && bfAssetId === 'BTC');
               if (isCurrent) {
                 engineRef.current = targetState.engine;
                 rangeEngineRef.current = targetState.rangeEngine;
@@ -7605,6 +7630,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       lastSavedTimestamp: Date.now(),
     };
 
+    activeAssetIdRef.current = id;
     EaConfigService.saveConfig(updated);
     setConfig(updated);
 
@@ -7614,15 +7640,36 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     const isPriceSane = (p?: number) =>
       Number.isFinite(p) && (p || 0) > 0 && Math.abs((p || 0) - next.basePrice) / next.basePrice < 0.4;
-
-    const hasSaneBoxes = Boolean(targetState && targetState.boxes.length > 0 && isPriceSane(targetState.boxes[0].open));
+    const isBoxSane = (b: RenkoBox) =>
+      isPriceSane(b.close) && isPriceSane(b.open) && (!b.high || isPriceSane(b.high)) && (!b.low || isPriceSane(b.low));
 
     if (targetState) {
+      targetState.boxes = targetState.boxes.filter(isBoxSane);
+      targetState.allTicks = targetState.allTicks.filter((t) => isPriceSane(t.price));
+      targetState.ticks = targetState.ticks.filter((t) => isPriceSane(t.price));
+      if (targetState.currentBox && !isPriceSane(targetState.currentBox.open)) {
+        targetState.currentBox = null;
+      }
+      if (!isPriceSane(targetState.currentPrice)) {
+        targetState.currentPrice = targetState.boxes.length > 0
+          ? targetState.boxes[targetState.boxes.length - 1].close
+          : (targetState.allTicks.length > 0 ? targetState.allTicks[targetState.allTicks.length - 1].price : referencePrice(next));
+      }
+      targetState.engine.setAsset(next);
+      targetState.engine.setBoxPoints(assetParams.boxPoints);
       engineRef.current = targetState.engine;
       rangeEngineRef.current = targetState.rangeEngine;
       timeEngineRef.current = targetState.timeEngine;
       allTicksRef.current = targetState.allTicks;
     }
+
+    pendingUiUpdateRef.current.latestPrice = targetState ? targetState.currentPrice : referencePrice(next);
+    pendingUiUpdateRef.current.latestTick = null;
+    pendingUiUpdateRef.current.boxesChanged = false;
+    pendingUiUpdateRef.current.rangeBoxesChanged = false;
+    pendingUiUpdateRef.current.timeBoxesChanged = false;
+
+    const hasSaneBoxes = Boolean(targetState && targetState.boxes.length > 0 && isPriceSane(targetState.boxes[0].open));
 
     if (hasSaneBoxes && targetState) {
       setBoxes([...targetState.boxes]);
@@ -8886,15 +8933,27 @@ ${
                   isMt5Connected={mt5State.status === 'CONNECTED'}
                   assetStates={{
                     WIN: {
-                      currentPrice: asset.id === 'WIN' ? currentPrice : (assetStateRef.current.WIN?.currentPrice || ASSETS.WIN.basePrice),
+                      currentPrice: (asset.id === 'WIN' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4)
+                        ? currentPrice
+                        : (Number.isFinite(assetStateRef.current.WIN?.currentPrice) && assetStateRef.current.WIN.currentPrice > 0 && Math.abs(assetStateRef.current.WIN.currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4
+                          ? assetStateRef.current.WIN.currentPrice
+                          : ASSETS.WIN.basePrice),
                       openOrdersCount: asset.id === 'WIN' ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.WIN) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
                     },
                     WDO: {
-                      currentPrice: asset.id === 'WDO' ? currentPrice : (assetStateRef.current.WDO?.currentPrice || ASSETS.WDO.basePrice),
+                      currentPrice: (asset.id === 'WDO' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4)
+                        ? currentPrice
+                        : (Number.isFinite(assetStateRef.current.WDO?.currentPrice) && assetStateRef.current.WDO.currentPrice > 0 && Math.abs(assetStateRef.current.WDO.currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4
+                          ? assetStateRef.current.WDO.currentPrice
+                          : ASSETS.WDO.basePrice),
                       openOrdersCount: asset.id === 'WDO' ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.WDO) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
                     },
                     BTCBR: {
-                      currentPrice: (asset.id === 'BTCBR' || asset.id === 'BTC') ? currentPrice : (assetStateRef.current.BTCBR?.currentPrice || assetStateRef.current.BTC?.currentPrice || ASSETS.BTCBR.basePrice),
+                      currentPrice: ((asset.id === 'BTCBR' || asset.id === 'BTC') && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4)
+                        ? currentPrice
+                        : (Number.isFinite(assetStateRef.current.BTCBR?.currentPrice) && assetStateRef.current.BTCBR.currentPrice > 0 && Math.abs(assetStateRef.current.BTCBR.currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4
+                          ? assetStateRef.current.BTCBR.currentPrice
+                          : ASSETS.BTCBR.basePrice),
                       openOrdersCount: (asset.id === 'BTCBR' || asset.id === 'BTC') ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.BTCBR) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
                     },
                   }}
