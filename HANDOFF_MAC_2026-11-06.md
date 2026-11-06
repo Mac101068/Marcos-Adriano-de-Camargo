@@ -178,3 +178,55 @@ por você. Não toquei em `App.tsx`. Também não re-implementei a faixa do funi
 Um efeito colateral que preciso registrar: o SEL-A mudou o funil padrão (P70 · piso 1,6× · div 50).
 Minhas validações de replay/trava foram medidas sob **P60 · 1,3× · 0,4**. Os números não são
 comparáveis entre si, e nada aqui deve ser citado como "antes/depois" do seu ciclo sem rodar de novo.
+
+---
+
+## ADENDUM (06/11, ~12:47) — a ponte foi reiniciada com a trava, e o item 4 do questionário saiu do log
+
+O Marcos respondeu o item 4 ("demo ou real?") e autorizou o reinício. Fiz os dois na mesma rodada.
+
+**As cinco respostas do seu bloco, medidas depois do reinício:**
+
+```
+1) IPv4 deste PC: 192.168.18.154 (Ethernet 2). CUIDADO: existe uma segunda IPv4, 54.232.189.113,
+   que é do adaptador VPN "Topaz Loopback" e não é a LAN. Digite a primeira.
+2) netstat -ano | findstr :8765:  TCP  0.0.0.0:8765  0.0.0.0:0  LISTENING  2704   (dono único)
+3) "janela do script": não há janela — a ponte roda oculta com stdout/stderr em arquivo. Seguem
+   as linhas do log (ponte_mt5_live.log), que é o equivalente:
+     MT5 conectado: conta 50534540 (XPMT5-DEMO) — ativo WINZ26
+     Servidor WebSocket ativo em toda a rede local na porta 8765 — pronto para conectar!
+     🛑 TRAVA DE EXECUÇÃO ATIVA (ORDERS_BLOCKED): a ponte serve ticks, histórico, sinais e diário,
+        mas NÃO envia nenhuma ordem de entrada -- modo replay/validação. […]
+     🧾 EXTRATO MT5 GRAVADO (ao_ligar): 0 negócio(s) → deals_20261106.csv
+     [RENKO 10R] Inicializado em 170645.0 pts / 5516.5 pts / 418440.0 pts (WIN/WDO/BIT)
+     ⚡ SINAL GERADO [WINZ26]: BUY (Pirâmide Confluência Alta: Bloco Verde #0 (Δ 276 vs limiar 150 | limiar = P60 do pregão))
+     🛑 ORDEM BLOQUEADA POR TRAVA [ORDERS_BLOCKED] [WINZ26]: sinal BUY […] calculado e transmitido,
+        nenhuma ordem enviada
+4) Login: 50534540 em XPMT5-DEMO. Não foi só a palavra do Marcos — o próprio terminal disse
+   "DEMO" na linha 1 do log.
+5) ORDERS_BLOCKED estava="1"? sim (e é isso que as duas linhas 🛑 acima provam).
+```
+
+**A prova que você pediu no "Pronto quando" da Tarefa 4 veio de brinde, sem que eu precisasse ligar
+robô nenhum:** o sinal do WINZ26 foi calculado, transmitido para a tela e **recusado por causa da
+trava**, com a trava nomeada na mensagem (`ORDERS_BLOCKED`), não por erro de código. Foi o robô desta
+máquina (`bot_mt5_ciclo15.py`) decidindo sozinho no boot — ou seja, a camada de ambiente está mesmo
+por cima do `armed`, como você desenhou.
+
+**Sobre o furo do token, com o limite dito na mão.** O código agora carregado em memória tem o pino
+único (`if not AUTH_TOKEN and len(provided) >= 16: AUTH_TOKEN = provided`), então o
+"qualquer um re-pinava e virava dono" acabou. Mas a correção que eu podia fazer **sem o seu token**
+é trust-on-first-use: quem chegar primeiro com um token de 16+ caracteres grava a chave. Consequência
+operacional — **conecte pelo app do Mac antes de qualquer outro aparelho**, senão o primeiro que
+chegar define a regra. O conserto definitivo é o seu: o `.py` gerado já nasce com
+`AUTH_TOKEN = "${bridgeToken}"` e `REQUIRE_AUTH = len(AUTH_TOKEN) > 0`, sem pino nenhum. Confirmo que
+o template está correto nesse ponto; o defeito era só no arquivo que vive neste PC.
+
+**Estado atual da ponte:** `bot_mt5_ciclo15.py`, PID 2704 (venv), trava de ambiente ligada, robô da
+tela pode ser ligado à vontade que nenhuma entrada sai. `CLOSE_POSITIONS` continua liberado por
+decisão de design — encerrar posição reduz risco. Continua **sem** o `SYNC_EA_CONFIG` /
+`LIST_LOCAL_PREGOES` (Achado C), então ao conectar espere recusa nessas duas rotas, não silêncio.
+
+**Tarefa 3:** o único clique pendente é o seu pedido ao Marcos (repo privado **vazio**
+`robofluxo-b3-backend`, sem README/.gitignore/licença). Sem ele, nada do que escrevi acima é
+reprodutível daí — e eu sei que isso é exatamente o ponto do seu §Tarefa 3.
