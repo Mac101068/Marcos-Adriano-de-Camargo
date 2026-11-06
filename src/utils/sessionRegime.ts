@@ -36,6 +36,22 @@ export interface RegimeHourStats {
   negDeltaMean: number; // média das magnitudes negativas
 }
 
+/**
+ * retrato do limiar auto-calibrado (Ciclo 17 — regra "a tela nunca pode mentir sobre por que
+ * não operou"): além do número final, diz DE ONDE ele veio — o percentil da janela, o piso
+ * relativo (multiplicador da média do dia) e qual dos dois mandou no corte. É o que a faixa
+ * do funil exibe para avaliação, sem recalcular nada em duplicidade.
+ */
+export interface SelfCalibratedBreakdown {
+  limit: number; // o corte vigente (mesmo número que getSelfCalibratedLimit devolve)
+  source: 'percentil' | 'piso' | 'fisico'; // qual regra governou o corte
+  percentileValue: number | null; // P da janela rolante (null = sem estatística)
+  floorValue: number | null; // piso relativo (média do dia × multiplicador)
+  dayMean: number | null; // média de agressão do lado no dia inteiro
+  dayCount: number; // amostras do lado no dia
+  samples: number; // amostras do lado na janela (para o percentil)
+}
+
 interface BoxRecord {
   t: number;
   hour: number;
@@ -206,20 +222,58 @@ export class SessionRegimeMeter {
    * — aquecimento conservador, nunca inventa sinal.
    */
   getSelfCalibratedLimit(side: 'BUY' | 'SELL', percentile: number, floorMultiple: number, baseThreshold: number): number {
-    if (this.records.length < 10) return baseThreshold;
+    return this.getSelfCalibratedBreakdown(side, percentile, floorMultiple, baseThreshold).limit;
+  }
+
+  /**
+   * RETRATO do limiar auto-calibrado — a mesma matemática de `getSelfCalibratedLimit`, mas
+   * devolvendo também as peças (percentil da janela, piso relativo, média do dia) e qual delas
+   * governou o corte. É a fonte honesta da faixa do funil: o número exibido é LITERALMENTE o
+   * número que o avaliador de convergência usa, porque `getSelfCalibratedLimit` só delega aqui.
+   */
+  getSelfCalibratedBreakdown(
+    side: 'BUY' | 'SELL',
+    percentile: number,
+    floorMultiple: number,
+    baseThreshold: number
+  ): SelfCalibratedBreakdown {
     const win = this.records.slice(-Math.max(this.lookbackBoxes, 20));
     const mags =
       side === 'BUY'
         ? win.map((r) => r.delta).filter((d) => d > 0)
         : win.map((r) => -r.delta).filter((d) => d > 0);
-    if (mags.length < 5) return baseThreshold;
+    const dayCount = side === 'BUY' ? this.dayPosDeltaCount : this.dayNegDeltaCount;
+    const daySum = side === 'BUY' ? this.dayPosDeltaSum : this.dayNegDeltaSum;
+    const dayMean = dayCount >= 5 ? daySum / dayCount : null;
+    const floorMult = clamp(floorMultiple, 1, 5);
+    const floorValue = dayMean != null ? dayMean * floorMult : null;
+
+    // Sem estatística (menos de 10 boxes fechados ou 5 amostras do lado): cai no físico.
+    if (this.records.length < 10 || mags.length < 5) {
+      return {
+        limit: baseThreshold,
+        source: 'fisico',
+        percentileValue: null,
+        floorValue,
+        dayMean,
+        dayCount,
+        samples: mags.length,
+      };
+    }
+
     const sorted = [...mags].sort((a, b) => a - b);
     const idx = Math.min(sorted.length - 1, Math.floor(clamp(percentile, 0, 0.95) * sorted.length));
     const p = sorted[idx];
-    const dayCount = side === 'BUY' ? this.dayPosDeltaCount : this.dayNegDeltaCount;
-    const daySum = side === 'BUY' ? this.dayPosDeltaSum : this.dayNegDeltaSum;
-    const dayFloor = dayCount >= 5 ? (daySum / dayCount) * clamp(floorMultiple, 1, 5) : 0;
-    return Math.max(1, Math.round(Math.max(p, dayFloor)));
+    const useFloor = floorValue != null && floorValue > p;
+    return {
+      limit: Math.max(1, Math.round(useFloor ? floorValue! : p)),
+      source: useFloor ? 'piso' : 'percentil',
+      percentileValue: p,
+      floorValue,
+      dayMean,
+      dayCount,
+      samples: mags.length,
+    };
   }
 
   isWarmedUp(): boolean {
