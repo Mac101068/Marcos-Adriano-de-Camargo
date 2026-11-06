@@ -144,6 +144,7 @@ import { B3MarketSimulator, generateHistoricalTicks, randomReplaySeed } from './
 import { Header } from './components/Header';
 
 import { RenkoFlowChart } from './components/RenkoFlowChart';
+import { AssetChartTabs } from './components/AssetChartTabs';
 
 import { MiniSelect } from './components/MiniSelect';
 
@@ -751,6 +752,23 @@ export default function App() {
 
   const allTicksRef = useRef<Tick[]>([]);
 
+  // Buffer de atualização visual via requestAnimationFrame (desacopla ingestão de ticks da renderização 60 FPS)
+  const pendingUiUpdateRef = useRef<{
+    scheduled: boolean;
+    latestPrice: number;
+    latestTick: Tick | null;
+    boxesChanged: boolean;
+    rangeBoxesChanged: boolean;
+    timeBoxesChanged: boolean;
+  }>({
+    scheduled: false,
+    latestPrice: 0,
+    latestTick: null,
+    boxesChanged: false,
+    rangeBoxesChanged: false,
+    timeBoxesChanged: false,
+  });
+
 
 
   // Janela flutuante "Dados" (controles do painel Renko) — visível por padrão, persistida
@@ -797,20 +815,13 @@ export default function App() {
 
   };
 
-  // Janela flutuante "Box Renko" (card do box ativo) — visível por padrão, persistida
-
+  // Janela flutuante "Box Renko" (card do box ativo) — fechada por padrão para não poluir o gráfico
   const [boxWindowOpen, setBoxWindowOpen] = useState<boolean>(() => {
-
     try {
-
-      return localStorage.getItem('fluxo_renko_box_window_v1') !== '0';
-
+      return localStorage.getItem('fluxo_renko_box_window_v1') === '1';
     } catch {
-
-      return true;
-
+      return false;
     }
-
   });
 
   useEffect(() => {
@@ -2477,112 +2488,88 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       // corretora (quem faz isso lá é a ponte Python, que obedece a mesma hora do CLOSE_ALL_TIME gerado).
 
       const closeLockLabel = sessionCloseLockLabel(config.tradingCloseAllTime);
-
       const sessionLock = mt5State.status !== 'CONNECTED' && isSessionCloseLock(tick.timestamp, config.tradingCloseAllTime);
-
       const engine = engineRef.current;
 
-      setCurrentPrice(tick.price);
-
-
-
-      // Adiciona na fita de Times & Trades
-
-      setTicks((prev) => [tick, ...prev.slice(0, 99)]);
-
-
-
       // Processa no motor de Renko (escala do box da config) e Fluxo
-
       const renkoRes = engine.processTick(tick, config);
 
-      setCvd(engine.getCvd());
-
-      setCurrentBox(engine.getCurrentBox());
-
-
-
       // Alimenta as séries experimentais (Range e Tempo) com o mesmo fluxo de ticks
-
       if (allTicksRef.current.length < 50000) allTicksRef.current.push(tick);
-
       const rangeEng = rangeEngineRef.current;
-
       const timeEng = timeEngineRef.current;
-
       // A janela do medidor segue a config (Range/Tempo; Renko sincroniza dentro do próprio motor)
-
       rangeEng.getRegimeMeter().setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
-
       timeEng.getRegimeMeter().setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
-
       const rangeRes = rangeEng.processTick(tick);
-
-      setRangeCurrentBox(rangeEng.getCurrentBox());
-
-      if (rangeRes.newBarClosed) setRangeBoxes([...rangeEng.getBoxes()]);
-
       const timeRes = timeEng.processTick(tick);
 
-      setTimeCurrentBox(timeEng.getCurrentBox());
+      // =========================================================================
+      // BUFFER DE ATUALIZAÇÃO VISUAL (60 FPS via requestAnimationFrame)
+      // Desacopla a ingestão de alta frequência dos re-renders do React
+      // =========================================================================
+      const buf = pendingUiUpdateRef.current;
+      buf.latestPrice = tick.price;
+      buf.latestTick = tick;
+      if (renkoRes.newBoxClosed) buf.boxesChanged = true;
+      if (rangeRes.newBarClosed) buf.rangeBoxesChanged = true;
+      if (timeRes.newBarClosed) buf.timeBoxesChanged = true;
 
-      if (timeRes.newBarClosed) setTimeBoxes([...timeEng.getBoxes()]);
-
-
+      if (!buf.scheduled) {
+        buf.scheduled = true;
+        requestAnimationFrame(() => {
+          buf.scheduled = false;
+          if (buf.latestPrice > 0) setCurrentPrice(buf.latestPrice);
+          if (buf.latestTick) {
+            setTicks((prev) => [buf.latestTick!, ...prev.slice(0, 99)]);
+          }
+          const eng = engineRef.current;
+          setCvd(eng.getCvd());
+          setCurrentBox(eng.getCurrentBox());
+          if (buf.boxesChanged) {
+            setBoxes([...eng.getBoxes()]);
+            setSessionGaps([...eng.getSessionGaps()]);
+            buf.boxesChanged = false;
+          }
+          const rEng = rangeEngineRef.current;
+          setRangeCurrentBox(rEng.getCurrentBox());
+          if (buf.rangeBoxesChanged) {
+            setRangeBoxes([...rEng.getBoxes()]);
+            buf.rangeBoxesChanged = false;
+          }
+          const tEng = timeEngineRef.current;
+          setTimeCurrentBox(tEng.getCurrentBox());
+          if (buf.timeBoxesChanged) {
+            setTimeBoxes([...tEng.getBoxes()]);
+            buf.timeBoxesChanged = false;
+          }
+        });
+      }
 
       // =========================================================================
-
       // COLETOR INTERNO: toda barra fechada (das 3 séries, não importa a ativa)
-
       // alimenta os robôs sombra com a MESMA config do EA.
-
       // =========================================================================
-
       seriesCollectorService.markToMarket(tick.price, tick.timestamp);
-
       const tfShortLabel =
-
         timeframeSec < 60
-
           ? `${timeframeSec}s`
-
           : timeframeSec < 3600
-
           ? `${Math.round(timeframeSec / 60)}min`
-
           : `${Math.round(timeframeSec / 3600)}h`;
-
       if (renkoRes.newBoxClosed) {
-
-        setBoxes([...engine.getBoxes()]);
-
-        // Virada de pregão também fecha box: os gaps saem junto com a série nova.
-        setSessionGaps([...engine.getSessionGaps()]);
-
         // Preenchimento Renko: um tick pode fechar vários boxes — o coletor recebe TODOS,
-
         // cada um com o histórico anterior ao próprio box.
-
         for (const box of renkoRes.closedBoxes) {
-
           seriesCollectorService.ingest(
-
             'renko',
-
             box,
-
             engine.getBoxes().slice(0, box.index),
-
             config,
-
             renkoScaleLabel(config.boxPoints, asset),
-
             engine.getRegimeMeter()
-
           );
-
         }
-
       }
 
       let rangeConv: ConvergenceResult | null = null;
@@ -3001,6 +2988,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                     action: 'ORDER_SEND',
 
+                    symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+
                     type: signalType,
 
                     isLimit: useLimitEntry,
@@ -3140,6 +3129,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   sendEntryToBridgeOnce(tick.timestamp, {
 
                     action: 'ORDER_SEND',
+
+                    symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
 
                     type: signalType,
 
@@ -3282,6 +3273,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 sendEntryToBridgeOnce(tick.timestamp, {
 
                   action: 'ORDER_SEND',
+
+                  symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
 
                   type: signalType,
 
@@ -4841,46 +4834,55 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             });
 
-          } else if (payload.type === 'TICK') {
-            const tickSym = String(payload.symbol || payload.data?.symbol || '').toUpperCase();
-            const tickAssetId = getAssetIdForSymbol(tickSym);
-            const targetState = assetStateRef.current[tickAssetId];
-            const rawTick: Tick = payload.data;
+          } else if (payload.type === 'TICK' || payload.type === 'TICKS_BATCH') {
+            const rawTicks: Tick[] = payload.type === 'TICKS_BATCH'
+              ? (Array.isArray(payload.data) ? payload.data : payload.data?.ticks || [])
+              : (payload.data ? [payload.data] : []);
 
-            // O timeStr da ponte vem do relógio do servidor MT5 (UTC?); a fita deve bater com o
-            // gráfico (fuso do navegador) — então reescrevemos a partir do timestamp local.
-            if (rawTick && Number.isFinite(Number(rawTick.timestamp))) rawTick.timeStr = formatTickTimeStr(Number(rawTick.timestamp));
+            for (const rawTick of rawTicks) {
+              if (!rawTick || !(rawTick.price > 0)) continue;
+              const tickSym = String(payload.symbol || (rawTick as any).symbol || '').toUpperCase();
+              const tickAssetId = getAssetIdForSymbol(tickSym);
+              const targetState = assetStateRef.current[tickAssetId];
 
-            if (targetState && rawTick && rawTick.price > 0) {
-              // 1. Alimenta o Times & Trades estrito daquele ativo
-              targetState.ticks = [rawTick, ...targetState.ticks.slice(0, 99)];
-              targetState.currentPrice = rawTick.price;
-              if (targetState.allTicks.length < 50000) targetState.allTicks.push(rawTick);
-
-              // 2. Processa no motor Renko do respectivo ativo de forma autônoma
-              const renkoRes = targetState.engine.processTick(rawTick, config);
-              targetState.cvd = targetState.engine.getCvd();
-              targetState.currentBox = targetState.engine.getCurrentBox();
-              if (renkoRes.newBoxClosed && renkoRes.closedBox) {
-                targetState.boxes = [...targetState.engine.getBoxes()];
+              // O timeStr da ponte vem do relógio do servidor MT5; a fita deve bater com o gráfico
+              if (Number.isFinite(Number(rawTick.timestamp))) {
+                rawTick.timeStr = formatTickTimeStr(Number(rawTick.timestamp));
               }
 
-              // 3. Processa no motor Range Bar daquele ativo
-              const rangeRes = targetState.rangeEngine.processTick(rawTick);
-              targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
-              if (rangeRes.newBarClosed) {
-                targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
-              }
-
-              // 4. Se for o ativo ativo na tela, sincroniza e atualiza o estado reativo do React
               const isCurrent = tickAssetId === asset.id || (asset.id === 'BTC' && tickAssetId === 'BTCBR') || (asset.id === 'BTCBR' && tickAssetId === 'BTC');
-              if (isCurrent) {
-                engineRef.current = targetState.engine;
-                rangeEngineRef.current = targetState.rangeEngine;
-                timeEngineRef.current = targetState.timeEngine;
-                allTicksRef.current = targetState.allTicks;
 
+              if (isCurrent) {
+                // Sincroniza referências e histórico do ativo ativo na tela
+                if (targetState) {
+                  engineRef.current = targetState.engine;
+                  rangeEngineRef.current = targetState.rangeEngine;
+                  timeEngineRef.current = targetState.timeEngine;
+                  targetState.currentPrice = rawTick.price;
+                  targetState.ticks = [rawTick, ...targetState.ticks.slice(0, 99)];
+                  if (targetState.allTicks.length < 50000) targetState.allTicks.push(rawTick);
+                  allTicksRef.current = targetState.allTicks;
+                }
+                // Processa o tick no motor principal, fita, robô e ordens (sem chamada duplicada)
                 handleIncomingTick(rawTick);
+              } else if (targetState) {
+                // Ativo secundário em background: processa em memória silenciosamente
+                targetState.ticks = [rawTick, ...targetState.ticks.slice(0, 99)];
+                targetState.currentPrice = rawTick.price;
+                if (targetState.allTicks.length < 50000) targetState.allTicks.push(rawTick);
+
+                const renkoRes = targetState.engine.processTick(rawTick, config);
+                targetState.cvd = targetState.engine.getCvd();
+                targetState.currentBox = targetState.engine.getCurrentBox();
+                if (renkoRes.newBoxClosed && renkoRes.closedBox) {
+                  targetState.boxes = [...targetState.engine.getBoxes()];
+                }
+
+                const rangeRes = targetState.rangeEngine.processTick(rawTick);
+                targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
+                if (rangeRes.newBarClosed) {
+                  targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
+                }
               }
             }
 
@@ -5432,6 +5434,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             action: 'ORDER_SEND',
 
+            symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+
             type,
 
             contracts,
@@ -5549,6 +5553,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         JSON.stringify({
 
           action: 'ORDER_SEND',
+
+          symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
 
           type,
 
@@ -7534,35 +7540,34 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
    */
 
   const handleSelectAsset = (id: AssetId) => {
-
     if (id === asset.id) return;
-
     const next = ASSETS[id];
-
     if (!next) return;
 
-
+    // 1. Salva o snapshot completo do ativo que estava na tela
+    const currentState = assetStateRef.current[asset.id];
+    if (currentState) {
+      currentState.boxes = [...engineRef.current.getBoxes()];
+      currentState.currentBox = engineRef.current.getCurrentBox();
+      currentState.cvd = engineRef.current.getCvd();
+      currentState.sessionGaps = [...engineRef.current.getSessionGaps()];
+      currentState.rangeBoxes = [...rangeEngineRef.current.getBoxes()];
+      currentState.rangeCurrentBox = rangeEngineRef.current.getCurrentBox();
+      currentState.currentPrice = currentPrice;
+      currentState.ticks = [...ticks];
+      currentState.allTicks = [...allTicksRef.current];
+    }
+    OrderAuditService.saveIntradayOrders(orders, asset.id);
 
     const live = orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT');
-
     if (live.length > 0) {
-
       setLatestToast({
-
-        id: `asset-switch-blocked-${Date.now()}`,
-
-        type: 'SELL',
-
-        title: `TROCA DE ATIVO BLOQUEADA: ${live.length} ORDEM(NS) VIVA(S)`,
-
-        description: `${asset.label} tem ${live.length} posição(ões)/limitada(s) em aberto. Zere o pregão antes de passar para ${next.label}: trocar de mercado com posição aberta deixaria uma ordem apontando para outro ativo, em outro R$/ponto.`,
-
+        id: `asset-switch-info-${Date.now()}`,
+        type: 'INFO',
+        title: `📊 VISUALIZANDO ABA ${next.label}`,
+        description: `${live.length} posição(ões) em ${asset.label} continuam salvas e ativas em segundo plano no MT5.`,
         timestamp: Date.now(),
-
       });
-
-      return;
-
     }
 
 
@@ -8819,9 +8824,26 @@ ${
           <>
 
             {activeTab === 'chart' && (
-
               <div className="h-full w-full rounded-lg border border-slate-800 overflow-hidden flex flex-col">
-
+                <AssetChartTabs
+                  currentAssetId={asset.id}
+                  onSelectAsset={handleSelectAsset}
+                  isMt5Connected={mt5State.status === 'CONNECTED'}
+                  assetStates={{
+                    WIN: {
+                      currentPrice: asset.id === 'WIN' ? currentPrice : (assetStateRef.current.WIN?.currentPrice || ASSETS.WIN.basePrice),
+                      openOrdersCount: asset.id === 'WIN' ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.WIN) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
+                    },
+                    WDO: {
+                      currentPrice: asset.id === 'WDO' ? currentPrice : (assetStateRef.current.WDO?.currentPrice || ASSETS.WDO.basePrice),
+                      openOrdersCount: asset.id === 'WDO' ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.WDO) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
+                    },
+                    BTCBR: {
+                      currentPrice: (asset.id === 'BTCBR' || asset.id === 'BTC') ? currentPrice : (assetStateRef.current.BTCBR?.currentPrice || assetStateRef.current.BTC?.currentPrice || ASSETS.BTCBR.basePrice),
+                      openOrdersCount: (asset.id === 'BTCBR' || asset.id === 'BTC') ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.BTCBR) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
+                    },
+                  }}
+                />
                 <RenkoFlowChart
 
                   boxes={chartSeries === 'renko' ? boxes : chartSeries === 'range' ? rangeBoxes : timeBoxes}

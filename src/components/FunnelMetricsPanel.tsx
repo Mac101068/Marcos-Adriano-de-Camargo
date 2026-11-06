@@ -141,8 +141,8 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
         )}
 
         <span className="ml-auto shrink-0 flex items-center gap-2">
-          <span className="text-zinc-500" title="Boxes fechados na régua da sessão corrente (o medidor zera na virada de pregão).">
-            {metrics.boxesToday} boxes{!metrics.warmed ? ' · aquecendo' : ''}
+          <span className="text-zinc-500" title={`Boxes no pregão: ${metrics.boxesToday} | Janela de cálculo móvel: últimos ${metrics.lookbackBoxes ?? 20} boxes fechados.`}>
+            {metrics.boxesToday} boxes (janela {metrics.lookbackBoxes ?? 20}b){!metrics.warmed ? ' · aquecendo' : ''}
           </span>
           {cur ? (
             <span
@@ -231,6 +231,19 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
               disabled={!canPatch || !auto}
               onChange={(v) => onPatchConfig?.({ adaptiveFloorMultiple: v / 10 })}
               hint="Multiplicador da média de agressão do DIA (piso relativo). Dia morto não afrouxa o funil: sobe o piso e o box lateral para de sinalizar. Subir = mais exigente."
+            />
+
+            <FunnelSlider
+              label="Janela"
+              value={metrics.lookbackBoxes ?? 20}
+              display={`${metrics.lookbackBoxes ?? 20} boxes`}
+              min={5}
+              max={60}
+              step={5}
+              unit="bx"
+              disabled={!canPatch || !auto}
+              onChange={(v) => onPatchConfig?.({ regimeLookbackBoxes: v })}
+              hint="Número de boxes recentes da janela rolante. A cada bloco fechado o limiar recalcula automaticamente com base nesta quantidade de blocos."
             />
 
             {isPyramid && (

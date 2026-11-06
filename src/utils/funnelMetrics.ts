@@ -46,6 +46,7 @@ export interface FunnelMetricsSnapshot {
   strategy: 'PYRAMID' | 'RETESTE';
   percentile: number; // P configurado (0..0.95)
   floorMultiple: number; // piso relativo configurado
+  lookbackBoxes: number; // tamanho da janela rolante de boxes recentes
   baseThreshold: number; // minDeltaThreshold (físico / aquecimento)
   divergenceMin?: number; // flowDivergenceMin (só faz sentido na Pirâmide)
   buy: SideFunnelMetric;
@@ -159,6 +160,7 @@ export function computeFunnelMetrics(
     strategy: isPyramid ? 'PYRAMID' : 'RETESTE',
     percentile,
     floorMultiple,
+    lookbackBoxes: config.regimeLookbackBoxes ?? 20,
     baseThreshold: base,
     divergenceMin,
     buy,

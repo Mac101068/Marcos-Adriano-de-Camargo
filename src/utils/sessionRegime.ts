@@ -198,13 +198,15 @@ export class SessionRegimeMeter {
    * fixo × fator — que é também o comportamento de warm-up.
    */
   getPercentileLimit(side: 'BUY' | 'SELL', percentile: number, baseThreshold: number): number {
-    if (this.records.length < 10) return this.getAdaptiveLimit(baseThreshold, side, 0);
-    const win = this.records.slice(-Math.max(this.lookbackBoxes, 20));
+    const minRecords = Math.min(10, Math.max(3, this.lookbackBoxes));
+    if (this.records.length < minRecords) return this.getAdaptiveLimit(baseThreshold, side, 0);
+    const win = this.records.slice(-Math.max(3, this.lookbackBoxes));
     const mags =
       side === 'BUY'
         ? win.map((r) => r.delta).filter((d) => d > 0)
         : win.map((r) => -r.delta).filter((d) => d > 0);
-    if (mags.length < 5) return this.getAdaptiveLimit(baseThreshold, side, 0);
+    const minSamples = Math.min(5, Math.max(2, Math.floor(this.lookbackBoxes / 3)));
+    if (mags.length < minSamples) return this.getAdaptiveLimit(baseThreshold, side, 0);
     const sorted = [...mags].sort((a, b) => a - b);
     const idx = Math.min(sorted.length - 1, Math.floor(clamp(percentile, 0, 0.95) * sorted.length));
     return Math.max(1, Math.round(sorted[idx]));
@@ -218,8 +220,7 @@ export class SessionRegimeMeter {
    *      funil de afrouxar junto com um pregão morto — dia lateral só sinaliza caixa que é
    *      agressiva PARA aquele dia, e em dia sem agressão nenhuma simplesmente não sinaliza).
    * Zera na virada de dia (como todo o medidor), então cada pregão calibra a própria régua.
-   * Sem estatística (menos de 10 boxes ou 5 amostras do lado) cai no fixo físico informado
-   * — aquecimento conservador, nunca inventa sinal.
+   * Sem estatística cai no fixo físico informado — aquecimento conservador, nunca inventa sinal.
    */
   getSelfCalibratedLimit(side: 'BUY' | 'SELL', percentile: number, floorMultiple: number, baseThreshold: number): number {
     return this.getSelfCalibratedBreakdown(side, percentile, floorMultiple, baseThreshold).limit;
@@ -237,7 +238,7 @@ export class SessionRegimeMeter {
     floorMultiple: number,
     baseThreshold: number
   ): SelfCalibratedBreakdown {
-    const win = this.records.slice(-Math.max(this.lookbackBoxes, 20));
+    const win = this.records.slice(-Math.max(3, this.lookbackBoxes));
     const mags =
       side === 'BUY'
         ? win.map((r) => r.delta).filter((d) => d > 0)
@@ -248,8 +249,11 @@ export class SessionRegimeMeter {
     const floorMult = clamp(floorMultiple, 1, 5);
     const floorValue = dayMean != null ? dayMean * floorMult : null;
 
-    // Sem estatística (menos de 10 boxes fechados ou 5 amostras do lado): cai no físico.
-    if (this.records.length < 10 || mags.length < 5) {
+    const minRecords = Math.min(10, Math.max(3, this.lookbackBoxes));
+    const minSamples = Math.min(5, Math.max(2, Math.floor(this.lookbackBoxes / 3)));
+
+    // Sem estatística suficiente (aquecimento proporcional ao tamanho da janela): cai no físico.
+    if (this.records.length < minRecords || mags.length < minSamples) {
       return {
         limit: baseThreshold,
         source: 'fisico',

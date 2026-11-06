@@ -33,6 +33,44 @@ export function maskBridgeToken(token: string): string {
 
 const TOKEN_STORAGE_KEY = 'fluxo_bridge_token_v1';
 
+let memoryToken = '';
+
+// Tenta sincronizar automaticamente o token com o arquivo servido pelo Vite/backend local
+if (typeof window !== 'undefined' && typeof fetch === 'function') {
+  fetch('/bridge_token.txt?t=' + Date.now())
+    .then((r) => (r.ok ? r.text() : ''))
+    .then((txt) => {
+      const clean = txt.trim();
+      if (clean && clean.length >= 16) {
+        memoryToken = clean;
+        try {
+          localStorage.setItem(TOKEN_STORAGE_KEY, clean);
+        } catch {}
+      }
+    })
+    .catch(() => {});
+}
+
+/** Sincroniza ativamente o token local com o backend/Vite via /bridge_token.txt */
+export async function syncBridgeTokenWithServer(): Promise<string> {
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    try {
+      const res = await fetch('/bridge_token.txt?t=' + Date.now());
+      if (res.ok) {
+        const txt = (await res.text()).trim();
+        if (txt && txt.length >= 16) {
+          memoryToken = txt;
+          try {
+            localStorage.setItem(TOKEN_STORAGE_KEY, txt);
+          } catch {}
+          return txt;
+        }
+      }
+    } catch {}
+  }
+  return getBridgeToken();
+}
+
 /**
  * Token atual da ponte. Na primeira execução ele é criado e gravado sozinho, para
  * que o script baixado e o app saiam com o MESMO segredo sem trabalho manual.
@@ -41,12 +79,18 @@ export function getBridgeToken(): string {
   try {
     const saved = localStorage.getItem(TOKEN_STORAGE_KEY);
     if (saved) return saved;
+    if (memoryToken) {
+      try {
+        localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken);
+      } catch {}
+      return memoryToken;
+    }
     const fresh = generateBridgeToken();
     localStorage.setItem(TOKEN_STORAGE_KEY, fresh);
     return fresh;
   } catch {
     // localStorage indisponível (modo privado severo): usa em memória só nesta aba
-    return generateBridgeToken();
+    return memoryToken || generateBridgeToken();
   }
 }
 

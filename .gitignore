@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+public/bridge_token.txt
+bridge_token.txt
+

@@ -17,7 +17,7 @@ export class RenkoFlowEngine {
    * RE-ANCORA no preço real em vez de cospir dezenas de tijolos vazios (a explosão de fim de
    * pregão que bagunçava a formação dos blocos).
    */
-  private static readonly MAX_JUMP_BOXES = 10;
+  private static readonly MAX_JUMP_BOXES = 100;
 
   private boxPoints: number;
   private boxes: RenkoBox[] = [];
