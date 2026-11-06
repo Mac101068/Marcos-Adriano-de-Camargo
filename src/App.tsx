@@ -4519,7 +4519,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         try {
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
           socket.send(EaConfigService.buildBridgeSyncMessage(config));
-          socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset) }));
           socket.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(asset) }));
         } catch {}
 
@@ -4876,85 +4875,27 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             }
 
           } else if (payload.type === 'SESSION_BACKFILL') {
+            // Inicialização limpa: apenas calibra o preço de referência atual do ativo,
+            // sem preencher o gráfico com blocos estáticos do passado que depois somem.
             const bfSym = String(payload.symbol || '').toUpperCase();
             const bfAssetId = getAssetIdForSymbol(bfSym);
             const targetState = assetStateRef.current[bfAssetId] || (bfAssetId === 'BTC' ? assetStateRef.current.BTCBR : bfAssetId === 'BTCBR' ? assetStateRef.current.BTC : undefined);
             const bfAssetSpec = ASSETS[bfAssetId] || (bfAssetId === 'BTC' ? ASSETS.BTCBR : undefined) || asset;
             const bfTicks: Tick[] = (payload.data?.ticks || [])
-              .filter((t: Tick) => t && Number.isFinite(t.price) && t.price > 0 && Math.abs(t.price - bfAssetSpec.basePrice) / bfAssetSpec.basePrice < 0.4)
-              .map((t: Tick) =>
-                t && Number.isFinite(Number(t.timestamp)) ? { ...t, timeStr: formatTickTimeStr(Number(t.timestamp)) } : t,
-              );
+              .filter((t: Tick) => t && Number.isFinite(t.price) && t.price > 0 && Math.abs(t.price - bfAssetSpec.basePrice) / bfAssetSpec.basePrice < 0.4);
 
             if (targetState && Array.isArray(bfTicks) && bfTicks.length > 0) {
-              const bfAssetSpec = ASSETS[bfAssetId] || asset;
-              const bfTradeParams = getAssetTradeParams(bfAssetId);
-              targetState.engine.setAsset(bfAssetSpec);
-              targetState.engine.setBoxPoints(bfTradeParams.boxPoints);
-
-              const firstTick = bfTicks[0];
-              if (firstTick && firstTick.price > 0) {
-                targetState.engine.initialize(firstTick.price, firstTick.timestamp);
-                targetState.rangeEngine.initialize(firstTick.price);
-                targetState.timeEngine.initialize(firstTick.price);
-              }
-              targetState.allTicks = [...bfTicks];
-              targetState.ticks = [...bfTicks.slice(-100)].reverse();
-              const bgBfConfig: AutomationConfig = {
-                ...config,
-                assetId: bfAssetId,
-                boxPoints: bfTradeParams.boxPoints,
-                minDeltaThreshold: bfTradeParams.minDeltaThreshold,
-              };
-              for (const raw of bfTicks) {
-                if (!raw || !(raw.price > 0)) continue;
-                targetState.engine.processTick(raw, bgBfConfig);
-                targetState.rangeEngine.processTick(raw);
-                targetState.timeEngine.processTick(raw);
-              }
-              targetState.boxes = [...targetState.engine.getBoxes()];
-              targetState.sessionGaps = [...targetState.engine.getSessionGaps()];
-              targetState.currentBox = targetState.engine.getCurrentBox();
-              targetState.cvd = targetState.engine.getCvd();
-              targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
-              targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
-              targetState.timeBoxes = [...targetState.timeEngine.getBoxes()];
-              targetState.timeCurrentBox = targetState.timeEngine.getCurrentBox();
-              targetState.currentPrice = bfTicks[bfTicks.length - 1].price;
-
-              const currentActiveId = activeAssetIdRef.current;
-              const isCurrent = bfAssetId === currentActiveId || (currentActiveId === 'BTC' && bfAssetId === 'BTCBR') || (currentActiveId === 'BTCBR' && bfAssetId === 'BTC');
-              if (isCurrent) {
-                engineRef.current = targetState.engine;
-                rangeEngineRef.current = targetState.rangeEngine;
-                timeEngineRef.current = targetState.timeEngine;
-                allTicksRef.current = targetState.allTicks;
-                setBoxes([...targetState.boxes]);
-                setSessionGaps([...targetState.sessionGaps]);
-                setCurrentBox(targetState.currentBox);
-                setCvd(targetState.cvd);
-                setTicks([...targetState.ticks]);
-                setRangeBoxes([...targetState.rangeBoxes]);
-                setRangeCurrentBox(targetState.rangeCurrentBox);
-                setTimeBoxes([...targetState.timeBoxes]);
-                setTimeCurrentBox(targetState.timeCurrentBox);
-                setCurrentPrice(targetState.currentPrice);
+              const lastTick = bfTicks[bfTicks.length - 1];
+              if (lastTick && lastTick.price > 0) {
+                targetState.currentPrice = lastTick.price;
+                rememberLastPrice(bfAssetId, lastTick.price);
+                const currentActiveId = activeAssetIdRef.current;
+                const isCurrent = bfAssetId === currentActiveId || (currentActiveId === 'BTC' && bfAssetId === 'BTCBR') || (currentActiveId === 'BTCBR' && bfAssetId === 'BTC');
+                if (isCurrent) {
+                  setCurrentPrice(lastTick.price);
+                }
               }
             }
-
-            setLatestToast({
-
-              id: `mt5-backfill-${Date.now()}`,
-
-              type: 'INFO',
-
-              title: `📊 ${(payload.data?.sessions?.length ?? 1)} PREGÕES CARREGADOS (ESTIMADO)`,
-
-              description: `${payload.data?.bars ?? '?'} barras de 1 min do MT5 desenhadas só para contexto — as emendas de pregão aparecem com o gap de abertura em pontos. Só PREÇO real (sem delta/CVD inventado). Robô, coletor, Boleta e limiar P60 usam apenas os ticks ao vivo a partir de agora.`,
-
-              timestamp: Date.now(),
-
-            });
 
           } else if (MarketHistoryService.handles(payload.type)) {
 
