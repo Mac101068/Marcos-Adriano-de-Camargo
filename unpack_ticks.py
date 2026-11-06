@@ -23,3 +23,4 @@ for gz in gz_files:
         print(f"  ℹ️ {os.path.basename(csv_out)} já existe e está atualizado.")
 
 print("🏁 Base de ticks 100% pronta para Replay e Backtest nesta estação!")
+

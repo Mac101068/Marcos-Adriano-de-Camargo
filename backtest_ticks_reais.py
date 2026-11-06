@@ -96,6 +96,42 @@ def list_available_pregoes(symbol="WINZ26", max_days=35):
 
 
 
+def list_local_pregoes(symbol="WINZ26"):
+    """Lista os recortes por pregão já gravados em disco, sem consultar o MT5."""
+    import glob
+    import re
+
+    prefixo = symbol.lower().replace("$", "_cont")
+    diretorios_base = [r"C:\Users\Lucas\Documents\RoboFluxoB3", r"C:\Users\Lucas\Documents\robo_renko"]
+    por_data = {}
+
+    for base_dir in diretorios_base:
+        pasta = os.path.join(base_dir, "data", "pregoes")
+        # Se existir CSV puro e .gz do mesmo dia, o recorte compactado tem prioridade.
+        for extensao in ("csv.gz", "csv"):
+            padrao = os.path.join(pasta, f"{prefixo}_ticks_*.{extensao}")
+            for arquivo in glob.glob(padrao):
+                match = re.search(r"_ticks_(\d{8})\.csv(?:\.gz)?$", arquivo)
+                if not match:
+                    continue
+                dia = match.group(1)
+                if dia in por_data:
+                    continue
+                data_pregao = datetime.strptime(dia, "%Y%m%d")
+                weekday_name = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][data_pregao.weekday()]
+                caminho_relativo = os.path.relpath(arquivo, base_dir).replace(os.sep, "/")
+                por_data[dia] = {
+                    "path": caminho_relativo,
+                    "date": data_pregao.strftime("%Y-%m-%d"),
+                    "weekday": weekday_name,
+                    "symbol": symbol.upper(),
+                    "sizeMb": round(os.path.getsize(arquivo) / (1024 * 1024), 1),
+                }
+
+    return [por_data[dia] for dia in sorted(por_data, reverse=True)]
+
+
+
 def run_backtest_date(target_date_str, symbol="WINZ26", renko_r=10, strategy="PYRAMID"):
 
     """

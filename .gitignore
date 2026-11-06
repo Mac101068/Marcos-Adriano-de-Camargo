@@ -5,6 +5,14 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.log
+# stderr dos processos que ligamos em background (ponte, dev server): runtime, não código
+*.err
+
+# Descartáveis do tipo tmp_* (checagens one-off, prints de tela). O nome já diz que não é obra.
+tmp_*
+
+# Cache do IDE (wiki/conhecimento gerado automaticamente, não é código do projeto)
+.qoder/
 
 # Node e dependências
 node_modules/
@@ -15,7 +23,9 @@ interface_github/dist/
 backups/
 *.zip
 *.csv
-!data/*.csv
+# Base de ticks: o Git recebe apenas os recortes por pregão (data/pregoes/*.csv.gz)
+# e os .gz compactos. Os CSVs acumulados multi-pregão passam de 100 MB e ficam locais.
+!data/pregoes/*.csv.gz
 !data/*.gz
 .vscode/
 .agents/

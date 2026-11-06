@@ -23,6 +23,8 @@ Ponte WebSocket: ws://0.0.0.0:8765
 
 import sys
 
+import os
+
 if hasattr(sys.stdout, "reconfigure"):
 
     sys.stdout.reconfigure(encoding="utf-8")
@@ -37,9 +39,52 @@ import secrets
 
 import asyncio
 
+
+# Diário de auditoria: grava tudo que o robô julgou e tudo que ele de FATO enviou à
+# corretora. O import é protegido porque a ponte precisa continuar operando mesmo se o
+# módulo não estiver no caminho (arquivo esquecido, pasta errada) — auditoria nenhuma
+# vale um pregão parado.
+try:
+
+    from auditoria_diario import (
+        registrar_box as audit_registrar_box,
+        registrar_ordem as audit_registrar_ordem,
+        salvar_deals_mt5 as audit_salvar_deals,
+        salvar_snapshot_conta as audit_salvar_conta,
+    )
+
+    AUDITORIA_ENABLED = os.getenv("AUDITORIA_OFF", "") not in ("1", "true", "TRUE")
+
+except Exception as _audit_exc:  # fallback de emergência
+
+    AUDITORIA_ENABLED = False
+
+    print(f"[AVISO] Diário de auditoria indisponível: {_audit_exc}", flush=True)
+
+# Camada de dados do replay de validação: ticks REAIS dos recortes em disco, comprimidos por
+# bucket. Import protegido pelo mesmo motivo do diário — se o arquivo não estiver no caminho, a
+# ponte segue atendindo histórico pelo M1 (e a tela lê a fonte rotulada, sem se enganar).
+try:
+
+    import replay_dados as replay
+
+    REPLAY_DADOS_ENABLED = True
+
+except Exception as _replay_exc:
+
+    replay = None
+
+    REPLAY_DADOS_ENABLED = False
+
+    print(f"[AVISO] Replay de ticks reais indisponível: {_replay_exc}", flush=True)
+
 from datetime import datetime, timezone, timedelta
 
 import MetaTrader5 as mt5
+
+import numpy as np
+
+from bisect import bisect_left, bisect_right
 
 import threading
 
@@ -97,8 +142,10 @@ SUPPORTED_ASSETS = {
         "decimals": 0,
         "tick_size": 20.0,
         "point_value": 0.1,
+        # Piso igual ao do avaliador da tela (Math.max(50, ...)): limiar de 20 contratos num
+        # tijolo de 100 pts é ruído de tela, não agressão institucional.
         "box_points": 100.0,
-        "min_delta": 20,
+        "min_delta": 50,
         "magic": 150301,
         "contracts": 1,
         "sl_points": 200.0,
@@ -112,8 +159,10 @@ SUPPORTED_ASSETS = {
         "decimals": 0,
         "tick_size": 20.0,
         "point_value": 0.1,
+        # Piso igual ao do avaliador da tela (Math.max(50, ...)): limiar de 20 contratos num
+        # tijolo de 100 pts é ruído de tela, não agressão institucional.
         "box_points": 100.0,
-        "min_delta": 20,
+        "min_delta": 50,
         "magic": 150301,
         "contracts": 1,
         "sl_points": 200.0,
@@ -192,9 +241,47 @@ REQUIRE_CVD_EXTREME = False
 
 
 
-ADAPTIVE_THRESHOLD_ENABLED = False
+# ESPELHO DOS PADRÕES DO APP (interface_github/src/services/eaConfigService.ts): a ponte
+# precisa julgar com os MESMOS números e os MESMOS filtros que a tela desenha. Quando a
+# tela abre, SYNC_EA_CONFIG sobrescreve isto aqui — ver EVAL_CONFIG abaixo.
+ADAPTIVE_THRESHOLD_ENABLED = True
 
 REGIME_LOOKBACK_BOXES = 20
+
+# P60 das agressões do próprio lado, calculado do pregão (regra: limiar é calculado)
+SESSION_PERCENTILE = 0.6
+
+# Piso do gate estático da Pirâmide — o mesmo Math.max(50, minDelta) do avaliador da tela
+PYRAMID_STATIC_FLOOR = 50
+
+# Consolidação: Efficiency Ratio abaixo disto = mercado girando em círculo, bloco mudo
+CONSOLIDATION_FILTER_ENABLED = True
+
+CONSOLIDATION_LOOKBACK_BOXES = 10
+
+CONSOLIDATION_ER_MAX = 0.35
+
+# Exaustão: opcional, ligada só por decisão do operador (no app também vem desligada)
+EXHAUSTION_FILTER_ENABLED = False
+
+EXHAUSTION_DELTA_RATIO = 0.7
+
+
+
+# Valores VIGENTES na avaliação do sinal. É o que check_convergence lê.
+EVAL_CONFIG = {
+    "strategy_mode": STRATEGY_MODE,
+    "adaptive": ADAPTIVE_THRESHOLD_ENABLED,
+    "regime_lookback": REGIME_LOOKBACK_BOXES,
+    "percentile": SESSION_PERCENTILE,
+    "pyramid_static_floor": PYRAMID_STATIC_FLOOR,
+    "consolidation_enabled": CONSOLIDATION_FILTER_ENABLED,
+    "consolidation_lookback": CONSOLIDATION_LOOKBACK_BOXES,
+    "consolidation_er_max": CONSOLIDATION_ER_MAX,
+    "exhaustion_enabled": EXHAUSTION_FILTER_ENABLED,
+    "exhaustion_ratio": EXHAUSTION_DELTA_RATIO,
+    "require_cvd_extreme": REQUIRE_CVD_EXTREME,
+}
 
 
 
@@ -273,6 +360,28 @@ ENTRY_ACTIONS = {"ORDER_SEND"}
 TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_POSITIONS"}
 
 
+# Trava de execução por ambiente. PADRÃO = DESLIGADA (não muda o comportamento de hoje); com
+# ORDERS_BLOCKED=1 a ponte serve tudo (ticks, histórico, sinais, diário) mas nenhuma ordem de
+# entrada sai, mesmo com cliente ARMADO. Existe por dois motivos, e o segundo é o que quebra
+# replay de validação: (1) reiniciar a ponte com a tela do operador aberta re-autentica com
+# `armed: config.active`, ou seja, o robô volta armado sem ninguém ter dito sim naquela sessão;
+# (2) a tela pode querer rodar um replay do pregão enquanto o loop vivo continua vendo ticks reais
+# -- sem esta trava o SINAL GERADO do loop vivo executa ordem real no meio do ensaio.
+ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "").strip().lower() in ("1", "true", "sim", "on")
+
+# Versão ACIONÁVEL da mesma trava, para não precisar reiniciar a ponte a cada sessão de estudo:
+# a tela manda {"action":"SET_REPLAY_MODE","on":true} e o processo passa a segurar as entradas.
+# Não é persistente -- morre com o processo, que é justamente o desejado: ninguém acorda no dia
+# seguinte com o robô ensaiando sem querer. A trava de ambiente fica por cima dela: ligar pelo app
+# sempre funciona, desligar pelo app nunca vence um ORDERS_BLOCKED=1 definido no PC do MT5.
+REPLAY_MODE = False
+
+
+def ordens_bloqueadas():
+    """Verdade única da trava: ambiente (irreversível por rede) OU modo replay ligado na tela."""
+    return bool(ORDERS_BLOCKED or REPLAY_MODE)
+
+
 
 HISTORY_MAX_DAYS = 10
 
@@ -280,11 +389,27 @@ HISTORY_CHUNK_TICKS = 1500
 
 HISTORY_VOLUME_FALLBACK_RATIO = 0.8
 
+# Fontes de volume declaradas no protocolo HISTORY_*. O nome não é enfeite: é o que impede a tela
+# de desenhar um replay decorativo com cara de validação. `TICKS_REAIS` = fita da B3 comprimida por
+# bucket (fluxo e caminho preservados); `M1_RATE` = 4 ticks fabricados por barra de 1 minuto.
+VOLUME_SOURCE_TICKS_REAIS = "TICKS_REAIS"
+
+VOLUME_SOURCE_M1 = "M1_RATE"
+
 
 
 WS_HOST = "0.0.0.0"
 
 WS_PORT = 8765
+
+# Mesmo caminho usado por config.py/extrair_ticks.py (terminal da XP, já logado em demo)
+MT5_PATH = os.getenv("MT5_PATH", r"C:\Program Files\MetaTrader 5 Terminal\terminal64.exe")
+
+
+
+# Quantas sessões o backfill entrega ao gráfico ao conectar: hoje + as anteriores.
+# Duas anteriores são o mínimo para o operador ver a emenda do pregão e o gap de abertura.
+BACKFILL_SESSIONS = max(1, int(os.getenv("BACKFILL_SESSIONS", "3")))
 
 
 
@@ -345,6 +470,13 @@ def check_trade_allowed(state, data, action):
     if REQUIRE_AUTH and not state["authenticated"]:
 
         return False, "conexão não autenticada (token ausente ou errado)"
+
+    if action in ENTRY_ACTIONS and ordens_bloqueadas():
+
+        return False, ("ponte com TRAVA DE EXECUÇÃO ativa (" + ("ORDERS_BLOCKED=1" if ORDERS_BLOCKED else "MODO REPLAY ligado na tela") + "): nenhuma ordem de "
+                       "ENTRADA sai, armada ou não. Saídas (parcial, stop, zeragem) seguem LIBERADAS "
+                       "de propósito: encerrar posição reduz risco e você precisa poder se proteger "
+                       "no meio de um ensaio")
 
     if action in ENTRY_ACTIONS and not state["armed"]:
 
@@ -524,6 +656,73 @@ class RegimeMeter:
 
 
 
+    def get_percentile_limit(self, base_threshold, side, percentile=0.6):
+        """Limiar CALCULADO do pregão: percentil `percentile` das agressões do próprio lado.
+
+        É a réplica exata de SessionRegimeMeter.getPercentileLimit() do app: P60 de compra
+        significa "os 40% boxes verdes mais agressivos deste pregão sinalizam". O corte sobe
+        na abertura e desce no almoço sem depender de nenhum valor físico fixo. Sem
+        estatística (menos de 10 boxes fechados, ou menos de 5 do lado pedido) cai no
+        fixo × fator — que é também o comportamento de warm-up da tela.
+        """
+        if len(self.records) < 10:
+            return self.get_adaptive_limit(base_threshold, side)
+
+        win = self.records[-max(self.lookback, 20):]
+
+        # records[i] = (hour, volume, delta, fator): agressão líquida do box está no índice 2
+        if side == "BUY":
+            mags = sorted(r[2] for r in win if r[2] > 0)
+        else:
+            mags = sorted(-r[2] for r in win if r[2] < 0)
+
+        if len(mags) < 5:
+            return self.get_adaptive_limit(base_threshold, side)
+
+        pct = self._clamp(float(percentile), 0.0, 0.95)
+        idx = min(len(mags) - 1, int(pct * len(mags)))
+        return max(1, int(round(mags[idx])))
+
+
+
+
+
+def efficiency_ratio(previous_boxes, box, lookback):
+    """Efficiency Ratio (Kaufman) das últimas `lookback` barras fechadas.
+
+    |deslocamento líquido| ÷ Σ|passo a passo|: perto de 1 é tendência limpa, perto de 0 o
+    mercado gira em círculo (acumulação / range curto). Como cada box Renko fecha exatamente
+    um degrau, a conta vira medida de alternância: 9 passos com saldo de 3 degraus já é
+    acumulação — e bloco verde dentro de range não é confluência nenhuma.
+    Réplica de efficiencyRatio() do avaliador da tela.
+    """
+    k = max(2, int(round(lookback)) or 10)
+    series = [b["close"] for b in previous_boxes[-(k - 1):]] + [box["close"]]
+    if len(series) < k:
+        return 1.0
+    path = 0.0
+    for i in range(1, len(series)):
+        path += abs(series[i] - series[i - 1])
+    if path <= 0:
+        return 1.0
+    return min(1.0, abs(series[-1] - series[0]) / path)
+
+
+
+
+def is_exhausted_flow(previous_boxes, box, ratio):
+    """Exaustão de fluxo: a agressão do box atual caiu a `ratio` (ou menos) da do último
+    box do MESMO lado. Fluxo que emagrece não é continuidade, é a última perna.
+    Réplica de isExhaustedFlow() do avaliador da tela.
+    """
+    d = box.get("delta", 0) or 0
+    if d == 0:
+        return False
+    for prev in reversed(previous_boxes):
+        pd = prev.get("delta", 0) or 0
+        if pd != 0 and (pd > 0) == (d > 0):
+            return abs(d) <= abs(pd) * ratio
+    return False
 
 
 class RenkoFlowEngine:
@@ -731,52 +930,126 @@ class RenkoFlowEngine:
 
 
     def check_convergence(self, box):
+        """Julga o box com as MESMAS regras do avaliador da tela (convergenceEvaluator.ts).
+
+        Paridade é requisito de segurança: se a tela desenha uma seta e a ponte compra outra
+        coisa, o operador não está auditando o que enxerga. A ordem dos gates é idêntica à do
+        app: 1) Delta acima do limiar do lado — SEMPRE aplicado, adaptativo ligado ou não
+        (antes o filtro estava preso ao `adaptive and` e com adaptativo desligado nenhum box
+        era cortado, nem um BUY com Delta negativo); 2) regime, por consolidação (Efficiency
+        Ratio) e exaustão de fluxo; 3) no modo clássico, CVD em novo extremo se exigido.
+        """
         delta = box["delta"]
         direction = box["direction"]
-        adaptive = ADAPTIVE_THRESHOLD_ENABLED
+        cfg = EVAL_CONFIG
+        # boxes fechados ANTES deste: o process_tick anexa o box atual antes de julgar
+        previous_boxes = self.boxes[:-1] if (self.boxes and self.boxes[-1] is box) else list(self.boxes)
+        adaptive = bool(cfg["adaptive"])
         base_thresh = self.min_delta_threshold
-        limit_buy = self.regime_meter.get_adaptive_limit(base_thresh, "BUY") if adaptive else base_thresh
-        limit_sell = self.regime_meter.get_adaptive_limit(base_thresh, "SELL") if adaptive else base_thresh
+        pyramid = cfg["strategy_mode"] == "PYRAMID_FLOW_CONFLUENCE"
+        limit_buy = (
+            self.regime_meter.get_percentile_limit(base_thresh, "BUY", cfg["percentile"])
+            if adaptive else base_thresh
+        )
+        limit_sell = (
+            self.regime_meter.get_percentile_limit(base_thresh, "SELL", cfg["percentile"])
+            if adaptive else base_thresh
+        )
+        # Com adaptativo o corte é o P60 puro; na Pirâmide estática o app usa max(50, minDelta)
+        req_buy = limit_buy if (adaptive or not pyramid) else max(cfg["pyramid_static_floor"], base_thresh)
+        req_sell = limit_sell if (adaptive or not pyramid) else max(cfg["pyramid_static_floor"], base_thresh)
 
-        factor_lbl = f" | volume factor {self.regime_meter.last_factor:.2f}x" if adaptive else ""
+        # O Efficiency Ratio é medido SEMPRE, com o filtro ligado ou não: é a coluna que permite
+        # auditar depois se o filtro de acumulação teria ajudado. Custa ~10 subtrações por box.
+        er = efficiency_ratio(previous_boxes, box, cfg["consolidation_lookback"])
+        consolidating = bool(cfg["consolidation_enabled"]) and er < cfg["consolidation_er_max"]
+        exhausting = bool(cfg["exhaustion_enabled"]) and is_exhausted_flow(
+            previous_boxes, box, cfg["exhaustion_ratio"])
+        regime_block = consolidating or exhausting
 
+        factor_lbl = " | limiar = P60 do pregão" if adaptive else ""
 
+        # Vereditão completo vai para o diário (auditoria_diario). Um sinal que não sai deixa
+        # rastro com o MOTIVO: sem a metade dos calados, nenhum filtro é auditável.
+        audit = {
+            "limiar_compra": req_buy,
+            "limiar_venda": req_sell,
+            "fator_regime": round(self.regime_meter.last_factor, 3),
+            "efficiency_ratio": round(er, 4),
+            "consolidacao": consolidating,
+            "exaustao": exhausting,
+            "sinal": None,
+            "motivo": "SEM_DIRECAO",
+        }
+        signal, reason = None, ""
 
-        if STRATEGY_MODE == "PYRAMID_FLOW_CONFLUENCE":
-
+        if pyramid:
             if direction == "UP":
-
-                if adaptive and delta < limit_buy:
-
-                    return None, ""
-
-                return "BUY", f"Pirâmide Confluência Alta: Bloco Verde #{box['index']} (Δ {delta} vs limiar {limit_buy}{factor_lbl})"
-
+                # 1. Delta institucional: abaixo do limiar não existe sinal, seja qual for o regime
+                if delta < req_buy:
+                    audit["motivo"] = f"CALADO_DELTA | Δ {delta} < limiar {req_buy}"
+                # 2. Regime: verde dentro de range curto ou fluxo exausto não é confluência
+                elif regime_block:
+                    audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
+                else:
+                    signal = "BUY"
+                    reason = f"Pirâmide Confluência Alta: Bloco Verde #{box['index']} (Δ {delta} vs limiar {req_buy}{factor_lbl})"
+                    audit["motivo"] = f"SINAL_BUY | Δ {delta} >= {req_buy}"
             elif direction == "DOWN":
+                if delta > -req_sell:
+                    audit["motivo"] = f"CALADO_DELTA | Δ {delta} > limiar {-req_sell}"
+                elif regime_block:
+                    audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
+                else:
+                    signal = "SELL"
+                    reason = f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']} (Δ {delta} vs limiar {-req_sell}{factor_lbl})"
+                    audit["motivo"] = f"SINAL_SELL | Δ {delta} <= {-req_sell}"
+        else:
+            limite = limit_buy if direction == "UP" else limit_sell
+            cruzou = (direction == "UP" and delta >= limit_buy) or (direction == "DOWN" and delta <= -limit_sell)
+            if cruzou:
+                cvd_ok = True
+                if cfg["require_cvd_extreme"] and len(previous_boxes) >= 3:
+                    recent = previous_boxes[-3:]
+                    if direction == "UP":
+                        cvd_ok = box["cvd_at_close"] >= max(b["cvd_at_close"] for b in recent)
+                    else:
+                        cvd_ok = box["cvd_at_close"] <= min(b["cvd_at_close"] for b in recent)
+                if not cvd_ok:
+                    audit["motivo"] = "CALADO_CVD | CVD não fez novo extremo"
+                elif regime_block:
+                    audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
+                else:
+                    signal = "BUY" if direction == "UP" else "SELL"
+                    if signal == "BUY":
+                        reason = f"Convergência COMPRA: Box 10R Alta + Delta +{delta} ctros (limiar {limit_buy}{factor_lbl})"
+                    else:
+                        reason = f"Convergência VENDA: Box 10R Baixa + Delta {delta} ctros (limiar {-limit_sell}{factor_lbl})"
+                    audit["motivo"] = f"SINAL_{signal} | Δ {delta} vs limiar {limite}"
+            elif direction in ("UP", "DOWN"):
+                audit["motivo"] = f"CALADO_DELTA | Δ {delta} fora do limiar {limite}"
 
-                if adaptive and delta > -limit_sell:
-
-                    return None, ""
-
-                return "SELL", f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']} (Δ {delta} vs limiar {-limit_sell}{factor_lbl})"
+        audit["sinal"] = signal
+        box["audit"] = audit
+        return signal, reason
 
 
-
-        if direction == "UP" and delta >= limit_buy:
-
-            reason = f"Convergência COMPRA: Box 10R Alta + Delta +{delta} ctros (limiar {limit_buy}{factor_lbl})"
-
-            return "BUY", reason
-
-        elif direction == "DOWN" and delta <= -limit_sell:
-
-            reason = f"Convergência VENDA: Box 10R Baixa + Delta {delta} ctros (limiar {-limit_sell}{factor_lbl})"
-
-            return "SELL", reason
-
-
-
-        return None, ""
+    def _motivo_regime(self, consolidating, er, box, previous_boxes, cfg):
+        """Texto do corte por regime, para a coluna `motivo` do diário."""
+        if consolidating:
+            return (
+                f"CALADO_ACUMULACAO | ER {er:.2f} < {cfg['consolidation_er_max']} "
+                f"na janela de {cfg['consolidation_lookback']} boxes"
+            )
+        d = box.get("delta", 0) or 0
+        for prev in reversed(previous_boxes):
+            pd = prev.get("delta", 0) or 0
+            if pd != 0 and (pd > 0) == (d > 0):
+                return (
+                    f"CALADO_EXAUSTAO | Δ {d} <= {cfg['exhaustion_ratio']}x do box "
+                    f"#{prev.get('index')} (Δ {pd})"
+                )
+        return "CALADO_EXAUSTAO"
 
 
 
@@ -1262,11 +1535,38 @@ class MT5OrderManager:
 
 
 
-    def execute_market_order(self, order_type, comment="", volume=None, sl_points=None, tp_points=None, magic=None):
+    def _audit_ordem(self, acao="MERCADO", direcao="", volume=None, preco_box=None, preco_solicitado=None,
+                     preco_fill=None, ticket=None, retcode=None, executada=False, motivo="",
+                     box_index="", sl_points=None, tp_points=None):
+        """Registra a tentativa no diário SEMPRE, inclusive quando nada é enviado.
+
+        Existiu um pregão inteiro em que o console dizia "[ABRINDO ORDEM MÃE]" e nenhuma ordem
+        saía (AttributeError no caminho do filling). Print de tentativa não é prova de execução;
+        esta linha de CSV é. O método nunca levanta exceção para não derrubar a operação.
+        """
+        if not AUDITORIA_ENABLED:
+            return
+        try:
+            audit_registrar_ordem(
+                self.symbol, acao, direcao=direcao or "",
+                volume=self.contracts if volume is None else volume,
+                preco_box=preco_box, preco_solicitado=preco_solicitado, preco_fill=preco_fill,
+                ticket=ticket, retcode=retcode, executada=executada, sl_pontos=sl_points,
+                tp_pontos=tp_points, motivo=motivo, box_index=box_index,
+            )
+        except Exception as exc:
+            print(f"[AVISO] falha ao gravar diário de ordens: {exc}", flush=True)
+
+
+    def execute_market_order(self, order_type, comment="", volume=None, sl_points=None, tp_points=None, magic=None,
+                             box_index="", preco_box=None, acao="MERCADO"):
 
         can_trade, _ = self.check_schedule()
 
         if not can_trade:
+
+            self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
+                              "BLOQUEADO_POR_HORARIO", box_index, sl_points, tp_points)
 
             return False, 0
 
@@ -1277,6 +1577,9 @@ class MT5OrderManager:
         tick = mt5.symbol_info_tick(self.symbol)
 
         if not tick:
+
+            self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
+                              "SEM_TICK_DA_CORRETORA", box_index, sl_points, tp_points)
 
             return False, 0
 
@@ -1340,11 +1643,18 @@ class MT5OrderManager:
 
             print(f"✅ ORDEM EXECUTADA: {order_type} {use_volume} ctros @ {entry_price:.1f} | Ticket #{res.order}")
 
+            self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, entry_price,
+                              res.order, res.retcode, True, "ORDEM_ACCEPTED", box_index, sl_val, tp_val)
+
             return True, res.order
 
         else:
 
             print(f"[ERRO MT5] RetCode={res.retcode}, Desc={res.comment}")
+
+            self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None,
+                              getattr(res, "retcode", None), False, f"REJEITADO_CORRETORA | {getattr(res, 'comment', '')}",
+                              box_index, sl_val, tp_val)
 
         return False, 0
 
@@ -1434,19 +1744,40 @@ class MT5OrderManager:
 
             print(f"🟢 [ABRINDO ORDEM MÃE] {current_dir} {MAIN_CONTRACTS} ctro(s) no Box #{box['index']}")
 
-            success, ticket = self.execute_market_order(
+            try:
 
-                order_type=current_dir,
+                success, ticket = self.execute_market_order(
 
-                comment=f"MAE_{box['index']}",
+                    order_type=current_dir,
 
-                volume=MAIN_CONTRACTS,
+                    comment=f"MAE_{box['index']}",
 
-                sl_points=0,
+                    volume=MAIN_CONTRACTS,
 
-                tp_points=0
+                    sl_points=0,
 
-            )
+                    tp_points=0,
+
+                    box_index=box["index"],
+
+                    preco_box=box["close"],
+
+                    acao="ORDEM_MAE",
+
+                )
+
+            except Exception as exc:
+
+                # Foi por aqui que um dia inteiro de sinais morreu sem deixar rastro: a exceção
+                # subia para o loop de ticks, que imprimia [AVISO STREAM] e seguia o baile.
+
+                self._audit_ordem("ORDEM_MAE", current_dir, MAIN_CONTRACTS, box["close"], None, None,
+                                  None, None, False,
+                                  f"EXCECAO_ANTES_DO_SEND | {type(exc).__name__}: {exc}", box["index"], 0, 0)
+
+                print(f"❌ [ORDEM ABORTADA ANTES DO ENVIO] {type(exc).__name__}: {exc}", flush=True)
+
+                return False, 0, "MAIN"
 
             if success:
 
@@ -1484,19 +1815,41 @@ class MT5OrderManager:
 
 
 
-            success, ticket = self.execute_market_order(
+            try:
 
-                order_type=current_dir,
+                success, ticket = self.execute_market_order(
 
-                comment=f"PIR_{pyramid_num}_{box['index']}",
+                    order_type=current_dir,
 
-                volume=PYRAMID_CONTRACTS,
+                    comment=f"PIR_{pyramid_num}_{box['index']}",
 
-                sl_points=PYRAMID_SL_POINTS,
+                    volume=PYRAMID_CONTRACTS,
 
-                tp_points=PYRAMID_TP_POINTS
+                    sl_points=PYRAMID_SL_POINTS,
 
-            )
+                    tp_points=PYRAMID_TP_POINTS,
+
+                    box_index=box["index"],
+
+                    preco_box=box["close"],
+
+                    acao="PIRAMIDE",
+
+                )
+
+            except Exception as exc:
+
+                # Mesmo guard da ordem mãe: sem isto a exceção subia para o loop de ticks, virava
+                # [AVISO STREAM] e a pirâmide morria sem deixar linha no diário.
+
+                self._audit_ordem("PIRAMIDE", current_dir, PYRAMID_CONTRACTS, box["close"], None, None,
+                                  None, None, False,
+                                  f"EXCECAO_ANTES_DO_SEND | {type(exc).__name__}: {exc}", box["index"],
+                                  PYRAMID_SL_POINTS, PYRAMID_TP_POINTS)
+
+                print(f"❌ [ORDEM ABORTADA ANTES DO ENVIO] {type(exc).__name__}: {exc}", flush=True)
+
+                return False, 0, "PYRAMID"
 
             if success:
 
@@ -1715,6 +2068,64 @@ def get_or_create_engine(sym):
     ENGINES[sym] = eng
     return eng
 
+def apply_ea_config(payload):
+    """Aplica na ponte a config de avaliação que está ligada na tela (SYNC_EA_CONFIG).
+
+    Muda apenas o JULGAMENTO do sinal — nenhum campo daqui dispara ordem. O que não vier no
+    payload mantém o valor anterior, para um app mais antigo não zerar os filtros por
+    acidente ao conectar.
+    """
+    changed = []
+
+    def _bool(key, target):
+        if key in payload:
+            val = bool(payload[key])
+            if EVAL_CONFIG[target] != val:
+                EVAL_CONFIG[target] = val
+                changed.append(f"{target}={val}")
+
+    def _num(key, target, cast):
+        if key in payload and payload[key] is not None:
+            try:
+                val = cast(payload[key])
+            except (TypeError, ValueError):
+                return
+            if val != EVAL_CONFIG[target]:
+                EVAL_CONFIG[target] = val
+                changed.append(f"{target}={val}")
+
+    if payload.get("strategyMode"):
+        mode = str(payload["strategyMode"])
+        if mode != EVAL_CONFIG["strategy_mode"]:
+            EVAL_CONFIG["strategy_mode"] = mode
+            changed.append(f"strategy_mode={mode}")
+
+    _bool("adaptiveThresholdEnabled", "adaptive")
+    _bool("consolidationFilterEnabled", "consolidation_enabled")
+    _bool("exhaustionFilterEnabled", "exhaustion_enabled")
+    _bool("requireCvdNewExtreme", "require_cvd_extreme")
+    _num("regimeLookbackBoxes", "regime_lookback", int)
+    _num("consolidationLookbackBoxes", "consolidation_lookback", int)
+    _num("consolidationErMax", "consolidation_er_max", float)
+    _num("exhaustionDeltaRatio", "exhaustion_ratio", float)
+    _num("sessionPercentile", "percentile", float)
+
+    # A base de Delta é calibrada por ativo (cada mercado tem outra liquidez por tijolo),
+    # então o número global da tela só se aplica ao ativo que está no gráfico.
+    sym = str(payload.get("symbol") or "").upper()
+    if sym in ENGINES and payload.get("minDeltaThreshold") is not None:
+        try:
+            eng_min = int(payload["minDeltaThreshold"])
+        except (TypeError, ValueError):
+            eng_min = 0
+        if eng_min > 0 and eng_min != ENGINES[sym].min_delta_threshold:
+            ENGINES[sym].min_delta_threshold = eng_min
+            changed.append(f"min_delta[{sym}]={eng_min}")
+
+    if changed:
+        print(" 🧠 REGRAS DO SINAL SINCRONIZADAS COM A TELA: " + ", ".join(changed), flush=True)
+    return changed
+
 def get_or_create_order_manager(sym):
     if sym in ORDER_MANAGERS:
         return ORDER_MANAGERS[sym]
@@ -1924,6 +2335,12 @@ async def send_account_info(websocket):
 
             "requireAuth": REQUIRE_AUTH,
 
+            "ordersBlocked": ordens_bloqueadas(),
+
+            "replayMode": REPLAY_MODE,
+
+            "travaAmbiente": ORDERS_BLOCKED,
+
             "armed": state["armed"],
 
             "symbol": SYMBOL,
@@ -1949,8 +2366,11 @@ async def send_account_info(websocket):
 
 
 async def send_today_session_backfill(websocket, target_symbol=None):
-    """Envia os candles M1 do pregão de hoje convertidos em ticks para popular o gráfico
-    imediatamente ao conectar, com suporte a cache multi-ativo e proteção multithread MT5."""
+    """Envia os candles M1 das últimas sessões (hoje + BACKFILL_SESSIONS-1 anteriores)
+    convertidos em ticks para popular o gráfico ao conectar.
+
+    Cada tick leva o seu dia (`session`): é o que permite ao app marcar onde um pregão
+    termina e o outro começa — com só o pregão de hoje na tela o gap de abertura é invisível."""
     global LAST_BACKFILL_CACHE
     sym = target_symbol or SYMBOL
     now = time.time()
@@ -1963,7 +2383,10 @@ async def send_today_session_backfill(websocket, target_symbol=None):
 
     def _safe_fetch_rates():
         with MT5_LOCK:
-            return mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M1, 0, 600)
+            # Uma sessão da B3 em M1 ≈ 480 barras; WDO/BIT passam de 600. Pede folga para
+            # o terminal devolver todas as sessões pedidas, não só a metade delas.
+            barras = max(1200, BACKFILL_SESSIONS * 800)
+            return mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M1, 0, barras)
 
     try:
         rates = None
@@ -1982,13 +2405,26 @@ async def send_today_session_backfill(websocket, target_symbol=None):
             return
 
         last_day = datetime.fromtimestamp(int(rates[-1]["time"]), timezone.utc).strftime("%Y-%m-%d")
-        today_rates = [
+        # Agrupa por dia de sessão e fica só com as últimas BACKFILL_SESSIONS sessões.
+        # `time` do MT5 já é a hora do servidor (BRT gravado como epoch UTC).
+        dias: list = []
+        for r in rates:
+            dia = datetime.fromtimestamp(int(r["time"]), timezone.utc).strftime("%Y-%m-%d")
+            if dia not in dias:
+                dias.append(dia)
+        dias = dias[-BACKFILL_SESSIONS:]
+        dias_set = set(dias)
+        if not dias:
+            print(f" ⚠️ [AVISO BACKFILL] MT5 sem sessões válidas para {sym}", flush=True)
+            return
+        selecionadas = [
             r for r in rates
-            if datetime.fromtimestamp(int(r["time"]), timezone.utc).strftime("%Y-%m-%d") == last_day
+            if datetime.fromtimestamp(int(r["time"]), timezone.utc).strftime("%Y-%m-%d") in dias_set
         ]
+        last_day = dias[-1]
         dec = 1 if "WDO" in sym or "DOL" in sym else 0
         bf_ticks = []
-        for r in today_rates:
+        for r in selecionadas:
             base_msc = (int(r["time"]) + MT5_BRT_OFFSET_SEC) * 1000
             o = round(float(r["open"]), dec)
             h = round(float(r["high"]), dec)
@@ -2013,6 +2449,7 @@ async def send_today_session_backfill(websocket, target_symbol=None):
                     "price": p,
                     "volume": v,
                     "aggressor": agg,
+                    "session": datetime.fromtimestamp(int(r["time"]), timezone.utc).strftime("%Y-%m-%d"),
                 })
 
         payload = {
@@ -2020,7 +2457,8 @@ async def send_today_session_backfill(websocket, target_symbol=None):
             "symbol": sym,
             "data": {
                 "ticks": bf_ticks,
-                "bars": len(today_rates),
+                "bars": len(selecionadas),
+                "sessions": dias,
                 "date": last_day,
                 "symbol": sym,
                 "source": "MT5_M1_ESTIMATED"
@@ -2028,7 +2466,11 @@ async def send_today_session_backfill(websocket, target_symbol=None):
         }
         LAST_BACKFILL_CACHE[sym] = {"payload": payload, "time": now}
         await send_json(websocket, payload)
-        print(f" 📊 Gráfico do dia ({sym} - {last_day}) enviado: {len(today_rates)} barras M1 ({len(bf_ticks)} ticks) para {get_peer_ip(websocket)}", flush=True)
+        print(
+            f" 📊 Gráfico ({sym}) {len(dias)} pregão(ões) {dias[0]}..{last_day}: "
+            f"{len(selecionadas)} barras M1 ({len(bf_ticks)} ticks) para {get_peer_ip(websocket)}",
+            flush=True,
+        )
 
     except Exception as exc:
         print(f" ⚠️ [ERRO BACKFILL] Falha ao processar M1 de {sym}: {exc}", flush=True)
@@ -2036,6 +2478,7 @@ async def send_today_session_backfill(websocket, target_symbol=None):
 async def ws_handler(websocket):
     global SYMBOL, ASSET_LABEL, ASSET_DECIMALS, ASSET_TICK_SIZE, ASSET_POINT_VALUE, BOX_POINTS, LAST_BACKFILL_PAYLOAD
     global AUTH_TOKEN, ORDER_MANAGER, RENKO_ENGINE, LAST_TICK_TIMES, LAST_BACKFILL_CACHE
+    global REPLAY_MODE
 
     peer = get_peer_ip(websocket)
 
@@ -2105,7 +2548,7 @@ async def ws_handler(websocket):
 
                     await send_account_info(websocket)
 
-                    print(f" 🔑 AUTH OK de {peer} — ponte {'ARMADA (entradas liberadas)' if state['armed'] else 'EM SEGURO (sem entradas)'}", flush=True)
+                    print(f" 🔑 AUTH OK de {peer} — ponte {'ARMADA (entradas liberadas)' if state['armed'] else 'EM SEGURO (sem entradas)'}{' + TRAVA DE EXECUÇÃO ligada (nenhuma entrada sai)' if ordens_bloqueadas() else ''}", flush=True)
 
                     await send_today_session_backfill(websocket, SYMBOL)
 
@@ -2129,7 +2572,70 @@ async def ws_handler(websocket):
 
                 await send_json(websocket, {"type": "ARM_RESULT", "data": {"armed": state["armed"]}})
 
-                print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if state['armed'] else '🔒 PONTE EM SEGURO: nenhuma entrada nova'} — {peer}", flush=True)
+                print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if state['armed'] else '🔒 PONTE EM SEGURO: nenhuma entrada nova'}{' — mas TRAVA ligada: nenhuma entrada sai de fato' if ordens_bloqueadas() else ''} — {peer}", flush=True)
+
+                continue
+
+
+
+            if action == "SET_REPLAY_MODE":
+
+                # Mesmo contrato de segurança do ARM: só quem provou o token mexe na execução.
+
+                # Ligar é sempre aceito. Desligar com ORDERS_BLOCKED=1 no ambiente é RECUSADO em
+
+                # voz alta -- a trava decidida no PC do MT5 não pode ser derrubada por quem está do
+
+                # outro lado do socket (a tela é um cliente, não é a autoridade da máquina).
+
+                if REQUIRE_AUTH and not state["authenticated"]:
+
+                    print(f" ⛔ SET_REPLAY_MODE de {peer} sem autenticação — ignorado", flush=True)
+
+                    continue
+
+                wants = bool(data.get("on", True))
+
+                recusa_ambiente = (not wants) and ORDERS_BLOCKED
+
+                REPLAY_MODE = wants
+
+                if REPLAY_MODE:
+
+                    nota = ("MODO REPLAY/VALIDAÇÃO ligado: ticks, histórico, sinais e diário seguem "
+                            "servidos, mas nenhuma ordem de entrada sai, armada ou não")
+
+                elif recusa_ambiente:
+
+                    nota = ("o modo replay da tela foi desligado, mas a TRAVA DE AMBIENTE "
+                            "(ORDERS_BLOCKED=1) continua ligada neste processo -- para operar de "
+                            "verdade, reinicie a ponte sem a variável")
+
+                else:
+
+                    nota = "entradas liberadas de novo para os clientes ARMADOS (pregão ao vivo)"
+
+                payload = {
+
+                    "on": REPLAY_MODE,
+
+                    "blocked": ordens_bloqueadas(),
+
+                    "envLocked": ORDERS_BLOCKED,
+
+                    "recusaAmbiente": recusa_ambiente,
+
+                    "note": nota,
+
+                }
+
+                # Toda tela conectada precisa saber da mesma verdade: se só a que clicou soubesse,
+
+                # o outro notebook do operador mostraria 'Robô LIGADO' enquanto o processo segura tudo.
+
+                await broadcast_to_web({"type": "REPLAY_MODE_RESULT", "data": payload})
+
+                print(f" {'🎥 MODO REPLAY/VALIDAÇÃO LIGADO' if REPLAY_MODE else '▶️ MODO REPLAY/VALIDAÇÃO desligado'} — {nota} — {peer}", flush=True)
 
                 continue
 
@@ -2157,6 +2663,15 @@ async def ws_handler(websocket):
                     if target_sym in ENGINES:
                         ENGINES[target_sym].box_points = BOX_POINTS
                     print(f" 📏 Escala Renko alterada para {BOX_POINTS} pts ({target_sym})", flush=True)
+                continue
+
+            if action == "SYNC_EA_CONFIG":
+                # A tela é a dona das regras: o operador mexe no limiar/filtros ali e a ponte
+                # passa a julgar com aqueles números, sem reiniciar nada. Julga, não manda ordem.
+                if REQUIRE_AUTH and not state["authenticated"]:
+                    continue
+                apply_ea_config(data.get("config") or data)
+                await send_json(websocket, {"type": "EA_CONFIG_RESULT", "data": dict(EVAL_CONFIG)})
                 continue
 
             if action == "GET_BACKFILL":
@@ -2193,7 +2708,7 @@ async def ws_handler(websocket):
                 RENKO_ENGINE = RenkoFlowEngine(box_points=BOX_POINTS)
                 if ref_new and (ref_new.last > 0 or ref_new.bid > 0):
                     p0 = float(ref_new.last if ref_new.last > 0 else ref_new.bid)
-                    LAST_TICK_TIMES[SYMBOL] = int(ref_new.time_msc)
+                    definir_cursor_ticks(SYMBOL, int(ref_new.time_msc))
                     RENKO_ENGINE.init_engine(p0, LAST_TICK_TIMES[SYMBOL] + MT5_BRT_OFFSET_MSC)
                     print(f" 🎯 Renko reancorado para {SYMBOL} em {p0} pts (Box {BOX_POINTS} pts)", flush=True)
                 else:
@@ -2252,6 +2767,26 @@ async def ws_handler(websocket):
 
 
 
+            if action == "LIST_LOCAL_PREGOES":
+
+                req_symbol = str(data.get("symbol") or SYMBOL)
+
+                import backtest_ticks_reais
+
+                pregoes = await asyncio.to_thread(backtest_ticks_reais.list_local_pregoes, req_symbol)
+
+                await send_json(websocket, {
+
+                    "type": "LOCAL_PREGOES_LIST",
+
+                    "data": pregoes
+
+                })
+
+                continue
+
+
+
             if action == "LIST_PREGOES":
 
                 req_symbol = str(data.get("symbol") or SYMBOL)
@@ -2286,7 +2821,15 @@ async def ws_handler(websocket):
 
                     str(data.get("symbol") or SYMBOL),
 
-                    data.get("days") or 1
+                    data.get("days") or 1,
+
+                    # Resolução do bucket: `None` = a escada escolhe pelo teto de payload; um valor
+                    # da tela pede caminho mais fino (mais eventos, mais fiel) ou mais grosso (rápido).
+                    bucket_ms=data.get("resolucaoMs"),
+
+                    desde=data.get("desde"),
+
+                    ate=data.get("ate"),
 
                 )
 
@@ -2346,21 +2889,36 @@ async def ws_handler(websocket):
 
                     else:
 
-                        ORDER_MANAGER.execute_market_order(
+                        try:
 
-                            data.get("type", "BUY"),
+                            ORDER_MANAGER.execute_market_order(
 
-                            comment=data.get("comment", "WEB_ORDER"),
+                                data.get("type", "BUY"),
 
-                            volume=data.get("contracts", 1),
+                                comment=data.get("comment", "WEB_ORDER"),
 
-                            sl_points=data.get("sl", 0) or 0,
+                                volume=data.get("contracts", 1),
 
-                            tp_points=data.get("tp", 0) or 0,
+                                sl_points=data.get("sl", 0) or 0,
 
-                            magic=order_magic
+                                tp_points=data.get("tp", 0) or 0,
 
-                        )
+                                magic=order_magic,
+
+                                acao="APP_ORDER_SEND",
+
+                            )
+
+                        except Exception as exc:
+
+                            # Clique manual na tela: a falha tem de aparecer no diário e no console da
+                            # ponte, não derrubar o handler da conexão (o operador ficaria sem resposta).
+
+                            ORDER_MANAGER._audit_ordem("APP_ORDER_SEND", data.get("type", "BUY"),
+                                                       data.get("contracts", 1), None, None, None, None, None,
+                                                       False, f"EXCECAO_ANTES_DO_SEND | {type(exc).__name__}: {exc}")
+
+                            print(f"❌ [ORDEM DA TELA ABORTADA ANTES DO ENVIO] {type(exc).__name__}: {exc}", flush=True)
 
                 elif action == "ORDER_PARTIAL_CLOSE":
 
@@ -2522,9 +3080,97 @@ def _history_tick_record(raw, seq):
 
 
 
-async def handle_request_history(websocket, req_id, symbol, days):
+async def _enviar_histico_replay(websocket, req_id, payload):
+    """Despacha a série comprimida de ticks reais nos chunks do protocolo HISTORY_*.
 
-    """Histórico real para Replay/Coletor via barras M1 do MT5 (rápido e com volume real da B3)."""
+    Os lotes vêm do `replay_dados` já com o tamanho do chunk, mas aqui eles são achatados e
+    recortados de novo em `HISTORY_CHUNK_TICKS`: se as duas constantes divergirem no futuro, o
+    que quebra é o protocolo (chunks do tamanho errado), não a fidelidade dos dados.
+    """
+    planos = [t for lote in payload["lotes"] for t in lote]
+    total = len(planos)
+    chunks = 0
+    fid = payload.get("fidelidade") or {}
+    for start in range(0, total, HISTORY_CHUNK_TICKS):
+        await send_json(websocket, {
+            "type": "HISTORY_CHUNK",
+            "data": {
+                "reqId": req_id,
+                "index": chunks,
+                "volumeSource": VOLUME_SOURCE_TICKS_REAIS,
+                "resolucaoMs": payload["resolucaoMs"],
+                "ticks": planos[start:start + HISTORY_CHUNK_TICKS],
+            },
+        })
+        chunks += 1
+
+    await send_json(websocket, {
+        "type": "HISTORY_DONE",
+        "data": {
+            "reqId": req_id,
+            "count": total,
+            "chunks": chunks,
+            "days": len(payload["dias"]),
+            "diasServidos": payload["dias"],
+            "arquivosServidos": payload["arquivos"],
+            "symbol": payload["symbol"],
+            "volumeSource": VOLUME_SOURCE_TICKS_REAIS,
+            "resolucaoMs": payload["resolucaoMs"],
+            # existe apenas quando o orçamento obrigou a trocar a resolução pedida
+            "resolucaoPedidaMs": payload.get("resolucaoPedidaMs"),
+            "ticksReaisLidos": payload["ticks_reais"],
+            "buckets": payload["buckets"],
+            "contratosCompra": payload["contratos_buy"],
+            "contratosVenda": payload["contratos_sell"],
+            # a faixa de fidelidade medida via junto com a resolução: "TICKS_REAIS" diz de onde
+            # veio o dado, mas é o alinhamento que diz se o replay pode julgar limiar de estratégia
+            # ou só o caminho. Omitir isso seria a tela vender validação onde só há ensaio.
+            "validaEstrategia": payload.get("validaEstrategia"),
+            "alinhamentoMedido": fid.get("alinhamento"),
+            "erroDeltaMedido": fid.get("erro_delta"),
+            "sinaisRecuperados": fid.get("sinais"),
+            "nota": (f"Fita real: {payload['ticks_reais']:,} ticks de negócio comprimidos em "
+                     f"{payload['buckets']:,} buckets de {payload['resolucaoMs']} ms "
+                     f"({total:,} eventos). Σcompra/Σvenda e o caminho de preço são os da fita; "
+                     f"viradas dentro de um bucket não existem nesta série."
+                     + ("" if payload.get("validaEstrategia") is True else
+                        f" FORA DA FAIXA VALIDADA: a {payload['resolucaoMs']} ms o Δ por box mede "
+                        f"{fid.get('erro_delta', float('nan')):.0%} de erro contra a fita cheia -- "
+                        f"serve para caminho, não para calibrar limiar."
+                        if payload.get("validaEstrategia") is False else
+                        f" FIDELIDADE NÃO MEDIDA para {payload['resolucaoMs']} ms: a série é a fita "
+                        f"real, mas o Δ desta resolução não foi medido contra a fita cheia, então "
+                        f"não se pode afirmar que calibra limiar."))
+                     + (f" Resolução PEDIDA {payload['resolucaoPedidaMs']} ms não coube no orçamento "
+                        f"de bytes da resposta; servido {payload['resolucaoMs']} ms."
+                        if payload.get("resolucaoPedidaMs") else ""),
+        },
+    })
+
+    print(f"📜 HISTÓRICO (TICKS REAIS) a {get_peer_ip(websocket)}: {total:,} eventos de "
+          f"'{payload['symbol']}' ({', '.join(payload['dias'])}) — fita de "
+          f"{payload['ticks_reais']:,} ticks em buckets de {payload['resolucaoMs']} ms, "
+          f"{chunks} chunk(s), arquivos: {', '.join(payload['arquivos'])}", flush=True)
+
+
+async def handle_request_history(websocket, req_id, symbol, days, bucket_ms=None, desde=None, ate=None):
+
+    """Histórico do replay: fita REAL de disco quando existe, M1 rotulado quando não existe.
+
+    Antes este atendimento fabricava 4 ticks por barra M1 com `vol = tick_volume // 4` — e
+    `tick_volume` é CONTAGEM de ticks, não contratos. Medido contra a fita de 04/Nov/2026
+    (WINZ26, 08:55-17:30): a tela via 1.012x menos eventos com 'volume' 10,5x menor que os
+    21.492.107 contratos negociados. Delta, CVD e convergência deixavam de significar qualquer
+    coisa, então o replay servia para ensaiar a tela e nada para validar estratégia.
+
+    Agora a fonte primária é `replay_dados.servir_histico`, que lê os MESMOS recortes que
+    `reproduzir_pregao.py` usa e comprime por bucket preservando caminho de preço e fluxo por
+    lado. O M1 continua como fallback legítimo (dia que não foi extraído), mas sai rotulado
+    `M1_RATE` com a resolução e a nota da fonte, para a tela poder dizer de onde veio.
+
+    Custo: ler 2,1M de linhas de um .gz e comprimir leva segundos de CPU/disco, por isso vai para
+    `asyncio.to_thread` — nunca encosta no laço de ticks nem no `MT5_LOCK`.
+    """
 
     try:
 
@@ -2536,6 +3182,39 @@ async def handle_request_history(websocket, req_id, symbol, days):
 
 
 
+    # ---- caminho 1: a fita real do pregão, comprimida ------------------------------------
+    motivo_fallback = ""
+    if REPLAY_DADOS_ENABLED:
+
+        try:
+
+            payload = await asyncio.to_thread(
+
+                replay.servir_histico, symbol, days, bucket_ms, desde, ate
+
+            )
+
+        except Exception as exc:
+
+            payload = None
+
+            motivo_fallback = f"replay_dados: {exc}"
+
+            print(f"[AVISO] replay de ticks reais falhou para {symbol}: {exc}", flush=True)
+
+        else:
+
+            if payload is None:
+
+                motivo_fallback = f"nenhum pregão de {symbol} em disco"
+
+        if payload:
+
+            await _enviar_histico_replay(websocket, req_id, payload)
+
+            return
+
+    # ---- caminho 2: barras M1 (fallback, rotulado como o que é) --------------------------
     try:
 
         bars_needed = min(10000, days * 600)
@@ -2644,7 +3323,9 @@ async def handle_request_history(websocket, req_id, symbol, days):
 
                 "index": chunks,
 
-                "volumeSource": "M1_RATE",
+                "volumeSource": VOLUME_SOURCE_M1,
+
+                "resolucaoMs": 60_000,
 
                 "ticks": ticks[start:start + HISTORY_CHUNK_TICKS]
 
@@ -2672,13 +3353,21 @@ async def handle_request_history(websocket, req_id, symbol, days):
 
             "symbol": symbol,
 
-            "volumeSource": "M1_RATE"
+            "volumeSource": VOLUME_SOURCE_M1,
+
+            "resolucaoMs": 60_000,
+
+            "nota": (f"Fallback M1: 4 ticks fabricados por barra de 1 minuto "
+                     f"({total:,} eventos). O 'volume' aqui é contagem de ticks dividida em 4, "
+                     f"NÃO contratos negociados — Delta e CVD desta série não medem estratégia. "
+                     f"{motivo_fallback}")
 
         }
 
     })
 
-    print(f"📜 HISTÓRICO enviado a {get_peer_ip(websocket)}: {total} ticks de '{symbol}' ({days} dia(s)) em {chunks} chunk(s).", flush=True)
+    print(f"📜 HISTÓRICO (M1, fallback) a {get_peer_ip(websocket)}: {total} ticks sintéticos de "
+          f"'{symbol}' ({days} dia(s)) em {chunks} chunk(s). Motivo: {motivo_fallback or 'M1 pedido'}", flush=True)
 
 
 
@@ -2686,15 +3375,86 @@ async def handle_request_history(websocket, req_id, symbol, days):
 
 STREAM_SYMBOLS = ["WINZ26", "WDOZ26", "BITX26"]
 LAST_TICK_TIMES = {s: 0 for s in STREAM_SYMBOLS}
+# Quantos ticks DESSE MESMO milissegundo já entraram. O MT5 emite vários ticks na mesma ms
+# (bid/ask/last mudando dentro do mesmo milissegundo) e o dedup antigo por `<=` no `time_msc`
+# deixava passar só o primeiro — 11,5% da fita do WIN perdidos em 04/Nov.
+LAST_TICK_OCC = {s: None for s in STREAM_SYMBOLS}
+# A fita do WIN teve pico de 1.326 ticks em um único segundo (04/Nov/2026), então o cap precisa
+# ficar acima disso com folga: lote cheio = cauda do segundo que nunca seria devolvida.
+TICK_BATCH_MAX = 5000
+
+
+def definir_cursor_ticks(s, raw_msc):
+    """Marca até onde a fita daquele ativo já foi consumida pelo motor."""
+    LAST_TICK_TIMES[s] = int(raw_msc)
+    # `None` = conhecemos o MILISSEGUNDO do cursor mas não qual ocorrência dele já entrou (é o
+    # caso do tick lido em `symbol_info_tick` na boot/reancora), então aquela ms inteira é velha.
+    LAST_TICK_OCC[s] = None
+
+
+def cursor_de_ingestao(ticks, ultimo_msc, ultimo_oc):
+    """Índice do primeiro tick daquele lote que ainda NÃO entrou no motor.
+
+    A consulta é ancorada no segundo do último tick processado e por isso relê a cabeça daquele
+    segundo a cada poll. Cortar pelo `searchsorted` (em C, sobre o array do MT5) é o que mantém
+    o loop barato nos picos, e o `ultimo_oc` é o que impede de pular irmãos do mesmo ms que
+    chegaram depois do nosso cursor — sem isso a correção viraria perda de novo.
+    """
+    n = len(ticks)
+    if n == 0 or ultimo_msc <= 0:
+        return 0
+    if isinstance(ticks, (list, tuple)):
+        # caminho dos testes offline, sem ndarray do MT5
+        tempos = [int(t["time_msc"]) for t in ticks]
+        inicio = bisect_left(tempos, ultimo_msc)
+        fim = bisect_right(tempos, ultimo_msc)
+    else:
+        tempos = ticks["time_msc"]
+        inicio = int(np.searchsorted(tempos, ultimo_msc, side="left"))
+        fim = int(np.searchsorted(tempos, ultimo_msc, side="right"))
+    if fim == inicio:
+        return inicio
+    if ultimo_oc is None:
+        return fim
+    return inicio + min(int(ultimo_oc) + 1, fim - inicio)
+
+
+def anchor_da_consulta(s, server_time_sec):
+    """Segundo onde a consulta da fita daquele ativo deve começar.
+
+    NÃO é `server_time_sec - 3`: com um cap por consulta, a janela deslizante abandonava a
+    cauda dos segundos concorridos (a fita do WIN passa de 1.000 ticks num segundo no pico).
+    Ancorar no segundo do último tick PROCESSADO relê aquele segundo — o `cursor_de_ingestao`
+    corta o que já entrou — e por isso nada fica para trás, nem quando o loop atrasa.
+    """
+    ultimo_msc = LAST_TICK_TIMES.get(s, 0)
+    return ultimo_msc // 1000 if ultimo_msc > 0 else int(server_time_sec)
+
+
+def cursor_seguinte(s, raw_msc):
+    """Avança o cursor da fita para este tick e devolve a ocorrência dele no milissegundo.
+
+    Como o lote chega ordenado, todos os irmãos do mesmo ms são consecutivos: basta comparar o
+    ms com o do último tick consumido. É essa ocorrência que o `cursor_de_ingestao` usa para
+    retomar exatamente de onde paramos quando a consulta relê o mesmo segundo.
+    """
+    if raw_msc == LAST_TICK_TIMES.get(s, 0):
+        oc = int(LAST_TICK_OCC.get(s) or 0) + 1
+    else:
+        oc = 0
+    LAST_TICK_TIMES[s] = int(raw_msc)
+    LAST_TICK_OCC[s] = oc
+    return oc
+
 
 async def mt5_stream_loop():
-    global LAST_TICK_TIMES, RENKO_ENGINE, ENGINES, ORDER_MANAGERS
+    global LAST_TICK_TIMES, LAST_TICK_OCC, RENKO_ENGINE, ENGINES, ORDER_MANAGERS
     for s in STREAM_SYMBOLS:
         with MT5_LOCK:
             mt5.symbol_select(s, True)
             ref_i = mt5.symbol_info_tick(s)
             if ref_i:
-                LAST_TICK_TIMES[s] = int(ref_i.time_msc)
+                definir_cursor_ticks(s, ref_i.time_msc)
                 eng = get_or_create_engine(s)
                 p0 = float(ref_i.last if ref_i.last > 0 else ref_i.bid)
                 if p0 > 0:
@@ -2709,18 +3469,24 @@ async def mt5_stream_loop():
                 if not ref:
                     continue
 
-                server_time_sec = int(ref.time)
+                ultimo_msc = LAST_TICK_TIMES.get(s, 0)
+                # A âncora é o SEGUNDO do último tick que entrou no motor, e não 3s atrás do
+                # último tick que o terminal viu: com cap por consulta, a cauda dos segundos
+                # concorridos saía da janela sem nunca ter sido devolvida (14,1% da fita).
+                anchor_sec = anchor_da_consulta(s, int(ref.time))
                 with MT5_LOCK:
-                    ticks = mt5.copy_ticks_from(s, server_time_sec - 3, 100, mt5.COPY_TICKS_ALL)
+                    ticks = mt5.copy_ticks_from(s, anchor_sec, TICK_BATCH_MAX, mt5.COPY_TICKS_ALL)
 
                 if ticks is not None and len(ticks) > 0:
+                    if len(ticks) >= TICK_BATCH_MAX:
+                        print(f"⚠️ [STREAM {s}] lote cheio ({TICK_BATCH_MAX}): pode haver tick além do cap",
+                              flush=True)
                     eng = get_or_create_engine(s)
                     mgr = get_or_create_order_manager(s)
-                    for tick in ticks:
+                    corte = cursor_de_ingestao(ticks, ultimo_msc, LAST_TICK_OCC.get(s))
+                    for tick in ticks[corte:]:
                         raw_msc = int(tick['time_msc'])
-                        if raw_msc <= LAST_TICK_TIMES.get(s, 0):
-                            continue
-                        LAST_TICK_TIMES[s] = raw_msc
+                        cursor_seguinte(s, raw_msc)
 
                         price = _tick_price(tick)
                         if price <= 0:
@@ -2749,6 +3515,12 @@ async def mt5_stream_loop():
                         new_box, signal, reason = eng.process_tick(price, volume, aggressor, ts_msc)
                         if new_box:
                             print(f"[{datetime.fromtimestamp(ts_msc/1000).strftime('%H:%M:%S')}] Box {s} #{new_box['index']}: {new_box['direction']} | {new_box['open']} -> {new_box['close']}", flush=True)
+                            # Uma linha por box fechado, sinal OU corte, com o motivo do veredito
+                            if AUDITORIA_ENABLED:
+                                try:
+                                    audit_registrar_box(new_box, new_box.get("audit"), "VIVO", s)
+                                except Exception as _audit_exc:
+                                    print(f"[AVISO] falha no diário de boxes: {_audit_exc}", flush=True)
                             await broadcast_to_web({"type": "BOX_CLOSED", "symbol": s, "data": new_box})
                             mgr.check_and_clean_expired_pending(new_box["index"])
                             mgr.watch_closed_pyramids()
@@ -2766,8 +3538,15 @@ async def mt5_stream_loop():
                                         "timestamp": ts_msc
                                     }
                                 })
-                                # Se a ponte estiver armada em qualquer cliente, executa com o magic number do ativo
-                                if any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
+                                # Se a ponte estiver armada em qualquer cliente, executa com o magic number do ativo.
+                                # A trava de ambiente passa na frente do armado: um cliente ARMADO (a tela reenvia
+                                # `armed` no AUTH sozinha) jamais pode abrir posição enquanto o operador decidiu
+                                # rodar em seguro.
+                                if ordens_bloqueadas():
+                                    print(f" 🛑 ORDEM BLOQUEADA POR TRAVA [{'ORDERS_BLOCKED' if ORDERS_BLOCKED else 'MODO REPLAY'}] [{s}]: sinal "
+                                          f"{signal} ({reason}) calculado e transmitido, nenhuma ordem enviada",
+                                          flush=True)
+                                elif any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
                                     mgr.execute_pyramid_confluence(signal, new_box)
 
             await asyncio.sleep(0.01)
@@ -2825,15 +3604,75 @@ async def mt5_equity_broadcaster_loop():
 
 
 
+def capturar_extrato_mt5(rotulo="inicial"):
+    """Grava no disco o extrato REAL de negócios da conta e o snapshot de saldo.
+
+    É a única prova de performance que não depende de print de console: os deals da
+    corretora dizem o que de fato aconteceu (PnL, comissão, preço de fill), e é contra eles
+    que a reprodução offline é comparada. Regravável: o arquivo do dia é substituído, não
+    anexado, porque é um snapshot da história.
+    """
+    if not AUDITORIA_ENABLED:
+        return 0
+    try:
+        with MT5_LOCK:
+            conta = mt5.account_info()
+            hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            inicio = int(hoje.timestamp())
+            deals = mt5.history_deals_get(inicio, inicio + 86400)
+        if conta:
+            audit_salvar_conta(conta)
+        lista = list(deals or [])
+        caminho = audit_salvar_deals(lista)
+        print(f" 🧾 EXTRATO MT5 GRAVADO ({rotulo}): {len(lista)} negócio(s) → {os.path.basename(caminho)}", flush=True)
+        return len(lista)
+    except Exception as exc:
+        print(f"[AVISO] falha ao gravar extrato MT5: {exc}", flush=True)
+        return 0
+
+
+async def extrato_mt5_loop():
+    """Renova o extrato real a cada 5 minutos e no fechamento, sem depender do app aberto."""
+    while True:
+        await asyncio.sleep(300)
+        capturar_extrato_mt5("periodico")
+
+
 async def main():
 
     global ORDER_MANAGER, RENKO_ENGINE
 
-    if not mt5.initialize():
+    # O caminho é obrigatório nesta máquina: existem DUAS instalações do MT5
+    # (`C:\Program Files\MetaTrader 5` e `C:\Program Files\MetaTrader 5 Terminal`).
+    # Sem `path`, a lib abre a instalação padrão — que não é a da XP e não está
+    # logada — e devolve (-6, 'Terminal: Authorization failed').
+    #
+    # O terminal também cai de sessão sozinho (queda de rede / servidor demo). Antes
+    # a ponte morria no primeiro (-6) e o operador tinha que religar na mão; agora ela
+    # espera a autorização voltar e sobe o WebSocket na hora em que voltar.
+    tentativa = 0
 
-        print(f"[ERRO] Falha ao iniciar MT5: {mt5.last_error()}", flush=True)
+    while not mt5.initialize(path=MT5_PATH):
 
-        sys.exit(1)
+        tentativa += 1
+
+        print(
+            f"[AVISO] MT5 sem autorização em {MT5_PATH} — {mt5.last_error()} — "
+            f"tentativa {tentativa}, nova checagem em 5s",
+            flush=True,
+        )
+
+        await asyncio.sleep(5)
+
+
+
+    conta = mt5.account_info()
+
+    print(
+        f" MT5 conectado: conta {getattr(conta, 'login', '?')} ({getattr(conta, 'server', '?')}) — "
+        f"ativo {SYMBOL}",
+        flush=True,
+    )
 
 
 
@@ -2848,6 +3687,23 @@ async def main():
     server = await websockets.serve(ws_handler, WS_HOST, WS_PORT)
 
     print(f" Servidor WebSocket ativo em toda a rede local na porta {WS_PORT} — pronto para conectar!", flush=True)
+
+    # A trava precisa aparecer no boot, antes de qualquer conversa com a tela: se o operador for
+    # rodar replay/validação, é aqui que ele confere que nenhuma ordem de entrada sai nesta sessão.
+    if ORDERS_BLOCKED:
+        print(" 🛑 TRAVA DE EXECUÇÃO ATIVA (ORDERS_BLOCKED): a ponte serve ticks, histórico, sinais e "
+              "diário, mas NÃO envia nenhuma ordem de entrada -- modo replay/validação. Essa trava do "
+              "ambiente só cai reiniciando o processo sem a variável.", flush=True)
+    else:
+        print(" ▶️  TRAVA DE EXECUÇÃO desligada: entradas liberadas para clientes ARMADOS (pregão ao "
+              "vivo). Para ensaiar sem tocar na conta, ligue o MODO REPLAY na tela (ou rode com "
+              "ORDERS_BLOCKED=1).", flush=True)
+
+    # Extrato da corretora no disco assim que a ponte enxerga a conta, e de 5 em 5 minutos:
+    # se o processo cair, o pregão já está auditado até aquele ponto.
+    capturar_extrato_mt5("ao_ligar")
+
+    asyncio.create_task(extrato_mt5_loop())
 
     try:
 

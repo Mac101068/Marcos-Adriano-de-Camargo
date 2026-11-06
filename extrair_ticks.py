@@ -21,7 +21,7 @@ CAMINHO_MT5 = r"C:\Program Files\MetaTrader 5 Terminal\terminal64.exe"
 ATIVOS_CONFIG = {
     "WINZ26": {
         "inicio": datetime(2026, 9, 1),
-        "fim": datetime(2026, 11, 4, 23, 59, 59),
+        "fim": datetime(2026, 11, 5, 23, 59, 59),
         "desc": "Mini-Índice B3 (Contrato Vigente)"
     },
     "WDOZ26": {
