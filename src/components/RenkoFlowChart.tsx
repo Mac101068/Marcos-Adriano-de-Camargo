@@ -21,6 +21,8 @@ import {
 } from '../assets/assetRegistry';
 import { ChartControlSidebar } from './ChartControlSidebar';
 import { BoletaTicket, BOLETA_GAP, BOLETA_WIDTH, STORAGE_KEY_OPEN, HedgeBook } from './BoletaTicket';
+import { FunnelMetricsPanel } from './FunnelMetricsPanel';
+import type { FunnelMetricsSnapshot } from '../utils/funnelMetrics';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
@@ -148,6 +150,18 @@ interface RenkoFlowChartProps {
    * O gráfico continua medindo tudo em PONTOS; o spec só entra na conversão e na formatação.
    */
   asset?: AssetSpec;
+  /**
+   * Retrato do funil auto-calibrado (calculado no App a partir do medidor de regime da série
+   * ativa). Quando presente, a faixa do funil aparece no rodapé do gráfico; ausente (ex.: série
+   * Tempo, sem robô), a faixa some. Mostra e afina as alavancas do corte (via `onFunnelPatch`).
+   */
+  funnelMetrics?: FunnelMetricsSnapshot;
+  /**
+   * Escrita das alavancas do funil (Delta físico / Percentil / Piso / Divergência). No App é o
+   * mesmo funil da boleta (`patchActiveStrategy`), que persiste na `SavedStrategy` ativa. Sem ele,
+   * a faixa fica em só leitura.
+   */
+  onFunnelPatch?: (patch: Partial<AutomationConfig>) => void;
 }
 
 interface FlowHeikinAshi {
@@ -225,6 +239,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   priceLevels = [],
   vwapCurve,
   asset = ASSETS[DEFAULT_ASSET_ID],
+  funnelMetrics,
+  onFunnelPatch,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -3623,6 +3639,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           </div>
         </>
       )}
+
+      {/* ========================================================================= */}
+      {/* FAIXA DO FUNIL: o limiar CALCULADO do pregão exposto para avaliação, no     */}
+      {/* espaço livre abaixo do canvas. Só aparece com métricas (renko/range); na    */}
+      {/* série Tempo (sem robô) o App não entrega e a faixa some.                    */}
+      {/* ========================================================================= */}
+      {funnelMetrics && <FunnelMetricsPanel metrics={funnelMetrics} onPatchConfig={onFunnelPatch} />}
 
       {/* ========================================================================= */}
       {/* RODAPÉ ENXUTO: só a dica de interação (a legenda migrou para a engrenagem)  */}

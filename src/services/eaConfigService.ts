@@ -38,8 +38,10 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   boxPoints: 50, // 10R no Mini-Índice
   contracts: 1, // 1 contrato padrão na Ordem Mãe
   minDeltaThreshold: 50, // Δ físico: agora só VALE NO AQUECIMENTO (<10 boxes do dia). No bench (10 réplicas × 10d) Δ50 dominou Δ100; abaixo de ~50 é platô
-  adaptiveThresholdEnabled: true, // LIGADO por padrão: o corte passa a ser AUTO-CALIBRADO pelo próprio pregão (P60 + piso 1,3× média do dia; zero valor físico). Base real WINZ26 (11 pregões): PF 2,43→3,94, DD 759→318, trades −56%; dia lateral deixa de virar roleta
-  flowDivergenceMin: 0.4, // Divergência de fluxo mínima (escala-free): só vale box com |Δ| ≥ 40% do volume do tijolo. Único braço com TODOS os pregões positivos na base real. 0/undefined desliga
+  adaptiveThresholdEnabled: true, // LIGADO por padrão: o corte é AUTO-CALIBRADO pelo próprio pregão (percentil P70 + piso 1,6× a média do dia; zero valor físico). Base real WINZ26 (11 pregões): PF 3,71→4,17 e R$/trade 15,9→21,4 mantendo os 11 pregões positivos — sobe a qualidade por trade (expectancy), o que tira um EA do empate
+  adaptiveThresholdPercentile: 0.7, // Percentil da agressão do próprio dia que vira corte (SEL-A: P70). O piso costuma mandar; no bench o percentil é alavanca fraca
+  adaptiveFloorMultiple: 1.6, // Piso: mínimo de 1,6× a média das agressões do dia (SEL-A) para dia morto não afrouxar o funil
+  flowDivergenceMin: 0.5, // Divergência de fluxo mínima (escala-free): só vale box com |Δ| ≥ 50% do volume do tijolo (SEL-A). Mais seletivo que os 40% do Ciclo 17 — PF e R$/trade maiores mantendo todos os pregões positivos. 0/undefined desliga
   regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
   consolidationFilterEnabled: false, // Bench A/B (3 seeds × real): o filtro ER silencia scalps de pirâmide lucrativos — ligado derruba a expectativa de +5,4 para +2,0 R$/tr e sobe o DD. Voltamos ao "Padrão DESLIGADO" que o tipo documenta.
   consolidationLookbackBoxes: 10, // Janela da Efficiency Ratio (boxes recentes)
@@ -130,9 +132,11 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       accountMode: 'HEDGE',
       maxSimultaneousPositions: 15,
       hedgeOppositeAction: 'CLOSE_OPPOSITE',
-      minDeltaThreshold: 50, // Δ físico do aquecimento; o corte de verdade é o auto-calibrado (linha acima, herada do DEFAULT)
-      adaptiveThresholdEnabled: true, // Funil AUTO-CALIBRADO do pregão (P60 + piso 1,3× média do dia) — régua relativa que sobrevive a mudança de volatilidade
-      flowDivergenceMin: 0.4, // + divergência de fluxo ≥ 40% do volume do tijolo (escala-free)
+      minDeltaThreshold: 50, // Δ físico do aquecimento; o corte de verdade é o auto-calibrado (herança do DEFAULT)
+      adaptiveThresholdEnabled: true, // Funil AUTO-CALIBRADO do pregão (SEL-A: P70 + piso 1,6× média do dia) — régua relativa que sobrevive a mudança de volatilidade
+      adaptiveThresholdPercentile: 0.7, // SEL-A
+      adaptiveFloorMultiple: 1.6, // SEL-A
+      flowDivergenceMin: 0.5, // + divergência de fluxo ≥ 50% do volume do tijolo (escala-free) — SEL-A
     },
   },
   {

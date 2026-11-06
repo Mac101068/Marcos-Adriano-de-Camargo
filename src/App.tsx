@@ -26,6 +26,8 @@ import { migrateDeltaThresholdTo50 } from './utils/deltaThreshold50Migration';
 
 import { migrateAutoCalibratedFunnel } from './utils/autoCalibrationMigration';
 
+import { migrateFunnelSelA } from './utils/funnelSelAMigration';
+
 import {
 
   ASSETS,
@@ -129,6 +131,7 @@ import { roundAuditService, buildRound } from './services/roundAuditService';
 import type { SeriesKey } from './utils/paperStrategyBot';
 
 import type { SessionRegimeMeter } from './utils/sessionRegime';
+import { computeFunnelMetrics } from './utils/funnelMetrics';
 
 import { SimulatorView } from './components/SimulatorView';
 
@@ -375,6 +378,9 @@ export default function App() {
   // Funil auto-calibrado (P60 do dia + piso 1,3× + divergência 40%): aviso de que o pacote chegou.
   const autoCalRef = useRef<{ config: boolean; strategies: number } | null>(null);
 
+  // Funil SEL-A (P70 + piso 1,6× + divergência 50%): aviso de que o pacote chegou ao padrão novo.
+  const funnelSelARef = useRef<{ config: boolean; strategies: number } | null>(null);
+
   // Idem para a migração do preço de referência do ativo (128.500 → ajuste atual do contrato).
 
   const assetMigrationRef = useRef<AssetBaselineMigration | null>(null);
@@ -434,6 +440,11 @@ export default function App() {
     // Pacote auto-calibrado do funil (adaptativo ON + divergência 40%): roda DEPOIS da migração do
     // Δ50 — o guard "Δ nunca tocado" aqui é exatamente 50, e quem calibrou por conta própria fica quieto.
     autoCalRef.current = migrateAutoCalibratedFunnel();
+
+    // Pacote SEL-A do funil (P70 + piso 1,6 + divergência 50%): roda DEPOIS da do auto-calibrado —
+    // promove exatamente o pacote Cycle 17 intocado (ON + Δ50 + div 0,4), e quem calibrou por conta
+    // própria fica quieto. Bench WINZ26: PF 3,71→4,17, R$/trade 15,9→21,4, 11/11 pregões positivos.
+    funnelSelARef.current = migrateFunnelSelA();
 
     // A seleção de ativo precisa estar gravada ANTES do loadSavedConfig lá embaixo: o storage
 
@@ -6930,6 +6941,31 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
+  // AVISO DO FUNIL SEL-A (P70 · piso 1,6 · div 50%): roda uma vez por versão de flag e só fala de
+  // quem estava no pacote Cycle 17 intocado (ON + Δ50 + div 0,4). Quem calibrou por conta própria não é tocado.
+  useEffect(() => {
+    const m = funnelSelARef.current;
+    if (!m || (!m.config && m.strategies === 0)) return;
+    const timer = setTimeout(() => {
+      setLatestToast({
+        id: `funnel-sela-migration-${Date.now()}`,
+        type: 'INFO',
+        title: 'PIRÂMIDE: FUNIL APERTADO PARA MELHORAR A PERFORMANCE',
+        description: `${[
+          m.config ? 'A estratégia ativa' : '',
+          m.strategies > 0 ? `${m.strategies} estratégia(s) salvas do Estúdio` : '',
+        ]
+          .filter(Boolean)
+          .join(' e ')} estavam no pacote auto-calibrado anterior. Como o EA vinha no breakeven, um A/B na base real WINZ26 (11 pregões, a mesma máquina do terminal) mostrou que as alavancas que sobem a qualidade por trade são PISO e DIVERGÊNCIA (o percentil é quase inerte). O funil foi ao braço SEL-A: corte no maior valor entre o P60→P70 das agressões do dia e o piso 1,3×→1,6× a média, exigindo divergência de fluxo 40%→50% do volume do tijolo. Resultado no bench: PF 3,71→4,17 e R$/trade 15,9→21,4, mantendo os 11 pregões positivos (menos sinais, cada um melhor). Ajustável a qualquer momento no painel abaixo do gráfico (Percentil / Piso / Divergência).`,
+        timestamp: Date.now(),
+      });
+    }, 5200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+
+
   // AVISO DA TROCA DO PREÇO DE REFERÊNCIA DO ATIVO: roda uma única vez por versão de flag e só
 
   // fala se havia ordem presa no preço antigo. Sai depois do aviso da trava de horário de propósito
@@ -7921,6 +7957,20 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
+  // =========================================================================
+  // FAIXA DO FUNIL: retrato vivo do limiar auto-calibrado (percentil da janela x
+  // piso relativo à média do dia) para o operador avaliar em tela. Só para Renko e
+  // Range (as séries com robô); na série Tempo não entregamos métrica e a faixa some.
+  // O corte exibido vem do MESMO medidor que julga o sinal, então a tela nunca mente.
+  // =========================================================================
+  const funnelMetrics = React.useMemo(() => {
+    if (chartSeries !== 'renko' && chartSeries !== 'range') return undefined;
+    const eng = chartSeries === 'renko' ? engineRef.current : rangeEngineRef.current;
+    const bx = chartSeries === 'renko' ? boxes : rangeBoxes;
+    return computeFunnelMetrics(config, eng.getRegimeMeter(), bx);
+    // boxes/rangeBoxes mudam de identidade a cada tick; config, a cada patch — o retrato reflete.
+  }, [chartSeries, config, boxes, rangeBoxes]);
+
   // Chip do Robô 2 na 3ª linha: texto neutro + número colorido (a regra de cor da plataforma).
 
   const shadowRun = shadowSnap.run;
@@ -8621,6 +8671,10 @@ ${
                   vwapCurve={vwapCurve}
 
                   asset={asset}
+
+                  funnelMetrics={funnelMetrics}
+
+                  onFunnelPatch={handleBoletaConfigPatch}
 
                 />
 
