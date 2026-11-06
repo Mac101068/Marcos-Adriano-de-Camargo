@@ -24,6 +24,15 @@ export function robotTagForMagic(magic?: number): string {
   return `Robô 1 · magic ${magic}`;
 }
 
+/** Recorte de ticks reais por pregão, catalogado pela ponte local em data/pregoes/. */
+export interface LocalPregao {
+  path: string;
+  date: string;
+  weekday: string;
+  symbol: string;
+  sizeMb: number;
+}
+
 export interface Tick {
   id: string;
   timestamp: number;
@@ -57,6 +66,26 @@ export interface RenkoBox {
   // Box que pertence ao DIA DE CONTEXTO estático do replay (ontem): entra só para dar
   // contexto de posição ao gráfico e por isso NUNCA deve exibir marcas de ordem/convergência.
   isStaticContext?: boolean;
+  // Dia (YYYY-MM-DD) da sessão a que o box pertence. É o que separa dois pregões no mesmo
+  // gráfico: quando muda de um box para o seguinte, existe um gap de abertura entre eles.
+  sessionDate?: string;
+}
+
+/**
+ * Gap de abertura entre dois pregões: fechamento do último box de um dia → abertura do
+ * primeiro tick do dia seguinte. Não vira box Renko (o motor re-ancora na abertura), mas
+ * precisa ser desenhado — é justamente o salto que o operador quer enxergar.
+ */
+export interface SessionGap {
+  fromDate: string;
+  toDate: string;
+  fromPrice: number;
+  toPrice: number;
+  /** Pontos do gap: positivo = abriu acima do fechamento anterior. */
+  gapPoints: number;
+  /** Índice do primeiro box da sessão nova (o gap fica à esquerda dele). */
+  boxIndex: number;
+  timestamp: number;
 }
 
 export interface OrderAuditEvent {
@@ -169,8 +198,6 @@ export interface AutomationConfig {
    * caiu a `exhaustionDeltaRatio` (ou menos) da do último box do MESMO lado — movimento perdendo força.
    */
   exhaustionFilterEnabled: boolean;
-  trendFilterEnabled?: boolean;
-  trendFilterPeriod?: number;
   exhaustionDeltaRatio: number; // Fração da força do box anterior que ainda vale (padrão 0.7)
   requireCvdNewExtreme: boolean; // Exige que o CVD faça nova máxima/mínima
   confirmationMode: 'BOX_CLOSE' | 'TICK_BREAKOUT'; // Disparar no fechamento ou no rompimento
@@ -330,6 +357,17 @@ export interface MT5ConnectionState {
   bridgeAuthOk?: boolean;
   /** Ponte liberada para ordens de ENTRADA (robô ligado no app). Saídas continuam livres. */
   bridgeArmed?: boolean;
+  /**
+   * Trava de execução do processo da ponte (variável de ambiente ORDERS_BLOCKED no PC do MT5).
+   * true = a ponte está em modo replay/validação: serve ticks, histórico, sinais e diário, mas
+   * nenhuma ordem de ENTRADA sai, mesmo com o robô ligado aqui. Precisa aparecer na tela senão o
+   * operador acha que o robô vai operar e ele está apenas ensaiando.
+   */
+  bridgeOrdersBlocked?: boolean;
+  /** Modo replay ligado PELO APP (action SET_REPLAY_MODE) no processo atual. Não é persistente. */
+  bridgeReplayMode?: boolean;
+  /** A trava veio do ambiente (ORDERS_BLOCKED=1 no PC do MT5)? Então o app não consegue desligá-la. */
+  bridgeEnvLock?: boolean;
   /** Ponte antiga, sem suporte a token (AUTH_TOKEN vazio no script baixado) */
   bridgeLegacy?: boolean;
   /** Contrato que o script .py está transmitindo (ACCOUNT_INFO.symbol) — confere com o ativo escolhido */

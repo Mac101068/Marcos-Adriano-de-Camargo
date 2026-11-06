@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 
-import { Tick, RenkoBox, TradeOrder, AutomationConfig, TerminalStats, MT5ConnectionState, MANUAL_ORDER_MAGIC, mainRobotMagic } from './types/trading';
+import { Tick, RenkoBox, TradeOrder, AutomationConfig, TerminalStats, MT5ConnectionState, LocalPregao, MANUAL_ORDER_MAGIC, mainRobotMagic, SessionGap } from './types/trading';
 
 import { RenkoFlowEngine } from './utils/renkoCalculator';
 
@@ -9,6 +9,8 @@ import { RangeBarEngine, TimeBarEngine, ChartSeries } from './utils/barEngines';
 import { evaluateBoxConvergence, ConvergenceResult } from './utils/convergenceEvaluator';
 
 import { isWithinTradingWindow, sessionFinancialLock, FinancialLock } from './utils/tradingGates';
+
+import { listarPregoesLocais, mesclarPregoes } from './services/pregoesCatalogService';
 
 import { isSessionCloseLock, sessionCloseLockLabel, parseHHMM, setEnforceTimeGates } from './utils/sessionRules';
 
@@ -95,6 +97,8 @@ import {
   marketHistoryService,
 
   type VolumeSource,
+
+  type HistoryMeta,
 
 } from './services/marketHistoryService';
 
@@ -297,9 +301,13 @@ type ReplayRunSummary = {
 
   source: 'REAL' | 'SYNTHETIC';
 
-  /** Volume usado nos ticks reais ('TICK' do feed, 'M1_RATE' sintetizado) — undefined no sintético. */
+  /** Volume usado nos ticks reais ('TICKS_REAIS' da fita comprimida, 'M1_RATE' sintetizado) — undefined no sintético. */
 
   volumeSource?: VolumeSource;
+
+  /** Procedência completa da série servida pela ponte (resolução do bucket, dias, arquivos). */
+
+  fonte?: HistoryMeta;
 
   tickCount: number;
 
@@ -461,6 +469,27 @@ export default function App() {
 
   const [realBacktestResult, setRealBacktestResult] = useState<any>(null);
 
+  const [localPregoes, setLocalPregoes] = useState<LocalPregao[]>([]);
+  
+    /**
+     * Catálogo dos recortes por pregão SEM depender da ponte: o navegador lê o
+     * arquivo estático `public/pregoes.json` (gerado pelo Python a partir de
+     * `data/pregoes/`), que o Vite serve no dev e no build. A ponte, quando está
+     * no ar, completa ou corrige a lista pela ação `LIST_LOCAL_PREGOES`.
+     */
+    useEffect(() => {
+      let cancelado = false;
+  
+      listarPregoesLocais(chartSymbolFor(asset)).then((lista) => {
+        if (cancelado) return;
+        setLocalPregoes((atual) => mesclarPregoes(atual, lista));
+      });
+  
+      return () => {
+        cancelado = true;
+      };
+    }, [asset]);
+
   // "Replay opera": durante a reprodução cada tick passa pelo MESMO caminho do feed ao vivo
 
   // (estratégia → MAE/pirâmides → auditoria → PnL na tela). Ligado por padrão; nunca é usado
@@ -582,6 +611,12 @@ export default function App() {
   const [ticks, setTicks] = useState<Tick[]>([]);
 
   const [boxes, setBoxes] = useState<RenkoBox[]>([]);
+
+  // Emendas de pregão (fechamento de ontem → abertura de hoje) da série Renko em tela.
+
+  // Vão junto com os boxes para o gráfico desenhar a linha do gap entre as sessões.
+
+  const [sessionGaps, setSessionGaps] = useState<SessionGap[]>([]);
 
   const [currentBox, setCurrentBox] = useState<Partial<RenkoBox> | null>(null);
 
@@ -1833,6 +1868,7 @@ export default function App() {
   const assetStateRef = useRef<Record<AssetId, {
     ticks: Tick[];
     boxes: RenkoBox[];
+    sessionGaps: SessionGap[];
     currentBox: Partial<RenkoBox> | null;
     currentPrice: number;
     cvd: number;
@@ -1848,6 +1884,7 @@ export default function App() {
     WIN: {
       ticks: [],
       boxes: [],
+      sessionGaps: [],
       currentBox: null,
       currentPrice: referencePrice(ASSETS.WIN),
       cvd: 0,
@@ -1863,6 +1900,7 @@ export default function App() {
     WDO: {
       ticks: [],
       boxes: [],
+      sessionGaps: [],
       currentBox: null,
       currentPrice: referencePrice(ASSETS.WDO),
       cvd: 0,
@@ -1878,6 +1916,7 @@ export default function App() {
     BTCBR: {
       ticks: [],
       boxes: [],
+      sessionGaps: [],
       currentBox: null,
       currentPrice: referencePrice(ASSETS.BTCBR),
       cvd: 0,
@@ -1893,6 +1932,7 @@ export default function App() {
     BTC: {
       ticks: [],
       boxes: [],
+      sessionGaps: [],
       currentBox: null,
       currentPrice: referencePrice(ASSETS.BTC),
       cvd: 0,
@@ -2006,6 +2046,44 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // eslint-disable-next-line react-hooks/exhaustive-deps
 
   }, [config.boxPoints]);
+
+
+
+  // Paridade de regras: o que está ligado na tela é o que a ponte usa para julgar o box.
+  // Antes deste sync, mexer em limiar adaptativo, filtro de acumulação ou de exaustão no app não
+  // alterava nada no robô — a tela mostrava sinal filtrado e a ponte operava outro critério.
+  useEffect(() => {
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(EaConfigService.buildBridgeSyncMessage(config));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+  }, [
+
+    config.strategyMode,
+
+    config.minDeltaThreshold,
+
+    config.adaptiveThresholdEnabled,
+
+    config.regimeLookbackBoxes,
+
+    config.consolidationFilterEnabled,
+
+    config.consolidationLookbackBoxes,
+
+    config.consolidationErMax,
+
+    config.exhaustionFilterEnabled,
+
+    config.exhaustionDeltaRatio,
+
+    config.requireCvdNewExtreme,
+
+    config.symbol,
+
+  ]);
 
 
 
@@ -2253,6 +2331,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       setBoxes([...engine.getBoxes()]);
 
+      setSessionGaps([...engine.getSessionGaps()]);
+
       setCurrentBox(engine.getCurrentBox());
 
       setCvd(engine.getCvd());
@@ -2394,6 +2474,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       if (renkoRes.newBoxClosed && renkoRes.closedBox) {
 
         setBoxes([...engine.getBoxes()]);
+
+        // Virada de pregão também fecha box: os gaps saem junto com a série nova.
+
+        setSessionGaps([...engine.getSessionGaps()]);
 
         seriesCollectorService.ingest(
 
@@ -4347,7 +4431,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
 
+          // A ponte já nasce com as regras da tela: sem isso ela julgaria com as constantes
+          // compiladas no .py enquanto o gráfico mostra limiares e filtros configurados aqui.
+
+          socket.send(EaConfigService.buildBridgeSyncMessage(config));
+
           socket.send(JSON.stringify({ action: 'GET_BACKFILL' }));
+
+          socket.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(asset) }));
 
         } catch {
 
@@ -4515,6 +4606,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               bridgeArmed: payload.data.armed ?? prev.bridgeArmed,
 
+              // Trava de execução do LADO do processo da ponte (ORDERS_BLOCKED no PC do MT5): não
+              // adianta o robô estar ligado aqui se o processo está em modo replay/validação.
+              bridgeOrdersBlocked: payload.data?.ordersBlocked ?? prev.bridgeOrdersBlocked,
+
+              bridgeReplayMode: payload.data?.replayMode ?? prev.bridgeReplayMode,
+
+              bridgeEnvLock: payload.data?.travaAmbiente ?? prev.bridgeEnvLock,
+
               ...(!authResultSeen ? { bridgeAuthOk: true, bridgeLegacy: true } : {}),
 
             }));
@@ -4562,6 +4661,42 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 ? 'A ponte do MT5 liberou as ordens de entrada.'
 
                 : 'A ponte do MT5 vai recusar ordens de entrada. Saídas e "zerar terminal" seguem liberados.',
+
+              timestamp: Date.now(),
+
+            });
+
+          } else if (payload.type === 'REPLAY_MODE_RESULT') {
+
+            // A ponte bateu a trava do ambiente? Então o clique em "desligar" não ligou nada e a
+
+            // tela precisa dizer isso em vez de mostrar o botão errado.
+
+            const on = Boolean(payload.data?.on);
+
+            const blocked = Boolean(payload.data?.blocked);
+
+            setMt5State((prev) => ({
+
+              ...prev,
+
+              bridgeReplayMode: on,
+
+              bridgeOrdersBlocked: blocked,
+
+              bridgeEnvLock: Boolean(payload.data?.envLocked),
+
+            }));
+
+            setLatestToast({
+
+              id: `mt5-replay-mode-${Date.now()}`,
+
+              type: on ? 'INFO' : blocked ? 'SELL' : 'BUY',
+
+              title: on ? '🎥 MODO REPLAY/VALIDAÇÃO LIGADO' : blocked ? '⚠️ TRAVA DO AMBIENTE CONTINUA LIGADA' : '▶️ EXECUÇÃO LIBERADA',
+
+              description: String(payload.data?.note || 'a ponte respondeu o estado da trava de execução.'),
 
               timestamp: Date.now(),
 
@@ -4644,6 +4779,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 targetState.timeEngine.processTick(raw);
               }
               targetState.boxes = [...targetState.engine.getBoxes()];
+              targetState.sessionGaps = [...targetState.engine.getSessionGaps()];
               targetState.currentBox = targetState.engine.getCurrentBox();
               targetState.cvd = targetState.engine.getCvd();
               targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
@@ -4667,9 +4803,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               type: 'INFO',
 
-              title: '📊 GRÁFICO DO DIA CARREGADO (ESTIMADO)',
+              title: `📊 ${(payload.data?.sessions?.length ?? 1)} PREGÕES CARREGADOS (ESTIMADO)`,
 
-              description: `${payload.data?.bars ?? '?'} barras de 1 min do MT5 desenhadas só para contexto. Só PREÇO real (sem delta/CVD inventado). Robô, coletor, Boleta e limiar P60 usam apenas os ticks ao vivo a partir de agora.`,
+              description: `${payload.data?.bars ?? '?'} barras de 1 min do MT5 desenhadas só para contexto — as emendas de pregão aparecem com o gap de abertura em pontos. Só PREÇO real (sem delta/CVD inventado). Robô, coletor, Boleta e limiar P60 usam apenas os ticks ao vivo a partir de agora.`,
 
               timestamp: Date.now(),
 
@@ -4708,6 +4844,19 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               positions: payload.data.positions ?? prev.positions,
 
             }));
+
+          } else if (payload.type === 'LOCAL_PREGOES_LIST') {
+
+            const listaPonte = Array.isArray(payload.data) ? payload.data : [];
+
+            // Catálogo da ponte tem precedência, mas nunca apaga o que o arquivo
+            // estático já entregou (a ponte só sobe com o MT5 no ar).
+
+            if (listaPonte.length > 0) {
+
+              setLocalPregoes((atual) => mesclarPregoes(atual, listaPonte));
+
+            }
 
           } else if (payload.type === 'BACKTEST_RESULT') {
 
@@ -5749,7 +5898,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     days: number; speed: number; seed: number; operated: boolean; aborted: boolean;
 
-    source: 'REAL' | 'SYNTHETIC'; volumeSource?: VolumeSource; tickCount: number;
+    source: 'REAL' | 'SYNTHETIC'; volumeSource?: VolumeSource; fonte?: HistoryMeta; tickCount: number;
 
   } | null>(null);
 
@@ -5859,17 +6008,64 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-  /** Rótulo honesto do volume usado nos ticks reais (decisão 7: sem volume não existe fluxo). */
+  /**
+   * Rótulo de PROCEDÊNCIA do replay (decisão 7: sem volume real não existe fluxo para validar).
+   *
+   * São três níveis de verdade, e a tela não pode embaçá-los: a FITA REAL comprimida valida
+   * estratégia; a barra M1 fabricada ensaia a tela; o sintético é demonstração. A resolução do
+   * bucket vai junto porque é ela que limita a virada mais fina que o Renko ainda enxerga —
+   * omiti-la faria um replay de 4 s parecer igual a um de 250 ms.
+   */
+  const fonteReplayLabel = (
 
-  const volumeSourceLabel = (v?: VolumeSource): string =>
+    source: 'REAL' | 'SYNTHETIC',
 
-    v === 'M1_RATE' ? 'volume distribuído das barras de 1min'
+    volumeSource?: VolumeSource,
 
-    : v === 'NONE' ? 'SEM volume (delta/CVD não sustentam fluxo)'
+    fonte?: HistoryMeta,
 
-    : v === 'TICK' ? 'volume do próprio tick'
+  ): string => {
 
-    : 'volume não informado';
+    if (source === 'SYNTHETIC') return 'gerador SINTÉTICO (demonstração)';
+
+    const res = fonte?.resolucaoMs ? ` · buckets de ${fonte.resolucaoMs.toLocaleString('pt-BR')} ms` : '';
+
+    // Se o orçamento de bytes obrigou a servir outra resolução, isso vai no rótulo: pedir 100 ms e
+    // receber 1.000 ms sem aviso é o tipo de mentira que só sai do log do servidor.
+    const troca = fonte?.resolucaoPedidaMs
+      ? ` (pedido era ${fonte.resolucaoPedidaMs.toLocaleString('pt-BR')} ms; não coube no orçamento)`
+      : '';
+
+    const lidos = fonte?.ticksReaisLidos ? ` (${fonte.ticksReaisLidos.toLocaleString('pt-BR')} ticks de negócio lidos)` : '';
+
+    if (volumeSource === 'TICKS_REAIS') {
+
+      // A fita real comprimida só pode dizer "valida estratégia" na faixa onde o Δ foi MEDIDO
+      // contra a fita cheia. Fora dela o caminho continua verdadeiro e o limiar não: dizer
+      // "valida" num bucket de 8 s seria a tela vender uma coisa que ela não entregou.
+      const fid = typeof fonte?.alinhamentoMedido === 'number'
+        ? ` — ${Math.round(fonte.alinhamentoMedido * 100)}% dos boxes da fita cheia`
+        : '';
+
+      if (fonte?.validaEstrategia === false) {
+        return `fita REAL da B3 comprimida${res}${troca}${lidos} — SÓ CAMINHO: Δ fora da faixa validada${fid}`;
+      }
+
+      if (fonte?.validaEstrategia !== true) {
+        return `fita REAL da B3 comprimida${res}${troca}${lidos} — fidelidade desta resolução não medida`;
+      }
+
+      return `fita REAL da B3 comprimida${res}${troca}${lidos} — valida estratégia${fid}`;
+
+    }
+
+    if (volumeSource === 'M1_RATE') return 'barras M1 do MT5 com volume FABRICADO — não valida estratégia';
+
+    if (volumeSource === 'NONE') return 'histórico SEM volume — delta/CVD não significam nada';
+
+    return 'histórico real do MT5';
+
+  };
 
 
 
@@ -5898,6 +6094,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       source: 'REAL' | 'SYNTHETIC';
 
       volumeSource?: VolumeSource;
+
+      fonte?: HistoryMeta;
 
       note?: string;
 
@@ -5948,7 +6146,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             source: 'SYNTHETIC' as const,
 
             note: 'O MT5 respondeu ao pedido de histórico, mas devolveu ZERO ticks. O replay rodou em mercado SINTÉTICO — confira a profundidade de histórico da sua conta na corretora.',
-
           };
 
         }
@@ -5974,6 +6171,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           source: 'REAL' as const,
 
           volumeSource: res.volumeSource,
+
+          fonte: res.meta,
 
           note: sufficiencyNote,
 
@@ -6083,6 +6282,33 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     });
 
+  };
+
+
+
+  /**
+   * Liga/desliga o MODO REPLAY direto no processo da ponte ({ action: 'SET_REPLAY_MODE' }).
+   * Existe por dois motivos: (1) a trava por variável de ambiente obrigaria reiniciar o .py a cada
+   * ensaio; (2) o botão 'Robô' NÃO protege uma sessão de validação -- a própria tela reenvia
+   * `armed: config.active` no AUTH, então qualquer reconexão religaria as entradas sozinha. Com o
+   * modo ligado, nada abre posição no PC do MT5 enquanto o replay roda, nem o loop vivo dele.
+   */
+  const handleToggleReplayMode = (on: boolean) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setLatestToast({
+        id: `replay-mode-offline-${Date.now()}`,
+        type: 'SELL',
+        title: '⛔ PONTE DESCONECTADA',
+        description: 'Para ligar o modo replay/validação é preciso estar conectado ao MT5: a trava mora no processo que envia as ordens, não nesta aba.',
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    try {
+      wsRef.current.send(JSON.stringify({ action: 'SET_REPLAY_MODE', on }));
+    } catch {
+      // conexão caindo: o onclose limpa o estado e a tela mostra a ponte fora do ar
+    }
   };
 
 
@@ -6471,7 +6697,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           days: replayTargetDays, speed: pace.speed, seed: seedForRun, operated: operate, aborted,
 
-          source: run.source, volumeSource: run.volumeSource, tickCount: ticks.length,
+          source: run.source, volumeSource: run.volumeSource, fonte: run.fonte,
+          tickCount: ticks.length,
 
         };
 
@@ -6495,7 +6722,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 } reproduzidos com sucesso no pregão de ${label}.`
           } ${
             run.source === 'REAL'
-              ? `Fonte: HISTÓRICO REAL (MT5) · ${volumeSourceLabel(run.volumeSource)}.`
+              ? `Fonte: ${fonteReplayLabel(run.source, run.volumeSource, run.fonte)}.`
               : `Seed do pregão: #${seedForRun}.`
           } Velocidade ${pace.speed}x.${operate ? ' Operações ativas na simulação (Paper Trading).' : ' Replay silencioso (OPERA desligado).'}`,
 
@@ -6885,6 +7112,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     setTicks([]);
     setBoxes([]);
+    setSessionGaps([]);
     setCurrentBox(null);
     setCurrentPrice(reference);
     setCvd(0);
@@ -7015,6 +7243,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       timeEngineRef.current = targetState.timeEngine;
       allTicksRef.current = targetState.allTicks;
       setBoxes([...targetState.boxes]);
+      setSessionGaps([...targetState.sessionGaps]);
       setCurrentBox(targetState.currentBox);
       setCvd(targetState.cvd);
       setTicks([...targetState.ticks]);
@@ -7053,6 +7282,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         symbol: chartSymbolFor(next),
         boxPoints: assetParams.boxPoints,
       }));
+      wsRef.current.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(next) }));
     }
 
 
@@ -7927,7 +8157,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               {mt5State.status === 'CONNECTED'
 
-                ? `MT5 Real (${mt5State.brokerCompany} #${mt5State.accountLogin || ''})`
+                ? `MT5 XP ${mt5State.accountLogin || ''}`.trim()
 
                 : 'Simulação B3'}
 
@@ -8045,7 +8275,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 lastReplay.source === 'REAL'
 
-                  ? `HISTÓRICO REAL (MT5), ${lastReplay.tickCount.toLocaleString('pt-BR')} ticks${lastReplay.volumeSource ? ` · volume: ${volumeSourceLabel(lastReplay.volumeSource)}` : ''}`
+                  ? `${fonteReplayLabel(lastReplay.source, lastReplay.volumeSource, lastReplay.fonte)}, ${lastReplay.tickCount.toLocaleString('pt-BR')} ticks na tela`
 
                   : `SINTÉTICO, seed #${lastReplay.seed}`
 
@@ -8222,6 +8452,8 @@ ${
                 <RenkoFlowChart
 
                   boxes={chartSeries === 'renko' ? boxes : chartSeries === 'range' ? rangeBoxes : timeBoxes}
+
+                  sessionGaps={chartSeries === 'renko' ? sessionGaps : []}
 
                   currentBox={chartSeries === 'renko' ? currentBox : chartSeries === 'range' ? rangeCurrentBox : timeCurrentBox}
 
@@ -8410,6 +8642,14 @@ ${
                   currentPrice={currentPrice}
 
                   mt5Status={mt5State.status}
+                  
+                  bridgeOrdersBlocked={mt5State.bridgeOrdersBlocked}
+
+                  bridgeReplayMode={mt5State.bridgeReplayMode}
+
+                  bridgeEnvLock={mt5State.bridgeEnvLock}
+
+                  onToggleReplayMode={handleToggleReplayMode}
 
                   chartSeries={chartSeries}
 
@@ -8456,6 +8696,8 @@ ${
                   isBacktestingReal={isBacktestingReal}
 
                   realBacktestResult={realBacktestResult}
+
+                  localPregoes={localPregoes}
 
                 />
 

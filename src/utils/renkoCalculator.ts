@@ -1,4 +1,4 @@
-import { Tick, RenkoBox, AutomationConfig } from '../types/trading';
+import { Tick, RenkoBox, AutomationConfig, SessionGap } from '../types/trading';
 import { evaluateBoxConvergence } from './convergenceEvaluator';
 import { SessionRegimeMeter } from './sessionRegime';
 import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, renkoScaleLabel, snapToTick } from '../assets/assetRegistry';
@@ -12,6 +12,9 @@ import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, renkoScaleLabel, snapToTick } from
 export class RenkoFlowEngine {
   private boxPoints: number;
   private boxes: RenkoBox[] = [];
+  // Emendas de pregão da série (fechamento de um dia → abertura do dia seguinte).
+  // O gap não vira box; fica aqui para o gráfico desenhar o salto entre as sessões.
+  private sessionGaps: SessionGap[] = [];
   private currentBox: Partial<RenkoBox> | null = null;
   private currentCvd: number = 0;
   private lastPrice: number = 0;
@@ -64,6 +67,11 @@ export class RenkoFlowEngine {
     return this.currentBox;
   }
 
+  /** Gaps de abertura já atravessados pela série (um por virada de pregão). */
+  public getSessionGaps(): SessionGap[] {
+    return this.sessionGaps;
+  }
+
   public getCvd(): number {
     return this.currentCvd;
   }
@@ -77,6 +85,7 @@ export class RenkoFlowEngine {
    */
   public initialize(startPrice: number, timestamp: number = Date.now()) {
     this.boxes = [];
+    this.sessionGaps = [];
     this.currentCvd = 0;
     this.lastPrice = startPrice;
     this.lastSessionKey = this.sessionKey(timestamp);
@@ -115,6 +124,9 @@ export class RenkoFlowEngine {
     signal?: 'BUY' | 'SELL';
     signalReason?: string;
   } {
+    // Preço do tick ANTERIOR: na virada de pregão ele é o fechamento REAL da sessão que
+    // acabou (o último box fechado é um nível redondo de Renko, não o preço de fechamento).
+    const prevTickPrice = this.lastPrice;
     this.lastPrice = tick.price;
     // A janela do medidor segue a config (permite ajustar 10–50 boxes em Ajustes sem reiniciar o dia)
     this.regimeMeter.setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
@@ -133,8 +145,26 @@ export class RenkoFlowEngine {
     // O 1º box do dia nasce no preço de abertura, então o sinal pode sair dele em diante.
     const tickSession = this.sessionKey(tick.timestamp);
     if (this.lastSessionKey !== undefined && tickSession !== this.lastSessionKey) {
-      this.lastSessionKey = tickSession;
       const basePrice = snapToTick(tick.price, this.asset);
+      // Registra a emenda ANTES de re-ancorar: fechamento do último box do dia anterior
+      // contra o preço de abertura de hoje. Gap nunca vira box Renko, mas é o número que
+      // o operador quer ver na tela (+/- pontos entre os dois pregões).
+      const prevClose =
+        prevTickPrice > 0
+          ? prevTickPrice
+          : this.boxes.length > 0
+          ? this.boxes[this.boxes.length - 1].close
+          : this.currentBox?.close ?? basePrice;
+      this.sessionGaps.push({
+        fromDate: this.lastSessionKey,
+        toDate: tickSession,
+        fromPrice: prevClose,
+        toPrice: basePrice,
+        gapPoints: basePrice - prevClose,
+        boxIndex: this.boxes.length,
+        timestamp: tick.timestamp,
+      });
+      this.lastSessionKey = tickSession;
       this.currentBox = {
         index: this.boxes.length,
         direction: 'UP',
@@ -217,6 +247,7 @@ export class RenkoFlowEngine {
           closedBox.orderDispatched = signal;
         }
 
+        closedBox.sessionDate = tickSession;
         this.boxes.push(closedBox);
         newBoxClosed = true;
 
@@ -272,6 +303,7 @@ export class RenkoFlowEngine {
           closedBox.orderDispatched = signal;
         }
 
+        closedBox.sessionDate = tickSession;
         this.boxes.push(closedBox);
         newBoxClosed = true;
 
@@ -327,6 +359,7 @@ export class RenkoFlowEngine {
           closedBox.orderDispatched = signal;
         }
 
+        closedBox.sessionDate = tickSession;
         this.boxes.push(closedBox);
         newBoxClosed = true;
 
@@ -381,6 +414,7 @@ export class RenkoFlowEngine {
           closedBox.orderDispatched = signal;
         }
 
+        closedBox.sessionDate = tickSession;
         this.boxes.push(closedBox);
         newBoxClosed = true;
 

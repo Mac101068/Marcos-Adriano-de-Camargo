@@ -41,8 +41,6 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   adaptiveThresholdEnabled: true, // Limiar adaptativo ligado por padrão: ±mín × fator de regime do momento
   regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
   consolidationFilterEnabled: true,
-  trendFilterEnabled: true,
-  trendFilterPeriod: 20, // Filtro de acumulação: desligado até o bench A/B provar o corte de stops
   consolidationLookbackBoxes: 10, // Janela da Efficiency Ratio (boxes recentes)
   consolidationErMax: 0.35, // ER abaixo disso = range curto/acumulação (sinal silenciado)
   exhaustionFilterEnabled: false, // Filtro de exaustão: opcional, ligado só por decisão do operador
@@ -263,8 +261,6 @@ export class EaConfigService {
           consolidationFilterEnabled: parsed.consolidationFilterEnabled ?? DEFAULT_EA_CONFIG.consolidationFilterEnabled,
           consolidationLookbackBoxes: parsed.consolidationLookbackBoxes ?? DEFAULT_EA_CONFIG.consolidationLookbackBoxes,
           consolidationErMax: parsed.consolidationErMax ?? DEFAULT_EA_CONFIG.consolidationErMax,
-          trendFilterEnabled: parsed.trendFilterEnabled ?? DEFAULT_EA_CONFIG.trendFilterEnabled,
-          trendFilterPeriod: parsed.trendFilterPeriod ?? DEFAULT_EA_CONFIG.trendFilterPeriod,
           exhaustionFilterEnabled: parsed.exhaustionFilterEnabled ?? DEFAULT_EA_CONFIG.exhaustionFilterEnabled,
           exhaustionDeltaRatio: parsed.exhaustionDeltaRatio ?? DEFAULT_EA_CONFIG.exhaustionDeltaRatio,
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
@@ -412,5 +408,28 @@ export class EaConfigService {
 
     this.saveConfig(validConfig);
     return validConfig;
+  }
+
+  /**
+   * Mensagem que replica na ponte as REGRAS de julgamento do sinal que estão ligadas na
+   * tela. Sem isso a ponte opera com constantes compiladas e o robô compra uma coisa enquanto
+   * o gráfico desenha outra — é a divergência que fazia a tela parecer certa e o resultado,
+   * errado. Só julgamento: nenhum campo daqui dispara ordem.
+   */
+  public static buildBridgeSyncMessage(config: AutomationConfig): string {
+    return JSON.stringify({
+      action: 'SYNC_EA_CONFIG',
+      symbol: config.symbol,
+      strategyMode: config.strategyMode,
+      minDeltaThreshold: config.minDeltaThreshold,
+      adaptiveThresholdEnabled: config.adaptiveThresholdEnabled,
+      regimeLookbackBoxes: config.regimeLookbackBoxes,
+      consolidationFilterEnabled: config.consolidationFilterEnabled,
+      consolidationLookbackBoxes: config.consolidationLookbackBoxes,
+      consolidationErMax: config.consolidationErMax,
+      exhaustionFilterEnabled: config.exhaustionFilterEnabled,
+      exhaustionDeltaRatio: config.exhaustionDeltaRatio,
+      requireCvdNewExtreme: config.requireCvdNewExtreme,
+    });
   }
 }
