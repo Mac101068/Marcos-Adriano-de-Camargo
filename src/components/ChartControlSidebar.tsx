@@ -76,8 +76,6 @@ interface ChartControlSidebarProps {
   onToggleOrderLines: () => void;
   showSignalArrows: boolean;
   onToggleSignalArrows: () => void;
-  boxColoringMode?: 'flow' | 'direction';
-  onToggleBoxColoringMode?: () => void;
   /** Como ler o resultado das ordens no gráfico: em pontos ou em R$. */
   orderValueMode: 'points' | 'money';
   onOrderValueMode: (v: 'points' | 'money') => void;
@@ -265,8 +263,6 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
   onToggleOrderLines,
   showSignalArrows,
   onToggleSignalArrows,
-  boxColoringMode,
-  onToggleBoxColoringMode,
   orderValueMode,
   onOrderValueMode,
   activeDrawingTool,
@@ -489,22 +485,6 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
               </span>
               <span className="font-mono">{showSignalArrows ? 'On' : 'Off'}</span>
             </button>
-
-            {onToggleBoxColoringMode && (
-              <div>
-                <p className="text-[9.5px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
-                  Coloração dos Boxes
-                </p>
-                <Segmented
-                  options={[
-                    { value: 'flow', label: 'Fluxo & Robô', title: 'Coloração por confluência institucional de fluxo (Verde Compra, Vermelho Venda, Amarelo Absorção, Cinza Neutro)' },
-                    { value: 'direction', label: 'Direção', title: 'Coloração clássica por direção do box (Verde Alta, Vermelho Baixa)' },
-                  ]}
-                  current={boxColoringMode || 'flow'}
-                  onSelect={() => onToggleBoxColoringMode()}
-                />
-              </div>
-            )}
 
             <div>
               <p className="text-[9.5px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
