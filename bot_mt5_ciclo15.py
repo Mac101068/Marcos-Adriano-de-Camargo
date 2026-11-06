@@ -456,8 +456,9 @@ MT5_PATH = os.getenv("MT5_PATH", r"C:\Program Files\MetaTrader 5 Terminal\termin
 
 
 
-# Quantas sessões o backfill entrega ao gráfico ao conectar: por padrão 0 (gráfico inicia limpo sem barras estáticas que depois somem).
-BACKFILL_SESSIONS = max(0, int(os.getenv("BACKFILL_SESSIONS", "0")))
+# Quantas sessões o backfill entrega ao gráfico ao conectar: hoje + as anteriores.
+# Duas anteriores são o mínimo para o operador ver a emenda do pregão e o gap de abertura.
+BACKFILL_SESSIONS = max(1, int(os.getenv("BACKFILL_SESSIONS", "3")))
 
 
 
@@ -2473,8 +2474,6 @@ async def send_today_session_backfill(websocket, target_symbol=None):
     Cada tick leva o seu dia (`session`): é o que permite ao app marcar onde um pregão
     termina e o outro começa — com só o pregão de hoje na tela o gap de abertura é invisível."""
     global LAST_BACKFILL_CACHE
-    if BACKFILL_SESSIONS <= 0:
-        return
     sym = target_symbol or SYMBOL
     now = time.time()
 
