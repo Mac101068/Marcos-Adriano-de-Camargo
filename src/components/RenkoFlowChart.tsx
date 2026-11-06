@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { AutomationConfig, RenkoBox, SessionGap, TradeOrder } from '../types/trading';
 import { ChartSeries } from '../utils/barEngines';
 import { Drawing, DrawingColor, DrawingTool, loadDrawings, saveDrawings } from '../types/drawing';
