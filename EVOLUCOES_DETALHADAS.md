@@ -8,6 +8,91 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 17 — 05/11/2026 · O replay aprendeu a parecer fita real e o funil passou a se auto-calibrar pelo pregão
+
+**Causa raiz (o gatilho do ciclo)**: duas frentes. (a) O replay ainda era **metrônomo**: o sintético
+emitia 1 tick a cada 20 s certinho e a base real da ponte chegava como proxy `M1_RATE` — o operador
+questionou se o replay "era mesmo tão diferente da realidade". (b) Na semana seguinte, um dia de
+**lateralização ao vivo deu NEGATIVO com o robô ligado**, e o operador trouxe a crítica central do
+ciclo: *"mercado de renda variável não se repete, varia muito em época de eleição; a métrica física e
+fixa não acredito que dure no longo prazo; queria uma forma de medirmos este valor ele próprio se
+controlar durante o dia; estes valores estão totalmente fora da realidade"*.
+
+### 17.1 Realismo do replay (commit `09b4839`)
+
+- **Timing não-uniforme** no gerador sintético: ticks vêm em **chunks de 2–20 com hiato exponencial**
+  (rajada + pausa), como fita de verdade — a cadência de 20 s era a assinatura do pseudo-tick e fazia
+  o Renko engolir boxes em lotes idênticos.
+- **Banco local de fita real** (`tapeBank`, quota-safe em localStorage com teto por dia): replay pode
+  usar ticks **baixados de verdade da ponte** em vez de sintético, com fallback transparente.
+- **Teste do agressor por bid/ask** no motor de fluxo: quando o tick traz bid/ask, o lado agressor é
+  decidido pelo toque no preço (`tick.price >= ask ⇒ BUY`, `<= bid ⇒ SELL`) em vez de chute por direção.
+- **Fix do fuso** (`formatTickTimeStr`): o `timeStr` da ponte é **UTC do servidor MT5**; o gráfico
+  mostrava a hora crua e a etiqueta do box discordava do relógio do operador (B3 = UTC−3).
+- Verificação: asserts de distribuição de chunks/hiatos, `tsc` limpo, build OK.
+
+### 17.2 Alavanca Δ50 no funil físico
+
+- `minDeltaThreshold` **100 → 50** no DEFAULT e no preset da Pirâmide, com migração guardada
+  `deltaThreshold50Migration.ts` (flag `fluxo_renko_delta50_v1`; só toca PYRAMIDE com Δ ainda no
+  default antigo 100; cobre config ativa + biblioteca; toast no boot).
+- Evidência (banco headless **10 réplicas × 10 dias sintéticos**, metodologia `strategyLab`): Δ50
+  dominou Δ100 **em todos os eixos e em 10/10 réplicas** — +23% PnL (R$ 159k→196k), PF 1,93→2,06,
+  DD −28%; abaixo de ~50 é **platô** (o floor deixa de pegar box novo).
+
+### 17.3 O CVD que era código morto — e a varredura honesta do funil
+
+- Ao montar o braço "Δ50 + CVD" do bench, o resultado saiu **byte-idêntico** ao braço base:
+  investigação revelou que **`requireCvdNewExtreme` nunca foi lido pelo ramo PYRAMID** do
+  `convergenceEvaluator` (só o Reteste o consumia) — a UI oferecia um filtro que a Pirâmide ignorava.
+  Corrigido: gate CVD (máxima/mínima dos 3 boxes anteriores) implementado nos dois ramos da Pirâmide.
+- Re-bench com o filtro **vivo**: CVD **reprovado** (−55% PnL). Varredura completa de 7 braços sobre o
+  Δ50: Δ75 −10,6%, ADAPT −49%, ER −73%, LIMIT no fechamento −71%, LIMIT na abertura −82%. **Nenhum
+  alavanca de funil superou o pacote simples** no sintético — nenhuma mudança de default naquela hora.
+
+### 17.4 O funil AUTO-CALIBRADO do pregão (a resposta à crítica)
+
+- **`SessionRegimeMeter.getSelfCalibratedLimit(side, P, piso, base)`**: corte = **MAIOR** entre o
+  percentil **P (default 60)** das agressões do mesmo lado na janela do DIA e o **piso relativo
+  1,3× a média do dia inteiro** (dia morto não afrouxa o funil; dia de eleição não aperta demais).
+  O medidor **zera na virada de pregão** — cada sessão fabrica a própria régua. Sem 10 boxes do dia
+  (aquecimento), cai no Δ físico 50. **Zero constante física no regime.**
+- **`flowDivergenceMin` (divergência de fluxo, escala-free)**: só vale box cujo |Δ| é ≥ **fração**
+  (default 40%) do volume total do tijolo. É a medição que faltava: **fração não depende de escala**,
+  então sobrevive a mudança de volatilidade e a proxy de volume; volume ≤ 0 ⇒ divergência 0 ⇒ o box
+  fantasma de interpolação do `M1_RATE` **não sinaliza** (burraco de ruído que o Δ físico não via).
+- Campos novos **opcionais com fallback `??`** (`adaptiveFloorMultiple`, `flowDivergenceMin`) —
+  exatamente para não criar migração desnecessária (regra do `{...DEFAULT,...salvo}`).
+- UI em Ajustes → Gatilho: bloco renomeado **"Limiar Auto-Calibrado do Pregão"** com sliders de
+  **percentil (0,5–0,9)**, **piso (1–2,5×)** e **janela**; slider sempre-visível de **divergência
+  (0–60%)**. Laudos do terminal atualizados: "limiar = auto-calibrado do pregão", "ESPERANDO CVD"
+  agora também na Pirâmide, e o diagnóstico SINAL FRACO lê o limite real do medidor.
+
+### 17.5 Banco na base real e o novo padrão (aval do operador: "pode fazer as alterações")
+
+- Banco headless na **base real WINZ26 baixada da ponte (11 pregões, 2 réplicas)** com hora de
+  fechamento 08:55/17:30 (mesma mecânica do terminal): físico Δ50 → R$ 29.035, PF 2,43, DD R$ 759,
+  3545 trades; **Auto P60×1,3 → PF 3,94, DD R$ 318, trades −56%**; **Auto+diverg.40% foi o ÚNICO
+  braço com TODOS os 11 pregões positivos** (R$ 18.022). Controle sintético: lá o físico ainda vence
+  em PnL (o volume sintético tem escala real de contratos) — **trade-off aceito e documentado**: a
+  régua relativa é a única medição honesta enquanto não há T&T genuíno, e é ela que roda na corretora.
+- **Novo padrão da Pirâmide**: DEFAULT + preset com **adaptativo ON + divergência 40%**; migração
+  guardada `autoCalibrationMigration.ts` (flag `fluxo_renko_autocal_v1`, roda **depois** da Δ50, só
+  toca pacote intocado `adaptive=false + Δ50 + sem divergência`; quem calibrou por conta própria fica
+  intacto) + toast explicando números e reversão. Reversível na UI em 2 cliques.
+
+### Verificação do Ciclo 17
+
+- ✅ `npx tsc --noEmit` limpo · ✅ `npx vite build` OK (4,7 s) · ✅ **asserts das migrações 12/12**
+  (pacote intocado migra; manual/Δ≠50/divergência definida/Reteste/flag feita/storage vazio não são
+  tocados; idempotência) · ✅ CSV do `strategy_lab_results.csv` re-benched · 🗑️ scripts descartáveis
+  (`_benchFunil50`, `_benchRealAuto`, `_assertAutoCal`) apagados após uso.
+- ⚠️ **Nada conferido em tela ainda** — próximo passo é o operador abrir o terminal (toast do funil
+  novo) e validar **1–2 pregões ao vivo na demo XP**, de preferência num dia lateralizado.
+- 🧫 Calibração fina segue pendente de **T&T genuíno** (veredito `eaBaseReal` do Ciclo 16).
+
+---
+
 ## 📆 Ciclo 16 — 05/11/2026 · O funil afrouxou por bench (A/B/D/Δ), o Renko parou de atrasar e a ponte passou a explicar a recusa
 
 **Causa raiz (o gatilho do ciclo)**: o operador reportou que o robô **"não estava enviando ordens
