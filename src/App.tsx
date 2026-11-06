@@ -6301,38 +6301,21 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       }
 
       try {
-
         const res = await marketHistoryService.requestHistory({
-
           reqId: `hist-${Date.now()}`,
-
-          // Teste longo pede a SÉRIE CONTÍNUA, não o código do gráfico: 'WINZ26' tem poucos dias de
-
-          // vida na corretora, e um replay de 5 dias voltaria quase vazio. O gráfico segue operando o
-
-          // vigente — a contínua é símbolo de teste, não escolha do operador.
-
           symbol: asset.primarySymbol,
-
           days: daysToRequest,
-
           asset,
-
           send: (payload) => socket.send(payload),
-
+          timeoutMs: 30000,
         });
 
         if (res.ticks.length === 0) {
-
           return {
-
             ticks: synthetic(),
-
             source: 'SYNTHETIC' as const,
-
             note: 'O MT5 respondeu ao pedido de histórico, mas devolveu ZERO ticks. O replay rodou em mercado SINTÉTICO — confira a profundidade de histórico da sua conta na corretora.',
           };
-
         }
 
         // Banca a fita real: daqui pra frente o replay pode tocá-la mesmo sem ponte.
@@ -6538,51 +6521,36 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     setLatestToast({
       id: `replay-start-${Date.now()}`,
       type: 'INFO',
-      title: operate ? 'SIMULAÇÃO ATIVA: OPERANDO NO REPLAY' : 'REPLAY EM MODO SILENCIOSO',
+      title: '⏳ CARREGANDO PREGÃO DO REPLAY...',
       description: operate
-        ? 'O robô está operando em simulação com dados reais (paper trading). Nenhuma ordem real é enviada para a corretora.'
-        : 'Reproduzindo dados históricos para estudo e análise de gráfico.',
+        ? 'Preparando dados do pregão e ligando simulação (paper trading com confluência de fluxo)...'
+        : 'Carregando dados históricos para reprodução no gráfico e indicador de fluxo.',
       timestamp: Date.now(),
     });
 
     setIsReplaying(true);
-
     setReplayProgress(0);
 
-
-
     // Cede um frame para a UI mostrar "rodando 0%" antes de gerar os ticks (isso bloqueia um instante)
-
     window.setTimeout(async () => {
-
       const engine = engineRef.current;
-
       const rangeEng = rangeEngineRef.current;
-
       const timeEng = timeEngineRef.current;
 
-      // Sempre +1 dia anterior de contexto: a abertura do 1º dia-alvo passa a ter o
-
-      // fechamento de ontem como referência na tela (nada é apagado ao virar o dia;
-
-      // os chips 1d/3d/5d continuam contando os dias de replay efetivos).
-
-      // Seed: usa o número travado por você; no AUTO sorteia um pregão novo e mostra o número no
-
-      // resultado da corrida, para você fixá-lo e repetir o MESMO mercado em outra velocidade.
-
       const seedForRun = replaySeed ?? randomReplaySeed();
-
       const run = await resolveReplayTicks(replayTargetDays, seedForRun);
-
       const rawTicks = run.ticks;
 
-      if (rawTicks.length === 0) {
-
+      if (!rawTicks || rawTicks.length === 0) {
         setIsReplaying(false);
-
+        setLatestToast({
+          id: `replay-empty-${Date.now()}`,
+          type: 'SELL',
+          title: 'HISTÓRICO INDISPONÍVEL',
+          description: 'Nenhum tick encontrado para reprodução. Tente outro pregão ou verifique a conexão com a ponte.',
+          timestamp: Date.now(),
+        });
         return;
-
       }
 
       // Organiza e agrupa os ticks por data de pregão (YYYY-MM-DD local)
@@ -6822,27 +6790,26 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       publish(0);
       const replayTicks = ticks.length;
 
-      // Compasso de velocidade:
-      // Em 1x: reprodução em velocidade NORMAL de mercado (1 tick por ciclo com delay realista),
-      // permitindo acompanhar cada agressão e formação de box no tempo humano do mercado.
-      // Em 2x, 3x, 5x, 10x: acelera o avanço em lotes de ticks para análise rápida.
+      // Compasso de velocidade adaptativo pelo volume total de ticks da fita:
+      // Em 1x: reprodução em velocidade fluida permitindo acompanhar a formação dos blocos e Heikin-Ashi (~2-3min por pregão).
+      // Em 2x, 3x, 5x, 10x: acelera o avanço para análise ágil e instantânea.
+      const isDense = ticks.length > 25000;
       const paceFor = (s: number) => {
         const speed = Math.max(1, Math.min(10, Math.round(s)));
         if (speed === 1) {
-          // 1x = Normal do mercado: 1 a 2 ticks por passo, 40ms de cadência suave (~25 ticks/seg)
-          return { speed: 1, stepMs: 40, chunk: 1 };
+          return { speed: 1, stepMs: 30, chunk: isDense ? 45 : 4 };
         }
         if (speed === 2) {
-          return { speed: 2, stepMs: 35, chunk: 4 };
+          return { speed: 2, stepMs: 25, chunk: isDense ? 100 : 8 };
         }
         if (speed === 3) {
-          return { speed: 3, stepMs: 30, chunk: 10 };
+          return { speed: 3, stepMs: 20, chunk: isDense ? 220 : 18 };
         }
         if (speed === 5) {
-          return { speed: 5, stepMs: 25, chunk: 30 };
+          return { speed: 5, stepMs: 16, chunk: isDense ? 500 : 40 };
         }
         // 10x = Modo ultrarrápido
-        return { speed: 10, stepMs: 16, chunk: 100 };
+        return { speed: 10, stepMs: 16, chunk: isDense ? 1200 : 90 };
       };
 
       let pace = paceFor(simulationSpeedRef.current);
