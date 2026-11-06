@@ -1811,7 +1811,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const prevBox = i > 0 ? displayedBoxes[i - 1] : null;
         const colorInfo = getBoxColoring(b, prevBox, minDeltaThreshold, boxColoringMode);
 
-        const stripW = boxWidth + boxSpacing;
+        const stripW = Math.max(boxWidth + 1, stepX);
         const stripLeft = centerX - stripW / 2;
 
         if (colorInfo.state === 'BUY_FLOW') {
