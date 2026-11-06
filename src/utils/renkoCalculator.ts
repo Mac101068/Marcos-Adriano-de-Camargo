@@ -1,4 +1,4 @@
-import { Tick, RenkoBox, AutomationConfig } from '../types/trading';
+import { Tick, RenkoBox, AutomationConfig, SessionGap } from '../types/trading';
 import { evaluateBoxConvergence } from './convergenceEvaluator';
 import { SessionRegimeMeter } from './sessionRegime';
 import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, renkoScaleLabel, snapToTick } from '../assets/assetRegistry';
@@ -27,6 +27,9 @@ export class RenkoFlowEngine {
   // Chave YYYY-MM-DD da sessão (dia local) em curso. Serve para detectar a virada de dia:
   // o gap entre o fechamento de ontem e a abertura de hoje NUNCA pode virar box Renko.
   private lastSessionKey?: string;
+  // Emendas de pregão da série (fechamento de um dia → abertura do dia seguinte).
+  // O gap não vira box; fica aqui para o gráfico desenhar o salto entre as sessões.
+  private sessionGaps: SessionGap[] = [];
   // Medidor de regime desta série: o box fechado alimenta o medidor ANTES da avaliação de
   // convergência, então o limiar adaptativo julga o box com o fator com que ele fechou.
   private regimeMeter = new SessionRegimeMeter(20);
@@ -69,6 +72,11 @@ export class RenkoFlowEngine {
     return this.boxes;
   }
 
+  /** Gaps de abertura já atravessados pela série (um por virada de pregão). */
+  public getSessionGaps(): SessionGap[] {
+    return this.sessionGaps;
+  }
+
   public getCurrentBox(): Partial<RenkoBox> | null {
     return this.currentBox;
   }
@@ -86,6 +94,7 @@ export class RenkoFlowEngine {
    */
   public initialize(startPrice: number, timestamp: number = Date.now()) {
     this.boxes = [];
+    this.sessionGaps = [];
     this.currentCvd = 0;
     this.lastPrice = startPrice;
     this.lastSessionKey = this.sessionKey(timestamp);
@@ -136,6 +145,9 @@ export class RenkoFlowEngine {
       return { newBoxClosed: false, closedBoxes: [] };
     }
 
+    // Preço do tick ANTERIOR: na virada de pregão ele é o fechamento REAL da sessão que
+    // acabou (o último box fechado é um nível redondo de Renko, não o preço de fechamento).
+    const prevTickPrice = this.lastPrice;
     this.lastPrice = tick.price;
     // A janela do medidor segue a config (permite ajustar 10–50 boxes em Ajustes sem reiniciar o dia)
     this.regimeMeter.setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
@@ -150,8 +162,26 @@ export class RenkoFlowEngine {
     // O 1º box do dia nasce no preço de abertura, então o sinal pode sair dele em diante.
     const tickSession = this.sessionKey(tick.timestamp);
     if (this.lastSessionKey !== undefined && tickSession !== this.lastSessionKey) {
-      this.lastSessionKey = tickSession;
       const basePrice = snapToTick(tick.price, this.asset);
+      // Registra a emenda ANTES de re-ancorar: fechamento do último box do dia anterior
+      // contra o preço de abertura de hoje. Gap nunca vira box Renko, mas é o número que
+      // o operador quer ver na tela (+/- pontos entre os dois pregões).
+      const prevClose =
+        prevTickPrice > 0
+          ? prevTickPrice
+          : this.boxes.length > 0
+          ? this.boxes[this.boxes.length - 1].close
+          : this.currentBox?.close ?? basePrice;
+      this.sessionGaps.push({
+        fromDate: this.lastSessionKey,
+        toDate: tickSession,
+        fromPrice: prevClose,
+        toPrice: basePrice,
+        gapPoints: basePrice - prevClose,
+        boxIndex: this.boxes.length,
+        timestamp: tick.timestamp,
+      });
+      this.lastSessionKey = tickSession;
       this.currentBox = {
         index: this.boxes.length,
         direction: 'UP',
@@ -292,6 +322,7 @@ export class RenkoFlowEngine {
         closedBox.orderDispatched = signal;
       }
 
+      closedBox.sessionDate = tickSession;
       this.boxes.push(closedBox);
       closedBoxes.push(closedBox);
       newBoxClosed = true;

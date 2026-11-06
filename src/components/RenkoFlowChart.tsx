@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { AutomationConfig, RenkoBox, TradeOrder } from '../types/trading';
+import { AutomationConfig, RenkoBox, SessionGap, TradeOrder } from '../types/trading';
 import { ChartSeries } from '../utils/barEngines';
 import { Drawing, DrawingColor, DrawingTool, loadDrawings, saveDrawings } from '../types/drawing';
 import { ChartLayout, DrawingOverlay } from './DrawingOverlay';
@@ -74,6 +74,11 @@ const levelRgba = (hex: string, alpha: number) => {
 
 interface RenkoFlowChartProps {
   boxes: RenkoBox[];
+  /**
+   * Emendas de pregão da série (fechamento de ontem → abertura de hoje). O gap NUNCA vira
+   * tijolo — vem à parte para o gráfico desenhar o salto entre as sessões e o número em pontos.
+   */
+  sessionGaps?: SessionGap[];
   currentBox: Partial<RenkoBox> | null;
   currentPrice: number;
   openOrders: TradeOrder[];
@@ -189,6 +194,7 @@ const EXHAUST_DECAY_RATIO = 0.7;
 
 export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   boxes,
+  sessionGaps = [],
   currentBox,
   currentPrice,
   openOrders,
@@ -937,16 +943,25 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // o traço ficaria colado na barra em formação, "caminhando" com o gráfico.
     // =======================================================================
     const lastBoxTime = allBoxes[totalCount - 1]?.timeEnd || allBoxes[totalCount - 1]?.timeStart || 0;
-    const dayBoundaries: { x: number; label: string }[] = [];
+    // Gap de abertura por índice do 1º tijolo da sessão nova: é o número que a etiqueta da
+    // virada de dia mostra junto da data ("05/11" + "GAP +45p").
+    const gapByBoxIndex = new Map<number, SessionGap>();
+    sessionGaps.forEach((g) => gapByBoxIndex.set(g.boxIndex, g));
+    const dayBoundaries: { x: number; label: string; gap?: SessionGap }[] = [];
     for (let i = 1; i < displayedBoxes.length; i++) {
-      const prevDay = new Date(displayedBoxes[i - 1].timeEnd || displayedBoxes[i - 1].timeStart).getDate();
-      const curDay = new Date(displayedBoxes[i].timeEnd || displayedBoxes[i].timeStart).getDate();
+      const prevBox = displayedBoxes[i - 1];
+      const curBox = displayedBoxes[i];
+      // sessionDate é o carimbo do motor (fonte primária); a data do timestamp cobre o
+      // replay/contexto estático, que não passa pelo motor e não tem o campo.
+      const prevDay = prevBox.sessionDate ?? new Date(prevBox.timeEnd || prevBox.timeStart).toDateString();
+      const curDay = curBox.sessionDate ?? new Date(curBox.timeEnd || curBox.timeStart).toDateString();
       if (curDay !== prevDay) {
-        const bornAt = displayedBoxes[i].timeStart || displayedBoxes[i].timeEnd;
+        const bornAt = curBox.timeStart || curBox.timeEnd;
         if (lastBoxTime < bornAt + asset.session.auctionMinutes * 60_000) continue;
         dayBoundaries.push({
           x: (xs[i] + xs[i - 1]) / 2,
-          label: new Date(displayedBoxes[i].timeEnd || displayedBoxes[i].timeStart).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+          label: new Date(curBox.timeEnd || curBox.timeStart).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+          gap: gapByBoxIndex.get(startIdx + i) ?? gapByBoxIndex.get(curBox.index),
         });
       }
     }
@@ -1659,8 +1674,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.rect(0, 0, Math.max(0, lineRight), Math.max(1, pricePaneHeight - 1));
       ctx.clip();
 
-      // Pavio (no gráfico de Tempo desenhamos blocos sólidos estilo Renko, sem pavios)
-      if (chartSeries !== 'tempo') {
+      // Pavio apenas no Range: ali o box guarda a máxima/mínima REAIS do período. No Renko
+      // o corpo é fechado (open→close = 1 box) e o "pavio" vinha da janela de acumulação —
+      // era ele que dava ao tijolo o aspecto de candle sujo e borrava a emenda dos pregões.
+      if (chartSeries === 'range') {
         ctx.strokeStyle = isUp ? '#059669' : '#dc2626';
         ctx.lineWidth = 1.5;
         ctx.beginPath();
@@ -1699,16 +1716,35 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
         if (!isMobile) {
           const ptsRemaining = isUp ? targetClosePrice - currentPrice : currentPrice - targetClosePrice;
+          // Etiqueta acima do ALVO do box (ghost), nunca do pavio: o número acompanha o tijolo
+          // em formação em vez de flutuar longe dele.
+          const ghostLabelY = Math.min(topY, ghostTopY);
           ctx.fillStyle = '#38bdf8';
           ctx.font = '9px "JetBrains Mono", monospace';
           ctx.textAlign = 'center';
-          ctx.fillText(`+${b.ticksCount}t`, centerX, highY - 14);
+          ctx.fillText(`+${b.ticksCount}t`, centerX, ghostLabelY - 12);
           ctx.fillStyle = isUp ? '#34d399' : '#f87171';
           ctx.fillText(
             `${ptsRemaining > 0 ? `faltam ${ptsRemaining}p` : 'fechando'}`,
             centerX,
-            highY - 4
+            ghostLabelY - 3
           );
+        }
+      } else if (chartSeries === 'renko') {
+        // TIJOLO RENKO LIMPO: bloco sólido de 1 box, canto discreto, borda fina da mesma
+        // família da cor (escurecer demais engorda o desenho) e realce de 1px no topo para
+        // dar relevo sem virar candle.
+        const radius = boxWidth >= 6 ? 2 : 1;
+        ctx.fillStyle = isUp ? '#10b981' : '#ef4444';
+        ctx.beginPath();
+        ctx.roundRect(left, topY, boxWidth, boxH, radius);
+        ctx.fill();
+        ctx.strokeStyle = isUp ? 'rgba(4, 120, 87, 0.95)' : 'rgba(153, 27, 27, 0.95)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        if (boxWidth >= 4 && boxH >= 4) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+          ctx.fillRect(left + 1, topY + 1, Math.max(1, boxWidth - 2), 1);
         }
       } else {
         ctx.fillStyle = isUp ? '#10b981' : '#ef4444';
@@ -1719,6 +1755,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.fill();
         ctx.stroke();
       }
+
+      // Âncoras das marcas de sinal: no Renko não há pavio, então a seta cola no corpo
+      // (open/close); em Range/Tempo continua na extremidade real do box.
+      const signalBottomY = chartSeries === 'renko' ? Math.max(openY, closeY) : lowY;
+      const signalTopY = chartSeries === 'renko' ? Math.min(openY, closeY) : highY;
 
       // Sinais de Entrada e Convergência no Gráfico de Preço (sem poluição visual repetitiva)
       // O dia de contexto (ontem, estático) nunca operou: suas marcas de compra/venda e
@@ -1753,26 +1794,26 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         // Padrão único em TODOS os navegadores: ▲ C compra / ▼ V venda — a palavra "MÃE" foi
         // abolida do gráfico (poluía a tela; papel e lado continuam distinguíveis nas linhas
         // de ordem pela cor e pela tag P1/P2/RET, que só existem quando há pirâmide/reteste).
-        ctx.fillText('▲ C', centerX, lowY + (isMobile ? 12 : 16));
+        ctx.fillText('▲ C', centerX, signalBottomY + (isMobile ? 12 : 16));
         lastBuySignalX = centerX;
       } else if (!hideSignals && b.convergenceType === 'BUY_CONVERGENCE' && !isMobile && centerX - lastBuySignalX >= 22) {
         ctx.fillStyle = '#059669';
         ctx.font = '8px "Plus Jakarta Sans"';
         ctx.textAlign = 'center';
-        ctx.fillText('▲', centerX, lowY + 11);
+        ctx.fillText('▲', centerX, signalBottomY + 11);
       }
 
       if (shouldDrawSell) {
         ctx.fillStyle = '#ef4444';
         ctx.font = isMobile ? 'bold 8.5px "Plus Jakarta Sans"' : 'bold 10px "Plus Jakarta Sans"';
         ctx.textAlign = 'center';
-        ctx.fillText('▼ V', centerX, highY - (isMobile ? 6 : 10));
+        ctx.fillText('▼ V', centerX, signalTopY - (isMobile ? 6 : 10));
         lastSellSignalX = centerX;
       } else if (!hideSignals && b.convergenceType === 'SELL_CONVERGENCE' && !isMobile && centerX - lastSellSignalX >= 22) {
         ctx.fillStyle = '#dc2626';
         ctx.font = '8px "Plus Jakarta Sans"';
         ctx.textAlign = 'center';
-        ctx.fillText('▼', centerX, highY - 5);
+        ctx.fillText('▼', centerX, signalTopY - 5);
       }
       ctx.restore();
 
@@ -1865,6 +1906,54 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     boxPositionsRef.current = boxPositions;
 
     // =======================================================================
+    // EMENDA DE PREGÃO (gap de abertura): traço tracejado ligando o fechamento do
+    // último tijolo de um dia à abertura do primeiro tijolo do dia seguinte. O motor
+    // re-ancora na abertura, então esse salto NUNCA vira box — sem esta linha ele
+    // simplesmente desaparece e o operador não enxerga que houve gap entre os pregões.
+    // =======================================================================
+    if (sessionGaps.length > 0 && boxPositions.length > 0) {
+      const xByBoxIndex = new Map<number, number>();
+      boxPositions.forEach((bp) => xByBoxIndex.set(bp.index, bp.x));
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, Math.max(0, lineRight), Math.max(1, pricePaneHeight - 1));
+      ctx.clip();
+
+      sessionGaps.forEach((gap) => {
+        const nextX = xByBoxIndex.get(gap.boxIndex);
+        if (nextX === undefined) return; // 1º tijolo da sessão nova fora da janela visível
+        const openY = priceToY(gap.toPrice);
+        const closeY = priceToY(gap.fromPrice);
+        const seamX = nextX - boxWidth / 2;
+        const prevX = xByBoxIndex.get(gap.boxIndex - 1);
+        const markW = Math.max(4, boxWidth * 0.35);
+
+        // Diagonal da emenda: do fechamento anterior (ou da borda da janela, se ele já saiu
+        // da tela) até a abertura de hoje. A inclinação É o gap.
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(prevX !== undefined ? prevX + boxWidth / 2 : Math.max(2, seamX - boxWidth * 2), closeY);
+        ctx.lineTo(seamX, openY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Ticks horizontais nos dois preços da emenda: leem o fechamento e a abertura reais.
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
+        ctx.beginPath();
+        ctx.moveTo(seamX, openY);
+        ctx.lineTo(seamX + markW, openY);
+        ctx.moveTo(seamX, closeY);
+        ctx.lineTo(seamX - markW, closeY);
+        ctx.stroke();
+      });
+
+      ctx.restore();
+    }
+
+    // =======================================================================
     // LINHA DE ABERTURA DE DIA (contexto ↔ dia-alvo): traço fino só dentro do
     // painel de preço. Antes ela descia full-height, furava o divisor e o fluxo
     // inteiro — "vazava a caixa" e virava ruído na janela de baixo.
@@ -1887,6 +1976,22 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const lx = Math.min(Math.max(db.x, lw / 2 + 2), lineRight - lw / 2 - 2);
       ctx.fillStyle = '#f59e0b';
       ctx.fillText(db.label, lx, 14);
+
+      // Gap de abertura da sessão logo abaixo da data: é o número que diz se o dia abriu
+      // acima (verde) ou abaixo (vermelho) do fechamento do pregão anterior.
+      if (db.gap) {
+        const gp = Math.round(db.gap.gapPoints);
+        const gapTxt = `GAP ${gp > 0 ? '+' : ''}${gp}p`;
+        ctx.font = isMobile ? 'bold 7px "JetBrains Mono"' : 'bold 8px "JetBrains Mono"';
+        const gw = ctx.measureText(gapTxt).width + 8;
+        const gx = Math.min(Math.max(db.x, gw / 2 + 2), lineRight - gw / 2 - 2);
+        ctx.fillStyle = gp >= 0 ? 'rgba(16, 185, 129, 0.16)' : 'rgba(239, 68, 68, 0.16)';
+        ctx.beginPath();
+        ctx.roundRect(gx - gw / 2, 17, gw, 11, 3);
+        ctx.fill();
+        ctx.fillStyle = gp >= 0 ? '#34d399' : '#f87171';
+        ctx.fillText(gapTxt, gx, 25.5);
+      }
     });
 
     // Selo "HISTÓRICO -N": avisa que o operador rolou para trás; um clique nele volta ao hoje
@@ -2454,6 +2559,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     showSignalArrows,
     orderValueMode,
     assetWatermark,
+    sessionGaps,
   ]);
 
   // =========================================================================

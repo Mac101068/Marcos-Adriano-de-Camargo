@@ -41,9 +41,16 @@ const WDO = ASSETS.WDO;
 
 console.log('1) Código do gráfico sai do registro');
 eq('WIN (tem WINZ26)', chartSymbolFor(WIN), 'WINZ26');
-eq('WDO (sem vencimento confirmado → cai na contínua)', chartSymbolFor(WDO), 'WDO$N');
+// O WDO teve o vencimento confirmado no registro (WDOZ26) — antes deste assert o ativo ainda não
+// tinha vigente, e por isso ele era o exemplo de "cai na contínua". Agora ele é o exemplo oposto.
+eq('WDO (vencimento confirmado → abre o vigente)', chartSymbolFor(WDO), 'WDOZ26');
 eq('papel do WIN derivado', symbolRole(WIN, chartSymbolFor(WIN)), 'vigente');
-eq('papel do WDO derivado', symbolRole(WDO, chartSymbolFor(WDO)), 'serie');
+eq('papel do WDO derivado', symbolRole(WDO, chartSymbolFor(WDO)), 'vigente');
+// O caso 'sem vencimento confirmado' (spec de contrato novo, status 'a_confirmar') continua
+// precisando de cobertura: sem vigente, a contínua é o único código honesto e o papel é 'serie'.
+const semVigente = { ...WIN, activeContract: undefined };
+eq('spec sem vigente cai na contínua', chartSymbolFor(semVigente), WIN.primarySymbol);
+eq('papel de spec sem vigente', symbolRole(semVigente, chartSymbolFor(semVigente)), 'serie');
 
 console.log('2) Padrão do config e ativo resolvido batem');
 eq('DEFAULT_EA_CONFIG.symbol', DEFAULT_EA_CONFIG.symbol, 'WINZ26');

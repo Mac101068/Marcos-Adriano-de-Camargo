@@ -17,14 +17,49 @@ import { formatTickTimeStr } from '../utils/timeFormat';
  */
 
 /** De onde veio o volume de cada tick — decide se delta/CVD são confiáveis. */
-export type VolumeSource = 'TICK' | 'M1_RATE' | 'NONE';
+export type VolumeSource = 'TICK' | 'TICKS_REAIS' | 'M1_RATE' | 'NONE';
+
+/**
+ * Metadados que a ponte devolve no HISTORY_DONE. Não são decoração: `resolucaoMs` diz de quantos
+ * em quantos milissegundos a fita real foi agrupada (e portanto qual é a menor virada de box que o
+ * replay ainda consegue enxergar) e `arquivosServidos` diz qual recorte de disco atendeu cada dia —
+ * a contínua da tela é servida pelo contrato vigente daquele pregão.
+ */
+export type HistoryMeta = {
+  resolucaoMs?: number;
+  /**
+   * Resolução que o cliente pediu quando o orçamento de bytes obrigou a servir outra (mais grossa).
+   * Existe para a tela poder dizer 'você pediu 100 ms, veio 1.000 ms' em vez de embelecer a troca.
+   */
+  resolucaoPedidaMs?: number;
+  /** Datas AAAAMMDD efetivamente servidas da fita real. */
+  diasServidos?: string[];
+  arquivosServidos?: string[];
+  /** Ticks de negócio lidos do arquivo antes de comprimir. */
+  ticksReaisLidos?: number;
+  contratosCompra?: number;
+  contratosVenda?: number;
+  /**
+   * Faixa de fidelidade MEDIDA da resolução servida (pregão 04/Nov/2026, box 50 pts, contra a fita
+   * cheia no mesmo motor). `validaEstrategia=false` não é timidez: é a diferença entre um replay que
+   * pode julgar limiar de Δ e um que só reproduz o caminho -- em 4.000 ms o erro do Δ por box já é
+   * 80% e em 8.000 ms 97%, porque o bucket engoliu as viradas que constroem o Δ.
+   */
+  validaEstrategia?: boolean;
+  alinhamentoMedido?: number;
+  erroDeltaMedido?: number;
+  sinaisRecuperados?: string;
+  /** Texto da ponte declarando o que a série é (e o que ela não mede). */
+  nota?: string;
+};
 
 export type HistoryResult = {
   ticks: Tick[];
-  /** `TICK` = o próprio feed trouxe volume; `M1_RATE` = volume sintetizado das barras de 1min. */
+  /** `TICKS_REAIS` = fita da B3 comprimida; `M1_RATE` = 4 ticks fabricados por barra de 1min. */
   volumeSource: VolumeSource;
   /** Dias efetivamente recebidos (a corretora pode devolver menos do que foi pedido). */
   days: number;
+  meta: HistoryMeta;
 };
 
 export type SufficiencyReport = {
@@ -46,10 +81,22 @@ type PendingRequest = {
   reject: (reason: Error) => void;
   timer: ReturnType<typeof setTimeout> | null;
   volumeSource: VolumeSource;
+  meta: HistoryMeta;
   days: number;
+  /** Rearma o prazo de inatividade a cada mensagem recebida (veja `requestHistory`). */
+  armar?: (ms: number) => void;
 };
 
-const DEFAULT_TIMEOUT_MS = 25_000;
+/**
+ * Prazo do PRIMEIRO byte. Ler e comprimir um pregão custa 2,1M de linhas de um .gz — segundos de
+ * disco/CPU do lado da ponte, e a ponte só manda o primeiro chunk quando o trabalho acabou. Um
+ * timeout curto aqui mataria o replay de validação justo no caminho que ele precisa usar.
+ */
+const FIRST_BYTE_TIMEOUT_MS = 120_000;
+
+/** Depois do primeiro chunk, a entrega está andando: silêncio de 20s já é conexão morta. */
+const IDLE_TIMEOUT_MS = 20_000;
+
 const HISTORY_MESSAGE_TYPES = new Set(['HISTORY_CHUNK', 'HISTORY_DONE', 'HISTORY_ERROR']);
 
 export class MarketHistoryService {
@@ -90,12 +137,24 @@ export class MarketHistoryService {
         reject,
         timer: null,
         volumeSource: 'TICK',
+        meta: {},
         days,
       };
-      entry.timer = setTimeout(() => {
-        this.drop(reqId);
-        reject(new Error(`A ponte do MT5 não respondeu ao pedido de histórico em ${Math.max(1, Math.round((opts.timeoutMs ?? DEFAULT_TIMEOUT_MS) / 1000))}s.`));
-      }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      // Timeout de ATIVIDADE, não de duração: o prazo cheio vale até o primeiro chunk (a ponte
+      // lê e comprime o pregão inteiro antes de mandar a primeira linha) e depois vira
+      // inatividade — cada chunk que chega empurra a deadline. Assinaria um replay de 5 dias
+      // com um cronômetro de 25s fixo, que é exatamente o tamanho do trabalho no disco.
+      const armar = (ms: number) => {
+        if (entry.timer) clearTimeout(entry.timer);
+        entry.timer = setTimeout(() => {
+          this.drop(reqId);
+          reject(new Error(
+            `A ponte do MT5 não respondeu ao pedido de histórico (${Math.round(ms / 1000)}s sem sinal).`
+          ));
+        }, ms);
+      };
+      armar(opts.timeoutMs ?? FIRST_BYTE_TIMEOUT_MS);
+      entry.armar = armar;
 
       this.pending.set(reqId, entry);
 
@@ -119,6 +178,7 @@ export class MarketHistoryService {
     const reqId = payload?.data?.reqId ?? payload?.reqId;
     const entry = reqId ? this.pending.get(String(reqId)) : undefined;
     if (!entry) return true; // pedido já concluído/cancelado: a resposta chega tarde, ignora
+    entry.armar?.(IDLE_TIMEOUT_MS);
 
     if (type === 'HISTORY_CHUNK') {
       const chunk = Array.isArray(payload.data?.ticks) ? payload.data.ticks : [];
@@ -127,16 +187,19 @@ export class MarketHistoryService {
         if (tick) entry.ticks.set(tick.id, tick);
       }
       if (payload.data?.volumeSource) entry.volumeSource = payload.data.volumeSource as VolumeSource;
+      coletarMeta(entry.meta, payload.data);
       entry.onProgress?.(entry.ticks.size);
       return true;
     }
 
     if (type === 'HISTORY_DONE') {
       const ticks = [...entry.ticks.values()].sort((a, b) => a.timestamp - b.timestamp);
+      coletarMeta(entry.meta, payload.data);
       const result: HistoryResult = {
         ticks,
         volumeSource: (payload.data?.volumeSource as VolumeSource) || entry.volumeSource,
         days: Number(payload.data?.days) || entry.days,
+        meta: entry.meta,
       };
       this.finish(String(reqId));
       entry.resolve(result);
@@ -187,6 +250,27 @@ export class MarketHistoryService {
     const verdict = zeroVolumePct >= 0.8 ? 'SEM_VOLUME' : zeroVolumePct >= 0.2 ? 'VOLUME_BAIXO' : 'OK';
     return { total, zeroVolumePct, crossPct, verdict };
   }
+}
+
+/**
+ * Copia para o `meta` os campos de procedência que a ponte manda no CHUNK/DONE.
+ * Só grava o que veio: um M1_RATE não declara resolução de fita, e a tela tem de conseguir
+ * distinguir "não informou" de "informou zero".
+ */
+function coletarMeta(meta: HistoryMeta, data: any): void {
+  if (!data || typeof data !== 'object') return;
+  if (typeof data.resolucaoMs === 'number') meta.resolucaoMs = data.resolucaoMs;
+  if (typeof data.resolucaoPedidaMs === 'number') meta.resolucaoPedidaMs = data.resolucaoPedidaMs;
+  if (Array.isArray(data.diasServidos)) meta.diasServidos = data.diasServidos.map(String);
+  if (Array.isArray(data.arquivosServidos)) meta.arquivosServidos = data.arquivosServidos.map(String);
+  if (typeof data.ticksReaisLidos === 'number') meta.ticksReaisLidos = data.ticksReaisLidos;
+  if (typeof data.contratosCompra === 'number') meta.contratosCompra = data.contratosCompra;
+  if (typeof data.contratosVenda === 'number') meta.contratosVenda = data.contratosVenda;
+  if (typeof data.validaEstrategia === 'boolean') meta.validaEstrategia = data.validaEstrategia;
+  if (typeof data.alinhamentoMedido === 'number') meta.alinhamentoMedido = data.alinhamentoMedido;
+  if (typeof data.erroDeltaMedido === 'number') meta.erroDeltaMedido = data.erroDeltaMedido;
+  if (typeof data.sinaisRecuperados === 'string') meta.sinaisRecuperados = data.sinaisRecuperados;
+  if (typeof data.nota === 'string') meta.nota = data.nota;
 }
 
 /**

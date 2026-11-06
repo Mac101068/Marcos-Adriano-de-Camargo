@@ -36,8 +36,15 @@ interface BankShape {
   days: Record<string, StoredDay>;
 }
 
-/** Ordem de confiança de volume: o pior volumeSource do conjunto vale para o lote todo. */
-const VOLUME_RANK: Record<VolumeSource, number> = { TICK: 2, M1_RATE: 1, NONE: 0 };
+/**
+ * Ordem de confiança de volume: o pior volumeSource do conjunto vale para o lote todo.
+ * TICK (fita crua, tick a tick) > TICKS_REAIS (a mesma fita real comprimida em buckets — os
+ * somatórios de compra/venda batem com o arquivo, mas a granularidade de tempo é do bucket,
+ * não do print) > M1_RATE (volume fabricado da barra de 1min) > NONE. A ordem é também o que
+ * faz o `worstVolumeSource` acima funcionar: ele começa em TICK e só desce, então qualquer
+ * valor novo precisa de posto próprio — num empate o rótulo do lote ficaria no valor anterior.
+ */
+const VOLUME_RANK: Record<VolumeSource, number> = { TICK: 3, TICKS_REAIS: 2, M1_RATE: 1, NONE: 0 };
 
 /** Chave de sessão (dia local) de um timestamp — mesma regra do motor Renko. */
 function dayKeyOf(ts: number): string {

@@ -549,28 +549,39 @@ export const Header: React.FC<HeaderProps> = ({
               ? 'Conectar com o MetaTrader 5 via WebSocket local'
               : mt5State.bridgeLegacy
               ? 'Ponte antiga (sem token): aceita ordem de qualquer aparelho da rede. Baixe o script novo em Ajustes > Segurança da Ponte.'
+              : mt5State.bridgeOrdersBlocked
+              ? 'Ponte em MODO REPLAY/VALIDAÇÃO (TRAVA ORDERS_BLOCKED ligada no PC do MT5): ela transmite ticks, histórico, sinais e diário, mas nenhuma ordem de ENTRADA sai, com este robô ligado ou desligado. Para voltar a operar, reinicie a ponte sem a trava.'
               : mt5State.bridgeArmed === false
               ? 'Ponte autenticada e EM SEGURO: com o Robô desligado ela recusa ordens de entrada (saídas e zeragem seguem liberadas).'
               : 'Ponte autenticada e ARMADA: ordens de entrada liberadas, dentro dos tetos de contrato e de ordens por minuto.'
           }
         >
+          {/* Conexão com a ponte: só o ícone do MT5 e uma bolinha de status. O texto
+              "CONECTADO · ARMADO" saiu do cabeçalho — quem precisa do detalhe lê o tooltip
+              e a tira de status abaixo. Verde = conectado e armado; âmbar = conectado em
+              seguro (ou conectando); cinza = desconectado. */}
           {mt5State.status === 'CONNECTED' ? (
             <>
               <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden xl:inline">
-                MT5: CONECTADO
-                {mt5State.bridgeArmed === false ? ' · SEGURO' : mt5State.bridgeArmed ? ' · ARMADO' : ''}
-              </span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  mt5State.bridgeOrdersBlocked
+                    ? 'bg-amber-400'
+                    : mt5State.bridgeArmed
+                    ? 'bg-emerald-400'
+                    : 'bg-amber-400'
+                }`}
+              />
             </>
           ) : mt5State.status === 'CONNECTING' ? (
             <>
               <Wifi className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-              <span className="hidden xl:inline">Conectando...</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             </>
           ) : (
             <>
               <WifiOff className="w-3.5 h-3.5 text-slate-400" />
-              <span className="hidden xl:inline">Conectar MT5</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
             </>
           )}
         </button>
@@ -579,10 +590,14 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={() => setRobotActive(!robotActive)}
           className="flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-all whitespace-nowrap cursor-pointer"
-          title="Ativar/Pausar Envio Automático de Ordens"
+          title={
+            mt5State.bridgeOrdersBlocked
+              ? 'Envio automático de ordens: a ponte está com a TRAVA de execução ligada (modo replay/validação), então ligar/desligar este robô não muda o envio de entradas agora.'
+              : 'Ativar/Pausar Envio Automático de Ordens'
+          }
         >
-          <span className={`w-2 h-2 rounded-full ${robotActive ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-          <span className="hidden md:inline">{robotActive ? 'On' : 'Off'}</span>
+          <span className={`w-2 h-2 rounded-full ${mt5State.bridgeOrdersBlocked ? 'bg-amber-400' : robotActive ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+          <span className="hidden md:inline">{mt5State.bridgeOrdersBlocked ? 'Trava' : robotActive ? 'On' : 'Off'}</span>
         </button>
 
         {/* Toggle do Feed de Mercado — clean: chrome neutro, cor só no ícone de ação */}

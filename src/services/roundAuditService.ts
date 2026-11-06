@@ -1,6 +1,6 @@
 import { TradeOrder } from '../types/trading';
 import { PaperTrade, SeriesKey } from '../utils/paperStrategyBot';
-import type { VolumeSource } from './marketHistoryService';
+import type { HistoryMeta, VolumeSource } from './marketHistoryService';
 import type { AssetId } from '../assets/assetRegistry';
 
 /**
@@ -95,6 +95,13 @@ export interface RoundRecord {
   seed: number;
   source: 'REAL' | 'SYNTHETIC';
   volumeSource?: VolumeSource;
+  /**
+   * Procedência da série de ticks desta corrida (fonte, resolução do bucket, dias e arquivos que
+   * atenderam cada dia). Fica no ledger porque uma rodada de validação só é reproduzível se souber
+   * QUAL caminho de preço existia — dois replays de 22/Out com buckets de 500 ms e de 4 s não são
+   * a mesma experiência de mercado.
+   */
+  fonte?: HistoryMeta;
   tickCount: number;
   operated: boolean;
   aborted: boolean;
@@ -137,6 +144,7 @@ export interface BuildRoundInput {
     aborted: boolean;
     source: 'REAL' | 'SYNTHETIC';
     volumeSource?: VolumeSource;
+    fonte?: HistoryMeta;
     tickCount: number;
   };
   assetId: AssetId;
@@ -324,6 +332,7 @@ export function buildRound(input: BuildRoundInput): RoundRecord {
     seed: meta.seed,
     source: meta.source,
     volumeSource: meta.volumeSource,
+    fonte: meta.fonte,
     tickCount: meta.tickCount,
     operated: meta.operated,
     aborted: meta.aborted,
@@ -480,6 +489,17 @@ class RoundAuditService {
       if (v === undefined || v === null || v === '') return '';
       return `"${String(v).replace(/"/g, '""')}"`;
     };
+    // Fonte e resolução na MESMA coluna do CSV (acrescentar coluna quebraria o cabeçalho abaixo):
+    // uma rodada TICKS_REAIS sem `bucket=1000ms` no arquivo não diz a ninguém qual caminho existia.
+    // O marcador de faixa é o que deixa o CSV falar a verdade: em bucket grosso o caminho vem e o
+    // Δ não -- quem lê o estudo do arquivo precisa poder ver isso sem consultar a escada.
+    const fonteVolume = (r: RoundRecord) => {
+      const bucket = r.fonte?.resolucaoMs ? ` bucket=${r.fonte.resolucaoMs}ms` : '';
+      const faixa = r.fonte?.validaEstrategia === false
+        ? ' Δ-fora-da-faixa-validada'
+        : r.fonte?.validaEstrategia === true ? ' Δ-validado-por-medida' : ' Δ-sem-medicao';
+      return `${r.volumeSource || ''}${bucket}${faixa}`;
+    };
     const num = (v?: number) =>
       v === undefined || v === null || isNaN(v) ? '' : v.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
 
@@ -495,7 +515,7 @@ class RoundAuditService {
             `${r.speed}x`,
             `#${r.seed}`,
             clean(r.source === 'REAL' ? 'HISTÓRICO REAL (MT5)' : 'SINTÉTICO'),
-            clean(r.volumeSource || ''),
+            clean(fonteVolume(r)),
             r.tickCount,
             clean(r.operated ? 'OPERA' : 'silencioso'),
             clean(r.assetSymbol),
@@ -525,7 +545,7 @@ class RoundAuditService {
             `${r.speed}x`,
             `#${r.seed}`,
             clean(r.source === 'REAL' ? 'HISTÓRICO REAL (MT5)' : 'SINTÉTICO'),
-            clean(r.volumeSource || ''),
+            clean(fonteVolume(r)),
             r.tickCount,
             clean(r.operated ? 'OPERA' : 'silencioso'),
             clean(r.assetSymbol),

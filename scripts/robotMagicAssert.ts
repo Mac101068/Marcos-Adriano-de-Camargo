@@ -24,6 +24,8 @@ const {
 } = await import('../src/types/trading');
 const { DEFAULT_EA_CONFIG } = await import('../src/services/eaConfigService');
 const { generatePythonMT5Script } = await import('../src/utils/pythonScriptGenerator');
+// Importado no topo porque a régua de dinheiro é conferida antes da seção dos robôs de papel.
+const { ASSETS } = await import('../src/assets/assetRegistry');
 
 let failures = 0;
 function ok(name: string, cond: boolean, seen?: unknown) {
@@ -63,22 +65,29 @@ ok('ACCOUNT_INFO reporta robotMagic', py.includes('"robotMagic": MAGIC_NUMBER'))
 ok('ACCOUNT_INFO reporta pointValue do ativo', py.includes('"pointValue": ASSET_POINT_VALUE'));
 
 console.log('\n== R$/ponto por ativo no script gerado ==');
+// Régua de dinheiro, conferida contra a especificação da B3: WIN tick de 5 pts = R$1,00 →
+// R$0,20/pt; WDO tick de 0,5 pt = R$5,00 → R$10,00/pt. Os literais abaixo são o ALARME: se
+// alguém editar o assetRegistry de cabeça, é aqui que a conta volta a ficar errada na tela.
+eq('registro WIN · R$/ponto', ASSETS.WIN.pointValue, 0.2);
+eq('registro WDO · R$/ponto', ASSETS.WDO.pointValue, 10.0);
+eq('registro WIN · tick em R$', ASSETS.WIN.pointValue * ASSETS.WIN.tickSize, 1);
+eq('registro WDO · tick em R$', ASSETS.WDO.pointValue * ASSETS.WDO.tickSize, 5);
 ok('WIN = 0.2', py.includes('ASSET_POINT_VALUE = 0.2'));
 const pyWdo = generatePythonMT5Script({ ...DEFAULT_EA_CONFIG, assetId: 'WDO', symbol: 'WDO$N' });
-ok('WDO = 0.1 (não soldado no WIN)', pyWdo.includes('ASSET_POINT_VALUE = 0.1'));
+ok('WDO carrega a régua do registro (R$10/pt, não soldado no WIN)', pyWdo.includes(`ASSET_POINT_VALUE = ${ASSETS.WDO.pointValue}`));
 ok('PnL zerado usa ASSET_POINT_VALUE', pyWdo.includes('ASSET_POINT_VALUE * pos.volume'));
 
 console.log('\n== Robôs de papel (R$/ponto por ativo) ==');
 const { PaperStrategyBot } = await import('../src/utils/paperStrategyBot');
 const { pointsToBRL } = await import('../src/assets/assetRegistry');
-const { ASSETS } = await import('../src/assets/assetRegistry');
 const bot = new PaperStrategyBot('renko');
 eq('default WIN', bot.getAssetId(), 'WIN');
 bot.setAsset('WDO');
 eq('setAsset troca o ativo', bot.getAssetId(), 'WDO');
-// Conversão determinística, sem depender do gatilho do coletor: 50 pts × R$0,10 (WDO) = R$5,
-// contra os R$10 que sairia se a contabilidade continuasse soldada no WIN (R$0,20).
-eq('pointsToBRL(WDO, 50 pts, 1 ctro)', pointsToBRL(50, 1, ASSETS.WDO), 5);
+// Conversão determinística, sem depender do gatilho do coletor: 50 pts × R$10,00 (WDO) = R$500,
+// contra os R$10 que saem no WIN (R$0,20/pt). Os dois ativos na mesma chamada têm de dar
+// resultados diferentes — se convergirem, a contabilidade voltou a soldar no mini-índice.
+eq('pointsToBRL(WDO, 50 pts, 1 ctro)', pointsToBRL(50, 1, ASSETS.WDO), 500);
 eq('pointsToBRL(WIN, 50 pts, 1 ctro)', pointsToBRL(50, 1, ASSETS.WIN), 10);
 const mkBox = (i: number, dir: 'UP' | 'DOWN', open: number, close: number, t: number) => ({
   index: i, direction: dir, open, close, high: Math.max(open, close), low: Math.min(open, close),
@@ -98,8 +107,9 @@ bot.onClosedBox(mkBox(1, 'DOWN', 10100, 10000, t0 + 60000), 'SELL', cfgNoHours);
 const settled = bot.getTrades();
 ok('virada liquidou as posições', settled.length > 0, settled.length);
 for (const tr of settled) {
-  const want = (tr.points ?? 0) * 0.1 * tr.contracts; // régua WDO, não a do WIN
-  ok(`trade ${tr.role} · R$ = pontos × 0,10 × ctros`, Math.abs((tr.financial ?? 0) - want) < 0.001, { fin: tr.financial, want });
+  // Espera derivada do registro (a régua em si está pinada logo acima) × contratos.
+  const want = (tr.points ?? 0) * ASSETS.WDO.pointValue * tr.contracts;
+  ok(`trade ${tr.role} · R$ = pontos × ${ASSETS.WDO.pointValue} × ctros`, Math.abs((tr.financial ?? 0) - want) < 0.001, { fin: tr.financial, want });
 }
 
 const { shadowRobotService } = await import('../src/services/shadowRobotService');
