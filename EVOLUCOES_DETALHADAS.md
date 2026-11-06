@@ -8,6 +8,72 @@ Legenda de status: ✅ entregue e verificada · ⚠️ entregue com limitação 
 
 ---
 
+## 📆 Ciclo 18 — 06/11/2026 · O funil ganhou painel próprio no rodapé e apertou para o padrão SEL-A
+
+**Causa raiz (o gatilho do ciclo)**: dois pedidos seguidos do operador. (a) *"temos uma boleta à direita,
+espaço livre embaixo, hoje os limiares são calculados e gostaria de ter estes dados para avaliação"* — as
+réguas do funil auto-calibrado eram calculadas mas **invisíveis na tela**. (b) Depois de ver o painel:
+*"temos variáveis ali que podem ser ajustadas, faça a alteração para melhorarmos a performance, o EA já está
+empatando"* — mostrar sem poder mexer não tirava o robô do breakeven.
+
+### 18.1 A faixa do funil: limiar calculado virou leitura no rodapé (fonte única)
+
+- **`SessionRegimeMeter.getSelfCalibratedBreakdown(side, P, piso, base)`** devolve o **limiar + a ORIGEM**
+  (`percentil` / `piso` / `fisico`, com `percentileValue`, `floorValue`, `dayMean`, `dayCount`, `samples`).
+  O **`getSelfCalibratedLimit` passou a delegar** a esse breakdown — **fonte única**: a tela que mostra o
+  número e o avaliador que decide o sinal **não podem discordar** (regra 12/13 do projeto: nunca mentir no UI).
+- **`funnelMetrics.ts`** (puro, testável): `computeFunnelMetrics(config, meter, boxes)` fotografa os dois lados
+  (C/V), o **box corrente** (Δ, volume, divergência, se passa os dois gates) e o **modo** (auto/fixo) + o
+  pacote de alavancas. Só roda em renko/range.
+- **`FunnelMetricsPanel.tsx`**: faixa **sempre-visível** (`Funil` + chip AUTO-CALIBRADO/FIXO + `C ≥…`/`V ≥…`
+  com a origem + `div ≥…%` + N boxes + chip do box atual ▲/▼ ✓/✕) e **área expansível** com os detalhamentos.
+  Plugar em `RenkoFlowChart.tsx` antes do RODAPÉ; `App.tsx` calcula via `React.useMemo` e passa como prop.
+
+### 18.2 Painel de leitura virou painel de sintonia (as 4 alavancas ao vivo)
+
+- Área expandida ganhou **AUTO ligado/desligado** (`adaptiveThresholdEnabled`) + **4 sliders**: **Δ físico**
+  (`minDeltaThreshold`), **Percentil** (`adaptiveThresholdPercentile`, P50–P90), **Piso**
+  (`adaptiveFloorMultiple`, 1,0–2,5×) e **Divergência** (`flowDivergenceMin`, 0–60%, só na Pirâmide).
+- Cada slider escreve por `onPatchConfig → onFunnelPatch → handleBoletaConfigPatch = patchActiveStrategy`
+  (**regra 15**: tudo vai para a `SavedStrategy` ativa via `splitStrategyPatch → updateStrategyConfig`). O
+  motor lê o **config novo a cada tick** (`engine.processTick(tick, config)`), então a mudança pega já nos
+  próximos boxes. **Nada edita a seco**: o número na tela é o mesmo que o evaluator usa.
+
+### 18.3 A/B headless das alavancas na base real — o que realmente move a performance
+
+- Banco sobre a **base real WINZ26 (11 pregões)** com a mesma máquina do terminal (`RenkoFlowEngine` +
+  `PaperStrategyBot` + evaluator compartilhado), varrendo percentil (P50–P80), piso (1,0–2,0) e divergência
+  (OFF–60%) + combos. **Descoberta**: o **percentil é quase inerte** (o piso e a divergência já seguram o
+  corte); quem **sobe PF e R$/trade** são **PISO e DIVERGÊNCIA**, ao custo de **menos trades**. Reproduziu as
+  âncoras do Ciclo 17 (físico Δ50 R$ 29.035/PF 2,43; Auto+div40 os 11/11 positivos).
+- **SEL-A** (P70 · piso 1,6 · div 50) foi o ponto doce: **11/11 pregões positivos**, PF 3,71→**4,17**,
+  R$/trade 15,9→**21,4**, DD menor. Corroboração no **WDOZ26 (13 pregões)**: o Cycle 17 era **negativo**
+  (PF 0,66) e o SEL-A **vira positivo** (PF 1,63) — mesma direção, mas **amostra minúscula** (23 trades).
+
+### 18.4 SEL-A virou o novo padrão da Pirâmide (migração guardada + toast)
+
+- **`DEFAULT_EA_CONFIG`** e o **preset Pirâmide** agora trazem `adaptiveThresholdPercentile=0.7`,
+  `adaptiveFloorMultiple=1.6`, `flowDivergenceMin=0.5` (percentil/piso antes só caíam no `?? 0,6/1,3` do
+  evaluator; agora são **campos explícitos** no padrão).
+- Migração guardada **`funnelSelAMigration.ts`** (flag `fluxo_funnel_sela_v1`): roda **depois** da
+  `autoCalibrationMigration` no boot (que cria o pacote Cycle 17 que esta promove), **só toca Pirâmide no
+  pacote Cycle 17 intocado** (`adaptive=true + Δ50 + div=0,4` e percentil/piso ainda nos defaults — quem
+  calibrou por conta própria fica intacto), cobre **config ativa + biblioteca**, e dispara **toast INFO**
+  explicando os números e como reverter (2,0–5,2 s). Reversível na UI pelos próprios sliders do painel.
+
+### Verificação do Ciclo 18
+
+- ✅ `npx tsc --noEmit` limpo · ✅ `npx vite build` OK (4,5 s) · ✅ **asserts da migração SEL-A 14/14**
+  (ativa Cycle 17 migra; biblioteca só promove quem está no pacote intocado; idempotência pela flag; defaults
+  explícitos também migram; conservadorismo nos casos div≠0,4 / Reteste / físico / percentil próprio) ·
+  ✅ A/B reproduzindo as âncoras do Ciclo 17 · 🗑️ scripts descartáveis (`_benchFunil`, `_benchWdo`,
+  `_assertSelA`, `_assertFunnel`) apagados após uso.
+- ⚠️ **Bases reais ainda são proxy `M1_RATE`** (veredito `eaBaseReal`): os números valem como **direção das
+  alavancas**, não como absoluto calibrável. **Nada conferido em tela/demo** — validação ao vivo na demo XP
+  (dia lateral) é o próximo marco, e **T&T genuíno** segue pré-requisito para calibração de verdade.
+
+---
+
 ## 📆 Ciclo 17 — 05/11/2026 · O replay aprendeu a parecer fita real e o funil passou a se auto-calibrar pelo pregão
 
 **Causa raiz (o gatilho do ciclo)**: duas frentes. (a) O replay ainda era **metrônomo**: o sintético
