@@ -71,20 +71,28 @@ export async function syncBridgeTokenWithServer(): Promise<string> {
   return getBridgeToken();
 }
 
+/** Limpa o token salvo para forçar re-sincronização com o arquivo do servidor. */
+export function clearBridgeToken(): void {
+  memoryToken = '';
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {}
+}
+
 /**
  * Token atual da ponte. Na primeira execução ele é criado e gravado sozinho, para
  * que o script baixado e o app saiam com o MESMO segredo sem trabalho manual.
  */
 export function getBridgeToken(): string {
+  if (memoryToken && memoryToken.length >= 16) {
+    try {
+      localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken);
+    } catch {}
+    return memoryToken;
+  }
   try {
     const saved = localStorage.getItem(TOKEN_STORAGE_KEY);
-    if (saved) return saved;
-    if (memoryToken) {
-      try {
-        localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken);
-      } catch {}
-      return memoryToken;
-    }
+    if (saved && saved.length >= 16) return saved;
     const fresh = generateBridgeToken();
     localStorage.setItem(TOKEN_STORAGE_KEY, fresh);
     return fresh;

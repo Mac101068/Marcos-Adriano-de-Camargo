@@ -124,7 +124,7 @@ import { computeSessionLevels, computeRunningVwap, PriceLevel, VwapCurve } from 
 
 import type { HedgeBook, HedgeSideBook } from './components/BoletaTicket';
 
-import { getBridgeToken } from './utils/bridgeSecurity';
+import { getBridgeToken, clearBridgeToken, syncBridgeTokenWithServer } from './utils/bridgeSecurity';
 
 import { seriesCollectorService } from './services/seriesCollectorService';
 
@@ -2114,19 +2114,22 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     eng.setBoxPoints(config.boxPoints);
     const hist = allTicksRef.current;
     if (hist.length > 0) {
-      eng.initialize(hist[0].price, hist[0].timestamp);
-      for (const t of hist) eng.processTick(t, config);
-    }
-    setBoxes([...eng.getBoxes()]);
-    setCurrentBox(eng.getCurrentBox());
-    setCvd(eng.getCvd());
+      const isHistSane = hist[0] && hist[0].price > 0 && Math.abs(hist[0].price - asset.basePrice) / asset.basePrice < 0.4;
+      if (isHistSane) {
+        eng.initialize(hist[0].price, hist[0].timestamp);
+        for (const t of hist) eng.processTick(t, config);
+        setBoxes([...eng.getBoxes()]);
+        setCurrentBox(eng.getCurrentBox());
+        setCvd(eng.getCvd());
 
-    // Sincroniza o repositório do ativo em memória
-    const curState = assetStateRef.current[asset.id];
-    if (curState) {
-      curState.boxes = [...eng.getBoxes()];
-      curState.currentBox = eng.getCurrentBox();
-      curState.cvd = eng.getCvd();
+        // Sincroniza o repositório do ativo em memória
+        const curState = assetStateRef.current[asset.id];
+        if (curState) {
+          curState.boxes = [...eng.getBoxes()];
+          curState.currentBox = eng.getCurrentBox();
+          curState.cvd = eng.getCvd();
+        }
+      }
     }
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -4488,76 +4491,36 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
     userDisconnectedRef.current = false;
-
     setMt5State({ status: 'CONNECTING' });
-
     const host = config.mt5Host || 'localhost';
-
     const port = config.mt5Port || 8765;
-
     const wsUrl = `ws://${host}:${port}`;
 
-
-
     try {
-
+      syncBridgeTokenWithServer().catch(() => {});
       const socket = new WebSocket(wsUrl);
-
       wsRef.current = socket;
 
-
-
-      socket.onopen = () => {
-
-        // Handshake de segurança: a ponte não entrega tick, nem saldo, nem aceita ordem de
-
-        // quem não provar o token no primeiro frame. Sem isso, QUALQUER dispositivo da rede
-
-        // (ou site aberto no navegador) operaria a conta logada no terminal.
-
+        socket.onopen = () => {
         try {
-
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
-
-          // A ponte já nasce com as regras da tela: sem isso ela julgaria com as constantes
-          // compiladas no .py enquanto o gráfico mostra limiares e filtros configurados aqui.
-
           socket.send(EaConfigService.buildBridgeSyncMessage(config));
-
-          socket.send(JSON.stringify({ action: 'GET_BACKFILL' }));
-
+          socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset) }));
           socket.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(asset) }));
-
-        } catch {
-
-          // socket fechado no interim: o onclose/onerror cuida do estado
-
-        }
+        } catch {}
 
         setMt5State({
-
           status: 'CONNECTED',
-
           brokerCompany: 'MetaTrader 5 Live Bridge',
-
         });
-
         setIsSimulating(false); // Pausa simulação quando conectado ao MT5 real
-
         setLatestToast({
-
           id: `mt5-conn-${Date.now()}`,
-
           type: 'BUY',
-
           title: 'METATRADER 5 CONECTADO COM SUCESSO',
-
           description: `Ponte ativa em ${wsUrl}. Apresentando o token da ponte...`,
-
           timestamp: Date.now(),
-
         });
-
       };
 
 
@@ -4840,7 +4803,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               if (!rawTick || !(rawTick.price > 0)) continue;
               const tickSym = String(payload.symbol || (rawTick as any).symbol || '').toUpperCase();
               const tickAssetId = getAssetIdForSymbol(tickSym);
-              const targetState = assetStateRef.current[tickAssetId];
+              const targetState = assetStateRef.current[tickAssetId] || (tickAssetId === 'BTC' ? assetStateRef.current.BTCBR : tickAssetId === 'BTCBR' ? assetStateRef.current.BTC : undefined);
 
               // O timeStr da ponte vem do relógio do servidor MT5; a fita deve bater com o gráfico
               if (Number.isFinite(Number(rawTick.timestamp))) {
@@ -4894,7 +4857,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           } else if (payload.type === 'SESSION_BACKFILL') {
             const bfSym = String(payload.symbol || '').toUpperCase();
             const bfAssetId = getAssetIdForSymbol(bfSym);
-            const targetState = assetStateRef.current[bfAssetId];
+            const targetState = assetStateRef.current[bfAssetId] || (bfAssetId === 'BTC' ? assetStateRef.current.BTCBR : bfAssetId === 'BTCBR' ? assetStateRef.current.BTC : undefined);
             const bfTicks: Tick[] = (payload.data?.ticks || []).map((t: Tick) =>
               t && Number.isFinite(Number(t.timestamp)) ? { ...t, timeStr: formatTickTimeStr(Number(t.timestamp)) } : t,
             );
@@ -5121,14 +5084,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-      socket.onclose = () => {
-
-        // Nenhum pedido de histórico pode ficar prometendo para sempre sobre uma ponte morta
-
+      socket.onclose = (event) => {
         marketHistoryService.dispose();
-
+        if (event && event.code === 4001) {
+          clearBridgeToken();
+          syncBridgeTokenWithServer().catch(() => {});
+        }
         setMt5State((prev) => ({ ...prev, status: 'DISCONNECTED', bridgeAuthOk: undefined, bridgeArmed: undefined, bridgeLegacy: undefined }));
-
       };
 
     } catch {
@@ -7648,18 +7610,21 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     // Motores e eixos no preço de referência do ativo novo; o livro é o DELE (persistido à parte).
     const nextRangePts = assetParams.rangePoints || (next.id === 'WDO' ? 5 : (next.id === 'BTCBR' || next.id === 'BTC' ? 400 : 100));
-    const targetState = assetStateRef.current[id];
+    const targetState = assetStateRef.current[id] || (id === 'BTC' ? assetStateRef.current.BTCBR : id === 'BTCBR' ? assetStateRef.current.BTC : undefined);
 
     const isPriceSane = (p?: number) =>
       Number.isFinite(p) && (p || 0) > 0 && Math.abs((p || 0) - next.basePrice) / next.basePrice < 0.4;
 
-    const hasSaneBoxes = targetState && targetState.boxes.length > 0 && isPriceSane(targetState.boxes[0].open);
+    const hasSaneBoxes = Boolean(targetState && targetState.boxes.length > 0 && isPriceSane(targetState.boxes[0].open));
 
-    if (hasSaneBoxes) {
+    if (targetState) {
       engineRef.current = targetState.engine;
       rangeEngineRef.current = targetState.rangeEngine;
       timeEngineRef.current = targetState.timeEngine;
       allTicksRef.current = targetState.allTicks;
+    }
+
+    if (hasSaneBoxes && targetState) {
       setBoxes([...targetState.boxes]);
       setSessionGaps([...targetState.sessionGaps]);
       setCurrentBox(targetState.currentBox);
@@ -7669,13 +7634,45 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       setRangeCurrentBox(targetState.rangeCurrentBox);
       const safeP = isPriceSane(targetState.currentPrice) ? targetState.currentPrice : referencePrice(next);
       setCurrentPrice(safeP);
+    } else if (targetState && targetState.allTicks.length > 0 && isPriceSane(targetState.allTicks[0].price)) {
+      targetState.engine.setAsset(next);
+      targetState.engine.setBoxPoints(assetParams.boxPoints);
+      targetState.engine.initialize(targetState.allTicks[0].price, targetState.allTicks[0].timestamp);
+      for (const t of targetState.allTicks) {
+        targetState.engine.processTick(t, updated);
+      }
+      targetState.boxes = [...targetState.engine.getBoxes()];
+      targetState.currentBox = targetState.engine.getCurrentBox();
+      targetState.cvd = targetState.engine.getCvd();
+      setBoxes([...targetState.boxes]);
+      setCurrentBox(targetState.currentBox);
+      setCvd(targetState.cvd);
+      const lastP = targetState.allTicks[targetState.allTicks.length - 1].price;
+      targetState.currentPrice = lastP;
+      setCurrentPrice(lastP);
     } else {
-      handleResetData({
-        assetOverride: next,
-        keepAudit: true,
-        boxPointsOverride: assetParams.boxPoints,
-        rangePointsOverride: nextRangePts,
-      });
+      if (targetState) {
+        targetState.engine.setAsset(next);
+        targetState.engine.setBoxPoints(assetParams.boxPoints);
+        targetState.engine.initialize(referencePrice(next));
+        targetState.rangeEngine.setRangePoints(nextRangePts);
+        targetState.rangeEngine.initialize(referencePrice(next));
+        targetState.timeEngine.initialize(referencePrice(next));
+        targetState.boxes = [];
+        targetState.currentBox = null;
+        targetState.allTicks = [];
+        targetState.ticks = [];
+        targetState.currentPrice = referencePrice(next);
+      }
+      setBoxes([]);
+      setSessionGaps([]);
+      setCurrentBox(null);
+      setCurrentPrice(referencePrice(next));
+      setCvd(0);
+      setTicks([]);
+      allTicksRef.current = [];
+      setRangeBoxes([]);
+      setRangeCurrentBox(null);
     }
 
     setOrders(OrderAuditService.loadIntradayOrders(next) ?? []);
@@ -8569,7 +8566,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 cabeçalho, e o mesmo símbolo escrito duas vezes na mesma tela era a duplicidade. */}
 
-            <span className="text-emerald-400 font-semibold">{currentPrice.toLocaleString('pt-BR')} pts</span>
+            <span className="text-emerald-400 font-semibold">{formatPrice(currentPrice, asset)} pts</span>
 
             {/* Spec não homologado mora no grupo DIREITO da tira, junto dos outros alertas: o grupo
 
