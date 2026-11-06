@@ -49,6 +49,8 @@ export interface AssetTradeDefaults {
   stepperStep: number;
   maxSL: number;
   maxTP: number;
+  maxDailyLoss: number;
+  maxDailyProfit: number;
 }
 
 export interface AssetSpec {
@@ -137,6 +139,8 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       stepperStep: 5,
       maxSL: 1000,
       maxTP: 2000,
+      maxDailyLoss: 182,
+      maxDailyProfit: 182,
     },
     status: 'ativo',
     contractNote: '1 contrato = R$ 0,20 por ponto (variação mínima de 5 pontos = 1R)',
@@ -174,6 +178,8 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       stepperStep: 0.5,
       maxSL: 50,
       maxTP: 100,
+      maxDailyLoss: 455,
+      maxDailyProfit: 455,
     },
     status: 'ativo',
     contractNote: '1 contrato = R$ 10,00 por ponto (variação mínima de 0,5 pt = 1R = R$ 5,00)',
@@ -211,6 +217,8 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       stepperStep: 20,
       maxSL: 5000,
       maxTP: 10000,
+      maxDailyLoss: 363,
+      maxDailyProfit: 363,
     },
     status: 'ativo',
     contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts',
@@ -248,6 +256,8 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       stepperStep: 20,
       maxSL: 5000,
       maxTP: 10000,
+      maxDailyLoss: 363,
+      maxDailyProfit: 363,
     },
     status: 'ativo',
     contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts',

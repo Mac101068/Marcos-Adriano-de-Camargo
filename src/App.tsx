@@ -54,6 +54,8 @@ import {
 
   chartSymbolFor,
 
+  DEFAULT_ASSET_ID,
+
   type AssetId,
 
   type AssetSpec,
@@ -80,6 +82,8 @@ export const getAssetTradeParams = (assetId: AssetId): AssetTradeDefaults => {
         minDeltaThreshold: Number(parsed.minDeltaThreshold) || def.minDeltaThreshold,
         contracts: Number(parsed.contracts) || def.contracts,
         rangePoints: Number(parsed.rangePoints) || def.rangePoints,
+        maxDailyLoss: Number.isFinite(Number(parsed.maxDailyLoss)) ? Number(parsed.maxDailyLoss) : def.maxDailyLoss,
+        maxDailyProfit: Number.isFinite(Number(parsed.maxDailyProfit)) ? Number(parsed.maxDailyProfit) : def.maxDailyProfit,
       };
     }
   } catch {
@@ -263,6 +267,35 @@ const ALT_RENKO_SCALES: { key: 'renko15r' | 'renko20r' | 'renko25r'; pts: number
 /** Dias oferecidos na caixa de replay. O teto de 10 dias é do handleReplayHistory, não daqui. */
 
 const REPLAY_DAY_CHOICES = [1, 3, 5];
+
+function localDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function localDateLabel(date: Date): string {
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
+
+function localDateOffset(days: number): Date {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function latestSessionTicks(ticks: Tick[], sessions: number): Tick[] {
+  const grouped = new Map<string, Tick[]>();
+  for (const tick of ticks) {
+    const key = localDateKey(new Date(tick.timestamp));
+    const day = grouped.get(key) ?? [];
+    day.push(tick);
+    grouped.set(key, day);
+  }
+  const selectedDays = [...grouped.keys()].sort().slice(-sessions);
+  return selectedDays.flatMap((day) => grouped.get(day) ?? []);
+}
 
 /** Identifica se o símbolo recebido pela rede corresponde ao ativo atualmente em foco na tela. */
 function getAssetIdForSymbol(symbolStr?: string): AssetId {
@@ -475,7 +508,13 @@ export default function App() {
 
     const { strategy } = StrategyLibraryService.ensureActiveStrategy(loaded);
 
-    return StrategyLibraryService.resolveOperational(strategy, loaded);
+    const resolved = StrategyLibraryService.resolveOperational(strategy, loaded);
+    const assetParams = getAssetTradeParams(resolved.assetId || DEFAULT_ASSET_ID);
+    return {
+      ...resolved,
+      maxDailyLoss: assetParams.maxDailyLoss,
+      maxDailyProfit: assetParams.maxDailyProfit,
+    };
 
   });
 
@@ -1144,7 +1183,13 @@ export default function App() {
 
     const { strategy } = StrategyLibraryService.ensureActiveStrategy(merged);
 
-    const updated: AutomationConfig = StrategyLibraryService.resolveOperational(strategy, merged);
+    const resolved = StrategyLibraryService.resolveOperational(strategy, merged);
+    const assetParams = getAssetTradeParams(resolved.assetId || DEFAULT_ASSET_ID);
+    const updated: AutomationConfig = {
+      ...resolved,
+      maxDailyLoss: assetParams.maxDailyLoss,
+      maxDailyProfit: assetParams.maxDailyProfit,
+    };
 
     EaConfigService.saveConfig(updated);
 
@@ -4548,11 +4593,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           id: `mt5-conn-${Date.now()}`,
 
-          type: 'BUY',
+          type: 'INFO',
 
-          title: 'METATRADER 5 CONECTADO COM SUCESSO',
+          title: 'CONEXÃO COM A PONTE ABERTA',
 
-          description: `Ponte ativa em ${wsUrl}. Apresentando o token da ponte...`,
+          description: `Ponte ativa em ${wsUrl}. Aguardando confirmação do token; confira “TOKEN ACEITO” em Mais > Guia.`,
 
           timestamp: Date.now(),
 
@@ -5234,6 +5279,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       'trailingDistancePoints',
       'minDeltaThreshold',
       'contracts',
+      'maxDailyLoss',
+      'maxDailyProfit',
     ];
     const tradePatch: Record<string, unknown> = {};
     for (const k of tradeKeys) {
@@ -6028,7 +6075,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   // ritmo real de 1 tick a cada 2s (mesmo passo do histórico).
 
   const [replayProgress, setReplayProgress] = useState<number>(0);
-  const [replayDateLabel, setReplayDateLabel] = useState<string>('04/11/2026 (Hoje)');
+  const [replayDateLabel, setReplayDateLabel] = useState<string>(() => `${new Date().toLocaleDateString('pt-BR')} (Hoje)`);
   const [replayCurrentTimeStr, setReplayCurrentTimeStr] = useState<string>('');
   const replayAbortRef = useRef<(() => void) | null>(null);
 
@@ -6277,97 +6324,81 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     }> => {
 
-      const daysToRequest = targetDays === 1 ? 1 : Math.max(1, Math.min(10, targetDays));
-
+      const sessionCount = Math.max(1, Math.min(10, Math.round(targetDays)));
+      const daysToRequest = sessionCount === 1 ? 1 : Math.min(10, sessionCount * 2);
+      const requestedDay = sessionCount === 1 ? localDateKey(new Date()) : undefined;
       const synthetic = () =>
-
-        generateHistoricalTicks(daysToRequest, referencePrice(asset), seed, asset);
-
+        generateHistoricalTicks(sessionCount, referencePrice(asset), seed, asset);
       const socket = wsRef.current;
-
       if (mt5State.status !== 'CONNECTED' || !socket || socket.readyState !== WebSocket.OPEN) {
-
         // Sem ponte, ainda assim podemos tocar REAL: o banco local guarda a fita dos pulls
-        // conectados anteriores. Só caímos no sintético se não houver NADA real capturado.
+        // conectados anteriores. Para 1 dia exige hoje; para N dias seleciona N pregões reais.
         const bank = realTapeService.loadMostRecent(daysToRequest);
-
-        if (bank && bank.ticks.length > 0) {
-
+        const bankTicks = latestSessionTicks(
+          requestedDay
+            ? bank?.ticks.filter((tick) => localDateKey(new Date(tick.timestamp)) === requestedDay) ?? []
+            : bank?.ticks ?? [],
+          sessionCount,
+        );
+        if (bank && bankTicks.length > 0) {
           return {
-
-            ticks: bank.ticks,
-
+            ticks: bankTicks,
             source: 'REAL' as const,
-
             volumeSource: bank.volumeSource,
-
             origin: 'BANK' as const,
-
-            note: `Origem: fita REAL CAPTURADA (banco local deste navegador, ${bank.days} dia(s)).${bank.truncated ? ' Obs.: algum dia foi recortado pelo teto de armazenamento.' : ''}`,
-
+            note: `Origem: fita REAL CAPTURADA (banco local deste navegador, ${new Set(bankTicks.map((tick) => localDateKey(new Date(tick.timestamp)))).size} pregão(ões)).${bank.truncated ? ' Obs.: algum dia foi recortado pelo teto de armazenamento.' : ''}`,
           };
-
         }
-
-        return { ticks: synthetic(), source: 'SYNTHETIC' as const };
-
+        return {
+          ticks: synthetic(),
+          source: 'SYNTHETIC' as const,
+          note: requestedDay
+            ? `O banco local não tem ticks reais de ${requestedDay}; o replay rodou em mercado SINTÉTICO.`
+            : `O banco local não tem fita real suficiente para ${sessionCount} pregões; o replay rodou em mercado SINTÉTICO.`,
+        };
       }
-
       try {
-
         const res = await marketHistoryService.requestHistory({
-
           reqId: `hist-${Date.now()}`,
-
-          // Teste longo pede a SÉRIE CONTÍNUA, não o código do gráfico: 'WINZ26' tem poucos dias de
-
-          // vida na corretora, e um replay de 5 dias voltaria quase vazio. O gráfico segue operando o
-
-          // vigente — a contínua é símbolo de teste, não escolha do operador.
-
-          symbol: asset.primarySymbol,
-
+          // A fita recente deve ser do contrato vigente, o mesmo do gráfico e do feed ao vivo.
+          symbol: chartSymbolFor(asset),
           days: daysToRequest,
-
           asset,
-
           send: (payload) => socket.send(payload),
-
         });
-
-        if (res.ticks.length === 0) {
-
+        const historyTicks = latestSessionTicks(
+          requestedDay
+            ? res.ticks.filter((tick) => localDateKey(new Date(tick.timestamp)) === requestedDay)
+            : res.ticks,
+          sessionCount,
+        );
+        if (historyTicks.length === 0) {
           return {
-
             ticks: synthetic(),
-
             source: 'SYNTHETIC' as const,
-
-            note: 'O MT5 respondeu ao pedido de histórico, mas devolveu ZERO ticks. O replay rodou em mercado SINTÉTICO — confira a profundidade de histórico da sua conta na corretora.',
+            note: requestedDay
+              ? `O MT5 não devolveu ticks do contrato ${chartSymbolFor(asset)} em ${requestedDay}. O replay rodou em mercado SINTÉTICO; confira o relógio do Windows, o contrato e o histórico disponível na corretora.`
+              : 'O MT5 respondeu ao pedido de histórico, mas devolveu ZERO ticks. O replay rodou em mercado SINTÉTICO — confira a profundidade de histórico da sua conta na corretora.',
           };
-
         }
-
         // Banca a fita real: daqui pra frente o replay pode tocá-la mesmo sem ponte.
-        realTapeService.save(res.ticks, res.volumeSource);
+        realTapeService.save(historyTicks, res.volumeSource);
+        const sufficiency = MarketHistoryService.assessSufficiency(historyTicks);
 
-        const sufficiency = MarketHistoryService.assessSufficiency(res.ticks);
-
-        const sufficiencyNote =
-
+        const returnedSessions = new Set(historyTicks.map((tick) => localDateKey(new Date(tick.timestamp)))).size;
+        const notes = [
+          returnedSessions < sessionCount
+            ? `O MT5 retornou ${returnedSessions} de ${sessionCount} pregões solicitados para ${chartSymbolFor(asset)}.`
+            : undefined,
           sufficiency.verdict === 'SEM_VOLUME'
-
             ? `Atenção: ${Math.round(sufficiency.zeroVolumePct * 100)}% dos ticks reais chegaram sem volume — CVD, delta e convergência ficam comprometidos neste replay.`
-
             : sufficiency.verdict === 'VOLUME_BAIXO'
-
             ? `Atenção: ${Math.round(sufficiency.zeroVolumePct * 100)}% dos ticks reais chegaram sem volume (fluxo parcialmente comprometido).`
-
-            : undefined;
+            : undefined,
+        ].filter((note): note is string => !!note);
 
         return {
-
-          ticks: res.ticks,
+          ticks: historyTicks,
 
           source: 'REAL' as const,
 
@@ -6377,7 +6408,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           fonte: res.meta,
 
-          note: sufficiencyNote,
+          note: notes.length ? notes.join(' ') : undefined,
 
         };
 
@@ -6615,24 +6646,27 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       let label = '';
 
       if (replayTargetDays === 1) {
-        // Seleção Hoje: isola 100% o pregão mais recente retornado (04/11)
+        // Seleção Hoje: isola o pregão mais recente retornado pela fonte.
         const latestDayKey = sortedDays[sortedDays.length - 1];
         ticks = (latestDayKey && daysMap.get(latestDayKey)) || rawTicks;
         const [y, m, d] = (latestDayKey || '').split('-');
-        const isToday = !latestDayKey || new Date().toISOString().startsWith(latestDayKey) || (d === '04' && m === '11');
-        label = latestDayKey ? `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''}` : 'Hoje (04/11)';
+        const isToday = !!latestDayKey && latestDayKey === localDateKey(new Date());
+        label = latestDayKey ? `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''}` : `Hoje (${localDateLabel(new Date())})`;
       } else if (replayTargetDays === 2) {
         // Seleção Ontem: se houver mais de um pregão, isola o pregão imediatamente anterior
         const yesterdayKey = sortedDays.length > 1 ? sortedDays[sortedDays.length - 2] : sortedDays[0];
         ticks = (yesterdayKey && daysMap.get(yesterdayKey)) || rawTicks;
         const [y, m, d] = (yesterdayKey || '').split('-');
-        label = yesterdayKey ? `${d}/${m}/${y} (Ontem)` : 'Ontem (03/11)';
+        label = yesterdayKey ? `${d}/${m}/${y}` : `Pregão anterior a ${localDateLabel(new Date())}`;
       } else {
-        // 3 ou 5 dias: série contínua
-        ticks = rawTicks;
-        const firstKey = sortedDays[0];
-        const lastKey = sortedDays[sortedDays.length - 1];
-        label = `${replayTargetDays} pregões (${firstKey} a ${lastKey})`;
+        // O pedido busca dias corridos suficientes; a fita exibida contém até N pregões.
+        const selectedDays = sortedDays.slice(-replayTargetDays);
+        ticks = selectedDays.flatMap((day) => daysMap.get(day) ?? []);
+        const firstKey = selectedDays[0];
+        const lastKey = selectedDays[selectedDays.length - 1];
+        label = selectedDays.length === replayTargetDays
+          ? `${selectedDays.length} pregões (${firstKey} a ${lastKey})`
+          : `${selectedDays.length}/${replayTargetDays} pregões (${firstKey || 'sem dados'} a ${lastKey || 'sem dados'})`;
       }
 
       setReplayDateLabel(label);
@@ -7638,6 +7672,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       trailingDistancePoints: assetParams.trailingDistancePoints,
       minDeltaThreshold: assetParams.minDeltaThreshold,
       contracts: assetParams.contracts,
+      maxDailyLoss: assetParams.maxDailyLoss,
+      maxDailyProfit: assetParams.maxDailyProfit,
       // Ensaio de spec não homologado nunca acorda o Robô (decisão 2 do plano).
       active: unconfirmed ? false : config.active,
       lastSavedTimestamp: Date.now(),
@@ -8410,19 +8446,19 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           (antes, com o replay na linha, o conteúdo estourava a largura e o PnL sumia da tela) */}
 
-      <div className="flex items-center gap-2.5 px-3 sm:px-6 py-0 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono">
+      <div className="flex items-center gap-2.5 px-3 sm:px-6 py-0 bg-slate-950 text-[11px] sm:text-xs shrink-0 font-mono">
 
         <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1 overflow-x-auto no-scrollbar">
 
           {/* ── REPLAY DO SIMULADOR & CONTROLE DE VELOCIDADE ── */}
-          <div className="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md border border-slate-700/80 bg-slate-900/95 shadow-sm">
+          <div className="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md border border-slate-700 bg-slate-900/95 shadow-sm">
             {/* Botão OPERA (Simulação Paper Trading com ticks reais) */}
             <button
               onClick={() => setReplayOperates((v) => !v)}
-              className={`px-2 py-0.5 rounded text-[10.5px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`px-2 py-0.5 rounded text-[10.5px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                 replayOperates
-                  ? 'border-emerald-500 bg-emerald-950/90 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.25)]'
-                  : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                  ? 'bg-emerald-950/90 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.25)]'
+                  : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
               }`}
               title="Quando ativado (verde), o robô executa a estratégia e opera na tela (paper trading) com os dados reais do MT5 sem enviar para a corretora real."
             >
@@ -8437,10 +8473,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 label="pregão / histórico"
                 value={replayDays}
                 options={[
-                  { value: 1, label: 'Hoje (04/11)', title: 'Replay com ticks reais do pregão de Hoje (04/11/2026)' },
-                  { value: 2, label: 'Ontem (03/11)', title: 'Replay com ticks reais do pregão de Ontem (03/11/2026)' },
-                  { value: 3, label: '3 dias', title: 'Replay dos últimos 3 pregões' },
-                  { value: 5, label: '5 dias', title: 'Replay dos últimos 5 pregões' },
+                  { value: 1, label: `Hoje (${localDateLabel(new Date())})`, title: `Replay do pregão de hoje (${new Date().toLocaleDateString('pt-BR')})` },
+                  {
+                    value: 2,
+                    label: `Ontem (${localDateLabel(localDateOffset(-1))})`,
+                    title: `Replay do pregão anterior a ${localDateLabel(new Date())}`,
+                  },
+                  { value: 3, label: '3 pregões', title: 'Replay dos últimos 3 pregões' },
+                  { value: 5, label: '5 pregões', title: 'Replay dos últimos 5 pregões' },
                 ]}
                 onChange={(d) => {
                   if (isReplaying) setReplayDays(d);
@@ -8882,7 +8922,7 @@ ${
           <>
 
             {activeTab === 'chart' && (
-              <div className="h-full w-full rounded-lg border border-slate-800 overflow-hidden flex flex-col">
+              <div className="h-full w-full rounded-lg overflow-hidden flex flex-col">
                 <AssetChartTabs
                   currentAssetId={asset.id}
                   onSelectAsset={handleSelectAsset}
@@ -10033,4 +10073,3 @@ ${
   );
 
 }
-

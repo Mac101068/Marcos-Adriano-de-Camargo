@@ -472,7 +472,7 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   return (
-    <header className="flex items-center justify-between gap-2 px-2.5 sm:px-4 md:px-6 py-0.5 bg-slate-950 border-b border-slate-800/80 shrink-0">
+    <header className="flex items-center justify-between gap-2 px-2.5 sm:px-4 md:px-6 py-0.5 bg-slate-950 shrink-0">
       {/* Zone 1: Brand Title & EA Registered Status. Vão apertado e fonte miúda: cabeçalho, tira de
           métricas e barra do gráfico são três faixas empilhadas — cada pixel vertical aqui é tela de
           gráfico ganha embaixo. */}
@@ -537,7 +537,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Botão de Conexão MT5 Live Bridge */}
         <button
           onClick={() => onToggleMT5Connect()}
-          className={`hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 px-2 py-0.5 text-[10px] sm:text-[11px] leading-4 font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
             mt5State.status === 'CONNECTED'
               ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
               : mt5State.status === 'CONNECTING'
@@ -556,13 +556,11 @@ export const Header: React.FC<HeaderProps> = ({
               : 'Ponte autenticada e ARMADA: ordens de entrada liberadas, dentro dos tetos de contrato e de ordens por minuto.'
           }
         >
-          {/* Conexão com a ponte: só o ícone do MT5 e uma bolinha de status. O texto
-              "CONECTADO · ARMADO" saiu do cabeçalho — quem precisa do detalhe lê o tooltip
-              e a tira de status abaixo. Verde = conectado e armado; âmbar = conectado em
-              seguro (ou conectando); cinza = desconectado. */}
+          {/* Verde = conectado e armado; âmbar = conectado em seguro (ou conectando). */}
           {mt5State.status === 'CONNECTED' ? (
             <>
               <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+              <span>MT5</span>
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   mt5State.bridgeOrdersBlocked
@@ -576,11 +574,13 @@ export const Header: React.FC<HeaderProps> = ({
           ) : mt5State.status === 'CONNECTING' ? (
             <>
               <Wifi className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+              <span>Conectando</span>
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             </>
           ) : (
             <>
               <WifiOff className="w-3.5 h-3.5 text-slate-400" />
+              <span>Conectar MT5</span>
               <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
             </>
           )}

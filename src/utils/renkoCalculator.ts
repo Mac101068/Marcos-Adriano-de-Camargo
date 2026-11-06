@@ -3,6 +3,8 @@ import { evaluateBoxConvergence } from './convergenceEvaluator';
 import { SessionRegimeMeter } from './sessionRegime';
 import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, renkoScaleLabel, snapToTick } from '../assets/assetRegistry';
 
+const MAX_JUMP_BOXES = 100;
+
 /**
  * Calculador de Gráficos Atemporais:
  * 1. Renko na escala configurável (`boxPoints`; WIN 50 pts = 10R no Mini-Índice B3)
@@ -17,8 +19,6 @@ export class RenkoFlowEngine {
    * RE-ANCORA no preço real em vez de cospir dezenas de tijolos vazios (a explosão de fim de
    * pregão que bagunçava a formação dos blocos).
    */
-  private static readonly MAX_JUMP_BOXES = 100;
-
   private boxPoints: number;
   private boxes: RenkoBox[] = [];
   private currentBox: Partial<RenkoBox> | null = null;
@@ -210,7 +210,7 @@ export class RenkoFlowEngine {
     const refLast = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1] : undefined;
     const refSame = !!refLast && this.sessionKey(refLast.timeEnd) === tickSession;
     const refPrice = refSame ? refLast!.close : (this.currentBox?.open ?? tick.price);
-    if (Math.abs(tick.price - refPrice) > this.boxPoints * RenkoFlowEngine.MAX_JUMP_BOXES) {
+    if (Math.abs(tick.price - refPrice) > this.boxPoints * MAX_JUMP_BOXES) {
       return { newBoxClosed: false, closedBoxes: [] };
     }
 

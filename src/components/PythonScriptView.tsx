@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AutomationConfig } from '../types/trading';
 import { generatePythonMT5Script } from '../utils/pythonScriptGenerator';
 import { renkoScaleLabel, resolveAsset } from '../assets/assetRegistry';
+import { copyTextToClipboard } from '../utils/copyTextToClipboard';
 import { Download, Copy, Check, Terminal, BookOpen, AlertTriangle, ShieldCheck, Cpu, ArrowRightLeft, CheckCircle2 } from 'lucide-react';
 
 interface PythonScriptViewProps {
@@ -9,15 +10,19 @@ interface PythonScriptViewProps {
 }
 
 export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) => {
-  const [copied, setCopied] = useState<boolean>(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const scriptContent = generatePythonMT5Script(config);
   // A descrição do robô tem que bater com o script gerado: ambos leem a mesma escala do box.
   const boxLabel = renkoScaleLabel(config.boxPoints, resolveAsset(config.symbol, config.assetId));
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(scriptContent);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+  const handleCopy = async () => {
+    try {
+      await copyTextToClipboard(scriptContent);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('failed');
+    }
+    setTimeout(() => setCopyStatus('idle'), 4000);
   };
 
   const handleDownload = () => {
@@ -29,7 +34,7 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   return (
@@ -54,13 +59,16 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
         <div className="flex items-center gap-2">
           <button
             onClick={handleCopy}
+            aria-live="polite"
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md transition-colors cursor-pointer"
           >
-            {copied ? (
+            {copyStatus === 'copied' ? (
               <>
                 <Check className="w-3.5 h-3.5 text-emerald-400" />
                 Copiado!
               </>
+            ) : copyStatus === 'failed' ? (
+              'Não foi possível copiar'
             ) : (
               <>
                 <Copy className="w-3.5 h-3.5" />
@@ -77,6 +85,11 @@ export const PythonScriptView: React.FC<PythonScriptViewProps> = ({ config }) =>
             Baixar Script .py Pronto
           </button>
         </div>
+        {copyStatus === 'failed' && (
+          <p role="alert" className="w-full text-xs text-amber-300">
+            A cópia foi bloqueada pelo navegador. Use “Baixar Script .py Pronto” para salvar o arquivo.
+          </p>
+        )}
       </div>
 
       {/* ARQUITETURA DA CONEXÃO MT5 */}

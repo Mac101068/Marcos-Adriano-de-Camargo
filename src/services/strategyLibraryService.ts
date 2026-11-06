@@ -30,6 +30,8 @@ const RUNTIME_KEYS: ReadonlySet<keyof AutomationConfig> = new Set<keyof Automati
   'strategyId',
   'assetId',
   'symbol',
+  'maxDailyLoss',
+  'maxDailyProfit',
 ]);
 
 /** Só os campos de runtime presentes em `cfg` (para re-aplicar por cima da estratégia). */

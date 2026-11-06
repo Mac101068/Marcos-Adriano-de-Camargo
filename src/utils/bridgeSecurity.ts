@@ -10,6 +10,11 @@
 
 /** Alfabeto sem caracteres que quebram em shell/JSON/URL (mais chato de colar errado). */
 const TOKEN_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+const TOKEN_PATTERN = /^[A-HJ-NP-Za-km-z2-9]{28}$/;
+
+export function isValidBridgeToken(token: string): boolean {
+  return TOKEN_PATTERN.test(token);
+}
 
 /** Token de 28 caracteres (~162 bits de entropia): impossível de adivinhar na rede. */
 export function generateBridgeToken(): string {
@@ -27,6 +32,7 @@ export function generateBridgeToken(): string {
 /** Máscaras parciais para exibir o token na tela sem entregá-lo inteiro. */
 export function maskBridgeToken(token: string): string {
   if (!token) return '(sem token — ponte em modo legado)';
+  if (!isValidBridgeToken(token)) return '(token inválido)';
   if (token.length <= 8) return `${token.slice(0, 2)}••••`;
   return `${token.slice(0, 4)}••••••••${token.slice(-4)}`;
 }
@@ -41,7 +47,7 @@ if (typeof window !== 'undefined' && typeof fetch === 'function') {
     .then((r) => (r.ok ? r.text() : ''))
     .then((txt) => {
       const clean = txt.trim();
-      if (clean && clean.length >= 16) {
+      if (isValidBridgeToken(clean)) {
         memoryToken = clean;
         try {
           localStorage.setItem(TOKEN_STORAGE_KEY, clean);
@@ -58,7 +64,7 @@ export async function syncBridgeTokenWithServer(): Promise<string> {
       const res = await fetch('/bridge_token.txt?t=' + Date.now());
       if (res.ok) {
         const txt = (await res.text()).trim();
-        if (txt && txt.length >= 16) {
+        if (isValidBridgeToken(txt)) {
           memoryToken = txt;
           try {
             localStorage.setItem(TOKEN_STORAGE_KEY, txt);
@@ -78,19 +84,21 @@ export async function syncBridgeTokenWithServer(): Promise<string> {
 export function getBridgeToken(): string {
   try {
     const saved = localStorage.getItem(TOKEN_STORAGE_KEY);
-    if (saved) return saved;
-    if (memoryToken) {
+    if (saved && isValidBridgeToken(saved)) return saved;
+    if (saved) localStorage.removeItem(TOKEN_STORAGE_KEY);
+    if (isValidBridgeToken(memoryToken)) {
       try {
         localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken);
       } catch {}
       return memoryToken;
     }
+    memoryToken = '';
     const fresh = generateBridgeToken();
     localStorage.setItem(TOKEN_STORAGE_KEY, fresh);
     return fresh;
   } catch {
     // localStorage indisponível (modo privado severo): usa em memória só nesta aba
-    return memoryToken || generateBridgeToken();
+    return isValidBridgeToken(memoryToken) ? memoryToken : generateBridgeToken();
   }
 }
 

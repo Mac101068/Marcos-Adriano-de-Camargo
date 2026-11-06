@@ -305,10 +305,10 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
   const gearBtn = (
     <button
       onClick={onToggleChartTools}
-      className={`flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md border backdrop-blur-md shadow-xl pointer-events-auto cursor-pointer transition-colors ${
+      className={`flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md pointer-events-auto cursor-pointer transition-colors ${
         chartToolsOpen
-          ? 'bg-sky-500/25 text-sky-200 border-sky-500/50'
-          : 'bg-zinc-950/92 border-zinc-700/80 text-zinc-400 hover:text-white hover:border-zinc-600'
+          ? 'bg-sky-500/25 text-sky-200'
+          : 'text-zinc-400 hover:text-white'
       }`}
       title="Ajustes do gráfico: tijolos, zoom, modo de tela, escala do fluxo e legenda"
       aria-label="Abrir ou fechar os ajustes do gráfico"
@@ -327,7 +327,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
         {onToggleChartTools && gearBtn}
         <button
           onClick={() => onOpenChange(true)}
-          className="flex items-center gap-1.5 px-2 h-[26px] rounded-md bg-zinc-950/92 backdrop-blur-md border border-zinc-700/80 shadow-xl text-[11px] font-mono text-zinc-200 hover:text-white hover:border-zinc-600 cursor-pointer transition-colors"
+          className="flex items-center gap-1.5 px-2 h-[26px] rounded-md bg-zinc-950/80 backdrop-blur-md border border-transparent shadow-md text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-900/95 cursor-pointer transition-colors"
           title="Abrir a boleta (ordem rápida)"
         >
           <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">Boleta</span>
@@ -364,12 +364,12 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{ right: rightOffset, top: BOLETA_TOP, width: BOLETA_WIDTH }}
-      className="absolute z-30 rounded-lg bg-zinc-950/94 backdrop-blur-md border border-zinc-700/80 shadow-2xl pointer-events-auto select-none"
+      className="absolute z-30 rounded-lg bg-zinc-950/94 backdrop-blur-md border border-zinc-600 shadow-2xl pointer-events-auto select-none"
     >
       {/* Cabeçalho: título + fixar + recolher. O selo SIM/MT5 saiu daqui por pedido do operador
           (a linha ficou apertada com a engrenagem): o estado da ponte segue visível no botão de
           conexão do cabeçalho e nos títulos dos botões COMPRA/VENDA desta caixa. */}
-      <div className="flex items-center gap-1.5 px-2 h-7 border-b border-zinc-800/80">
+      <div className="flex items-center gap-1.5 px-2 h-7 border-b border-zinc-600">
         <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">Boleta</span>
         {/* Engrenagem dos ajustes do gráfico: colada na linha da boleta, à esquerda do sininho. */}
         {onToggleChartTools && (
@@ -409,7 +409,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
       {/* do Preço virou o TÍTULO branco — o preço já está bem visível na régua do    */}
       {/* gráfico. Dentro dela, todos os dados que antecedem os botões de ação.       */}
       {/* ========================================================================== */}
-      <div className="border-b border-zinc-800/80">
+      <div className="border-b border-zinc-600">
         <button
           onClick={toggleParams}
           className="w-full flex items-center justify-between gap-2 px-2 py-1.5 cursor-pointer transition-colors hover:bg-zinc-900/60"
@@ -547,7 +547,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
       {/* ZERAR TUDO em cima dos ZERAR por lado, sem borda entre eles: os três zerar formam
           um bloco só, logo abaixo de COMPRA/VENDA. Fecha os dois lados de uma vez. */}
       {onClosePositions && (
-        <div className={`px-2 pb-1.5 grid grid-cols-2 gap-1.5 ${hedgeBook || onClosePositionsSide ? '' : 'pt-1.5 border-t border-zinc-800/80'}`}>
+        <div className={`px-2 pb-1.5 grid grid-cols-2 gap-1.5 ${hedgeBook || onClosePositionsSide ? '' : 'pt-1.5 border-t border-zinc-600'}`}>
           <div className={`grid grid-cols-2 gap-1.5 col-span-2 ${onClosePositionsSide ? '' : 'hidden'}`}>
             <button
               onClick={() => onClosePositionsSide?.('BUY')}
@@ -585,7 +585,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
       {/* sessão (ganhos/perdas) e PnL do dia.                                  */}
       {/* =================================================================== */}
       {hedgeBook && (
-        <div className="border-t border-zinc-800/80">
+        <div className="border-t border-zinc-600">
           <div className="px-2 py-1.5 space-y-0.5 font-mono">
             <div className="flex items-center justify-between leading-tight">
               <span className="text-[8.5px] font-sans font-bold uppercase tracking-wider text-zinc-500">
@@ -601,7 +601,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
             <SideRow tag="C" book={hedgeBook.buy} asset={asset} />
             <SideRow tag="V" book={hedgeBook.sell} asset={asset} />
           </div>
-          <div className="px-2 py-1.5 space-y-0.5 font-mono border-t border-zinc-800/60">
+          <div className="px-2 py-1.5 space-y-0.5 font-mono border-t border-zinc-600">
             <Row label="Ganhos" value={brl(hedgeBook.realizedProfit)} tone="emerald" />
             <Row label="Perdas" value={brl(hedgeBook.realizedLoss)} tone="rose" />
             <Row
@@ -612,7 +612,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           </div>
           {/* Giro do dia no rodapé — fecho padrão de order ticket: depois das ações, o resumo.
               Contratos NEGOCIADOS hoje por lado (abertas + fechadas da sessão), não só o vivo. */}
-          <div className="px-2 pb-2 pt-1.5 border-t border-zinc-800/60 space-y-0.5 font-mono">
+          <div className="px-2 pb-2 pt-1.5 border-t border-zinc-600 space-y-0.5 font-mono">
             <Row label="Compra hoje" value={`${hedgeBook.buyContractsToday} ct`} tone="emerald" />
             <Row label="Venda hoje" value={`${hedgeBook.sellContractsToday} ct`} tone="rose" />
             <Row label="Total dia" value={`${hedgeBook.contractsTodayTotal} ct`} tone="sky" />

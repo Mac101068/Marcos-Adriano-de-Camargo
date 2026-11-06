@@ -26,7 +26,7 @@ import type { FunnelMetricsSnapshot } from '../utils/funnelMetrics';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
-import { Sliders, ArrowUp, ArrowDown } from 'lucide-react';
+import { Sliders, ArrowUp, ArrowDown, X } from 'lucide-react';
 
 const getStorageKeyScales = (assetId?: string) => `fluxo_renko_chart_scales_${assetId || 'WIN'}_v3`;
 const STORAGE_KEY_FLOW_MODE = 'fluxo_renko_flow_mode_v1';
@@ -71,6 +71,27 @@ const levelRgba = (hex: string, alpha: number) => {
   const n = parseInt(full, 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 };
+
+function roundedRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) {
+  const r = Math.min(Math.max(0, radius), Math.abs(width) / 2, Math.abs(height) / 2);
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
 
 interface RenkoFlowChartProps {
   boxes: RenkoBox[];
@@ -758,7 +779,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       dragMode === 'DIVIDER' ||
       (mousePos !== null && Math.abs(mousePos.y - pricePaneHeight) <= 7 && mousePos.x < plotRight);
 
-    ctx.strokeStyle = mainDividerActive ? 'rgba(52, 211, 153, 0.65)' : '#27272a';
+    ctx.strokeStyle = mainDividerActive ? 'rgba(52, 211, 153, 0.65)' : '#18181b';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, pricePaneHeight);
@@ -772,14 +793,14 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const handleY = pricePaneHeight - handleH / 2;
     ctx.fillStyle = mainDividerActive ? '#10b981' : '#27272a';
     ctx.beginPath();
-    ctx.roundRect(handleX, handleY, handleW, handleH, 2.5);
+    roundedRectPath(ctx, handleX, handleY, handleW, handleH, 2.5);
     ctx.fill();
-    ctx.strokeStyle = mainDividerActive ? 'rgba(16, 185, 129, 0.8)' : '#52525b';
+    ctx.strokeStyle = mainDividerActive ? 'rgba(16, 185, 129, 0.8)' : '#27272a';
     ctx.lineWidth = 1;
     ctx.stroke();
 
     // 3 pontos no puxador
-    ctx.fillStyle = mainDividerActive ? '#ecfdf5' : '#a1a1aa';
+    ctx.fillStyle = mainDividerActive ? '#ecfdf5' : '#52525b';
     for (let d = -1; d <= 1; d++) {
       ctx.beginPath();
       ctx.arc(lineRight / 2 + d * (isMobile ? 7 : 10), pricePaneHeight, 1.1, 0, Math.PI * 2);
@@ -1332,7 +1353,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             lastHa.state === 'UP' ? '#059669' : lastHa.state === 'DOWN' ? '#dc2626' : '#52525b';
           ctx.fillStyle = badgeFill;
           ctx.beginPath();
-          ctx.roundRect(chartWidth + 1, lastHaY - 7, rightAxisWidth - 2, 14, 2);
+          roundedRectPath(ctx, chartWidth + 1, lastHaY - 7, rightAxisWidth - 2, 14, 2);
           ctx.fill();
           ctx.fillStyle = '#ffffff';
           ctx.font = isMobile
@@ -1460,7 +1481,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           if (lastDeltaY >= pricePaneHeight + 8 && lastDeltaY <= height - 12) {
             ctx.fillStyle = lastBox.delta >= 0 ? '#059669' : '#dc2626';
             ctx.beginPath();
-            ctx.roundRect(chartWidth + 1, lastDeltaY - 7, rightAxisWidth - 2, 14, 2);
+            roundedRectPath(ctx, chartWidth + 1, lastDeltaY - 7, rightAxisWidth - 2, 14, 2);
             ctx.fill();
             ctx.fillStyle = '#ffffff';
             ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
@@ -1497,7 +1518,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const hHandleH = histDividerActive ? 5 : 4;
       ctx.fillStyle = histDividerActive ? '#10b981' : '#27272a';
       ctx.beginPath();
-      ctx.roundRect(lineRight / 2 - hHandleW / 2, histDividerY - hHandleH / 2, hHandleW, hHandleH, 2.5);
+      roundedRectPath(ctx, lineRight / 2 - hHandleW / 2, histDividerY - hHandleH / 2, hHandleW, hHandleH, 2.5);
       ctx.fill();
       ctx.fillStyle = histDividerActive ? '#ecfdf5' : '#a1a1aa';
       for (let d = -1; d <= 1; d++) {
@@ -1597,7 +1618,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         if (badgeY >= histBandTop - 2 && badgeY <= histBandBottom + 2) {
           ctx.fillStyle = lastLiveBox.delta >= 0 ? '#059669' : '#dc2626';
           ctx.beginPath();
-          ctx.roundRect(chartWidth + 1, badgeY - 7, rightAxisWidth - 2, 14, 2);
+          roundedRectPath(ctx, chartWidth + 1, badgeY - 7, rightAxisWidth - 2, 14, 2);
           ctx.fill();
           ctx.fillStyle = '#ffffff';
           ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
@@ -1697,7 +1718,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.strokeStyle = isUp ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)';
         ctx.setLineDash([2, 2]);
         ctx.beginPath();
-        ctx.roundRect(left, ghostTopY, boxWidth, ghostH, 1);
+        roundedRectPath(ctx, left, ghostTopY, boxWidth, ghostH, 1);
         ctx.fill();
         ctx.stroke();
         ctx.setLineDash([]);
@@ -1706,7 +1727,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.strokeStyle = isUp ? '#34d399' : '#f87171';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.roundRect(left, topY, boxWidth, boxH, 1);
+        roundedRectPath(ctx, left, topY, boxWidth, boxH, 1);
         ctx.fill();
         ctx.stroke();
 
@@ -1738,7 +1759,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const radius = boxWidth >= 6 ? 2 : 1;
         ctx.fillStyle = isUp ? '#10b981' : '#ef4444';
         ctx.beginPath();
-        ctx.roundRect(left, topY, boxWidth, boxH, radius);
+        roundedRectPath(ctx, left, topY, boxWidth, boxH, radius);
         ctx.fill();
         ctx.strokeStyle = isUp ? 'rgba(4, 120, 87, 0.95)' : 'rgba(153, 27, 27, 0.95)';
         ctx.lineWidth = 1;
@@ -1752,7 +1773,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.strokeStyle = isUp ? '#059669' : '#dc2626';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.roundRect(left, topY, boxWidth, boxH, 1);
+        roundedRectPath(ctx, left, topY, boxWidth, boxH, 1);
         ctx.fill();
         ctx.stroke();
       }
@@ -1858,7 +1879,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           : `rgba(220, 38, 38, ${opacity})`;
 
         ctx.beginPath();
-        ctx.roundRect(left, barTop, boxWidth, barHeight, 1);
+        roundedRectPath(ctx, left, barTop, boxWidth, barHeight, 1);
         ctx.fill();
       }
 
@@ -1887,7 +1908,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.strokeStyle = ha.colorStroke;
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.roundRect(left, topY, boxWidth, candleH, 1.5);
+          roundedRectPath(ctx, left, topY, boxWidth, candleH, 1.5);
           ctx.fill();
           ctx.stroke();
 
@@ -1988,7 +2009,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const gx = Math.min(Math.max(db.x, gw / 2 + 2), lineRight - gw / 2 - 2);
         ctx.fillStyle = gp >= 0 ? 'rgba(16, 185, 129, 0.16)' : 'rgba(239, 68, 68, 0.16)';
         ctx.beginPath();
-        ctx.roundRect(gx - gw / 2, 17, gw, 11, 3);
+        roundedRectPath(ctx, gx - gw / 2, 17, gw, 11, 3);
         ctx.fill();
         ctx.fillStyle = gp >= 0 ? '#34d399' : '#f87171';
         ctx.fillText(gapTxt, gx, 25.5);
@@ -2004,7 +2025,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const bx = lineRight - 8;
       ctx.fillStyle = 'rgba(56, 189, 248, 0.14)';
       ctx.beginPath();
-      ctx.roundRect(bx - bw, 26, bw, 17, 4);
+      roundedRectPath(ctx, bx - bw, 26, bw, 17, 4);
       ctx.fill();
       ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)';
       ctx.lineWidth = 1;
@@ -2123,7 +2144,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const x = placed <= 56 ? 245 : 8;
       ctx.fillStyle = 'rgba(9, 9, 11, 0.88)';
       ctx.beginPath();
-      ctx.roundRect(x, placed - 8.5, w, 17, 3);
+      roundedRectPath(ctx, x, placed - 8.5, w, 17, 3);
       ctx.fill();
       ctx.strokeStyle = lineColor;
       ctx.lineWidth = 1;
@@ -2203,7 +2224,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const tw = ctx.measureText(tag).width + 8;
         ctx.fillStyle = 'rgba(9, 9, 11, 0.74)';
         ctx.beginPath();
-        ctx.roundRect(4, y - 8, tw, 12, 2);
+        roundedRectPath(ctx, 4, y - 8, tw, 12, 2);
         ctx.fill();
         // A etiqueta usa a cor do nível, mas um tom acima do traço para continuar legível.
         ctx.fillStyle = levelRgba(lv.color, 0.85);
@@ -2274,7 +2295,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
       ctx.fillStyle = '#0284c7';
       ctx.beginPath();
-      ctx.roundRect(chartWidth + 1, currentPriceY - 9, rightAxisWidth - 2, 18, 2);
+      roundedRectPath(ctx, chartWidth + 1, currentPriceY - 9, rightAxisWidth - 2, 18, 2);
       ctx.fill();
       ctx.fillStyle = '#ffffff';
       ctx.font = isMobile ? 'bold 8.5px "JetBrains Mono", monospace' : 'bold 11px "JetBrains Mono", monospace';
@@ -3234,12 +3255,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* ========================================================================= */}
       {/* TIRA DE STATUS DA SÉRIE / CONTROLES COLADA NO GRÁFICO (LINHA 4)          */}
       {/* ========================================================================= */}
-      <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
+      <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 h-7 shrink-0 bg-zinc-900/95 text-[11px] font-mono">
         <div className="flex items-center gap-2 min-w-0">
           {/* Abre a barra lateral de controles em telas pequenas */}
           <button
             onClick={() => setSidebarOpen(true)}
-            className="lg:hidden flex items-center gap-1 px-1.5 h-[22px] rounded bg-zinc-950/70 border border-zinc-700/80 text-zinc-300 hover:text-zinc-100 cursor-pointer"
+            className="lg:hidden flex items-center gap-1 px-1.5 h-[22px] rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/70 cursor-pointer"
             title="Abrir controles do gráfico"
           >
             <Sliders className="w-3 h-3" />
@@ -3247,7 +3268,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           </button>
 
           {/* DADOS DO ATIVO E VALOR ATUAL (INVERTIDOS PARA ESTA LINHA MAIS PRÓXIMA DO GRÁFICO) */}
-          <div className="flex items-center gap-1.5 shrink-0 rounded bg-zinc-950 border border-zinc-700/80 px-2 h-[22px]">
+          <div className="flex items-center gap-1.5 shrink-0 rounded px-2 h-[22px]">
             <span
               className={`w-2 h-2 rounded-full ${
                 asset.id === 'WIN'
@@ -3269,19 +3290,19 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           </div>
 
           {/* Seletor da série: Pontos (Renko) x Range, com escala editável */}
-          <div className="flex items-center gap-1.5 shrink-0 rounded-md border border-zinc-600/70 bg-zinc-950/60 px-1.5 py-0" title="Escolha o tipo de gráfico e a escala">
+          <div className="flex items-center gap-1.5 shrink-0 px-1.5 py-0" title="Escolha o tipo de gráfico e a escala">
             <span className="text-[9.5px] text-zinc-400 font-sans uppercase tracking-wide hidden sm:inline">Gráfico</span>
             <select
               value={chartSeries}
               onChange={(e) => onSeriesChange?.(e.target.value as ChartSeries)}
-              className="h-[22px] rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
+              className="h-[22px] rounded bg-zinc-900/70 border-0 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
               title="Tipo de gráfico: Pontos (Renko) ou Range (variação de preço)"
             >
               <option value="renko">Pontos</option>
               <option value="range">Range</option>
             </select>
             {chartSeries === 'renko' && (
-              <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-700/80 rounded px-1 py-0.5">
+              <div className="flex items-center gap-1 bg-transparent rounded px-1 py-0.5">
                 <button
                   type="button"
                   onClick={() => stepRenkoR(-1)}
@@ -3299,7 +3320,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                     const v = parseInt(e.target.value, 10);
                     if (!isNaN(v) && v > 0) applyRenkoR(v);
                   }}
-                  className="w-9 h-4 bg-black/60 border border-zinc-700 rounded text-center text-[10.5px] font-mono font-bold text-emerald-300 focus:outline-none focus:border-emerald-500 tabular-nums p-0"
+                  className="w-9 h-4 bg-transparent border-0 rounded text-center text-[10.5px] font-mono font-bold text-emerald-300 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 tabular-nums p-0"
                   title={`Digite o valor em R (1R = ${asset.tickSize} pts -> ${formatPrice(renkoBoxPoints, asset)} pts). Clique para digitar.`}
                 />
                 <span className="text-[10px] font-mono text-zinc-400 select-none">R</span>
@@ -3325,7 +3346,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               <select
                 value={rangePoints}
                 onChange={(e) => onRangePointsChange?.(Number(e.target.value))}
-                className="h-[22px] rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
+                className="h-[22px] rounded bg-zinc-900/70 border-0 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                 title="Escala do Range em pontos (variação High-Low por barra)"
               >
                 {(asset.id === 'WDO'
@@ -3348,7 +3369,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           {onOpenShadowWindow && (
             <button
               onClick={() => onOpenShadowWindow()}
-              className="flex items-center gap-1 px-1.5 h-[22px] rounded border font-sans text-[10px] cursor-pointer transition-colors whitespace-nowrap max-w-[190px] overflow-hidden text-ellipsis"
+              className="flex items-center gap-1 px-1.5 h-[22px] rounded font-sans text-[10px] cursor-pointer transition-colors whitespace-nowrap max-w-[190px] overflow-hidden text-ellipsis hover:bg-zinc-900/70"
               title={shadowDetail || 'Robô 2 (sombra) — segundo robô em papel, com estratégia e escala próprias'}
             >
               <span className={shadowEnabled ? 'text-zinc-200' : 'text-zinc-500'}>
@@ -3532,7 +3553,18 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         {/* Painel de exibição (tijolos/zoom/modo/escala do fluxo + legenda). Limpa a tela.  */}
         {/* ========================================================================= */}
         {chartToolsOpen && (
-          <div className="absolute bottom-11 right-2 z-30 w-[252px] rounded-lg bg-zinc-900/96 backdrop-blur-md border border-zinc-700/80 p-2.5 shadow-2xl pointer-events-auto select-none space-y-2.5">
+          <div className="absolute bottom-11 right-2 z-30 w-[252px] rounded-lg bg-zinc-900/96 backdrop-blur-md border border-zinc-600 p-2.5 shadow-2xl pointer-events-auto select-none space-y-2.5">
+            <div className="flex items-center justify-between border-b border-zinc-600 pb-1.5">
+              <span className="text-[10px] font-semibold text-zinc-300">Ajustes do gráfico</span>
+              <button
+                onClick={() => setChartToolsOpen(false)}
+                className="flex h-5 w-5 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 cursor-pointer transition-colors"
+                title="Fechar ajustes do gráfico"
+                aria-label="Fechar ajustes do gráfico"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
             {/* ESCALA DO BOX (R) — a definição mora aqui. Trocar o R redesenha a história inteira
                 na escala nova (o App reprocessa os ticks guardados), então o teste é imediato. */}
             {chartSeries === 'renko' && onRenkoBoxPointsChange && (
@@ -3718,7 +3750,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             </button>
 
             {/* Legenda (antes no rodapé, agora dentro do painel) */}
-            <div className="border-t border-zinc-800 pt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[9.5px] text-zinc-400">
+            <div className="border-t border-zinc-600 pt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[9.5px] text-zinc-400">
               <div className="flex items-center gap-1">
                 <span className="w-2 h-3 bg-emerald-500 rounded-xs" /> <span>{boxScaleLabel} Alta</span>
               </div>
@@ -3781,14 +3813,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* ========================================================================= */}
       {funnelMetrics && <FunnelMetricsPanel metrics={funnelMetrics} onPatchConfig={onFunnelPatch} />}
 
-      {/* ========================================================================= */}
-      {/* RODAPÉ ENXUTO: só a dica de interação (a legenda migrou para a engrenagem)  */}
-      {/* ========================================================================= */}
-      <div className="flex items-center justify-end px-3 sm:px-4 py-0.5 bg-zinc-950 border-t border-zinc-900 text-[9px] sm:text-[10px] text-zinc-600 font-mono shrink-0">
-        <span className="truncate">
-          Ajustes no ⚙ da linha da Boleta (o painel abre no canto inferior direito) · arraste o gráfico para mover · réguas dão zoom Y/Fluxo · duplo clique auto-escala
-        </span>
-      </div>
     </div>
   );
 };

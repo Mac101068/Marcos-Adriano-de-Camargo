@@ -1503,6 +1503,10 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
         >
 
           <div className="space-y-3 text-xs">
+            <p className="text-[11px] leading-relaxed text-amber-300/80">
+              Limites independentes por ativo; consideram o resultado realizado da sessão. Posições abertas,
+              gaps e slippage podem ultrapassar o valor previsto.
+            </p>
             {config.strategyMode === 'PULLBACK_RETEST' ? (
               <div className="space-y-3">
             <div>

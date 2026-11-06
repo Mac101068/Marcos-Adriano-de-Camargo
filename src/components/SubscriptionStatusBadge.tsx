@@ -30,15 +30,15 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
   const getStatusStyle = () => {
     if (currentUser.role === 'ADMIN' || currentUser.plan === 'VITALICIO') {
       // Dourado: o assento Master se destaca do chrome neutro justamente por ser a exceção da casa.
-      return 'bg-yellow-500/10 border-yellow-500/40 text-yellow-200 hover:border-yellow-400/70 hover:bg-yellow-500/15';
+      return 'bg-yellow-500/10 text-yellow-200 hover:bg-yellow-500/15';
     }
     if (!isActive || currentUser.status === 'EXPIRED') {
-      return 'bg-rose-950/50 border-rose-500/40 text-rose-300 hover:bg-rose-950/70 animate-pulse';
+      return 'bg-rose-950/50 text-rose-300 hover:bg-rose-950/70 animate-pulse';
     }
     if (currentUser.status === 'TRIAL' || remainingDays <= 5) {
-      return 'bg-amber-950/50 border-amber-500/40 text-amber-300 hover:bg-amber-950/70';
+      return 'bg-amber-950/50 text-amber-300 hover:bg-amber-950/70';
     }
-    return 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300 hover:bg-emerald-950/70';
+    return 'bg-emerald-950/50 text-emerald-300 hover:bg-emerald-950/70';
   };
 
   return (
@@ -47,7 +47,7 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
         {/* Tarja compacta e proporcional posicionada no canto superior direito */}
         <button
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-[11px] leading-4 transition-all cursor-pointer whitespace-nowrap shadow-xs ${getStatusStyle()}`}
+          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[11px] leading-4 transition-all cursor-pointer whitespace-nowrap shadow-xs ${getStatusStyle()}`}
           title="Clique para gerenciar usuário ou ver detalhes da licença"
         >
           {currentUser.role === 'ADMIN' ? (

@@ -19,7 +19,7 @@ import type { FunnelMetricsSnapshot, SideFunnelMetric } from '../utils/funnelMet
  * seco sem destino.
  */
 
-const STORAGE_KEY_OPEN = 'fluxo_funnel_band_open_v1';
+const STORAGE_KEY_OPEN = 'fluxo_funnel_band_open_v2';
 
 const int = (v: number | null | undefined): string =>
   v == null || !Number.isFinite(v) ? '—' : Math.round(v).toLocaleString('pt-BR');
@@ -56,9 +56,9 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
   const [open, setOpen] = useState<boolean>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_OPEN);
-      return raw === null ? true : raw === 'true';
+      return raw === 'true';
     } catch {
-      return true;
+      return false;
     }
   });
   const toggle = () => {
@@ -80,19 +80,30 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
   const chip = 'inline-flex items-center gap-1 rounded px-1.5 h-[18px] border text-[10px] font-mono tabular-nums';
 
   return (
-    <div className="shrink-0 bg-zinc-900/95 border-t border-zinc-800 font-mono">
-      {/* Linha-resumo: sempre visível. */}
-      <div className="flex items-center gap-2 px-2.5 sm:px-4 h-7 text-[10px] text-zinc-400 overflow-x-auto">
+    <div className="shrink-0 bg-zinc-950 font-mono">
+      {/* Leitura compacta para operadores; as métricas técnicas aparecem sob demanda. */}
+      <div className={`flex items-center gap-2 px-2.5 sm:px-4 ${open ? 'h-7 text-[10px]' : 'h-8 text-[11px]'} text-zinc-400`}>
         <button
           onClick={toggle}
-          className="flex items-center gap-1 shrink-0 cursor-pointer text-zinc-300 hover:text-white"
+          className="flex items-center gap-1.5 shrink-0 cursor-pointer text-zinc-300 hover:text-white"
           title={open ? 'Recolher o retrato e as alavancas do funil' : 'Expandir retrato e alavancas do funil'}
           aria-expanded={open}
         >
-          <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-zinc-400">Funil</span>
-          {open ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+          {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          <span className="font-sans font-medium">{open ? 'Detalhes do fluxo' : 'Ajustes de fluxo'}</span>
         </button>
 
+        {!open && (
+          <span
+            className={`ml-auto text-[10px] ${cur ? (passes ? 'text-emerald-400' : 'text-zinc-500') : 'text-zinc-500'}`}
+            aria-live="polite"
+          >
+            {cur ? (passes ? 'Confluência atendida' : 'Aguardando confirmação') : 'Aguardando dados'}
+          </span>
+        )}
+
+        {open && (
+          <>
         {/* Modo: AUTO é o estado "ligado" (acentos azul); FIXO some no chrome. */}
         <span
           className={`${chip} shrink-0 ${
@@ -167,6 +178,8 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
             <span className={`${chip} text-zinc-500`}>sem box fechado</span>
           )}
         </span>
+          </>
+        )}
       </div>
 
       {/* Detalhe expandido: ALAVANCAS + retrato de onde veio cada corte. */}

@@ -21,7 +21,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { generatePythonMT5Script } from '../utils/pythonScriptGenerator';
-import { getBridgeToken, maskBridgeToken, rotateBridgeToken, setBridgeToken } from '../utils/bridgeSecurity';
+import { getBridgeToken, isValidBridgeToken, maskBridgeToken, rotateBridgeToken, setBridgeToken } from '../utils/bridgeSecurity';
+import { copyTextToClipboard } from '../utils/copyTextToClipboard';
 
 interface DocumentationViewProps {
   config: AutomationConfig;
@@ -46,6 +47,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
   const [bridgeToken, setBridgeTokenState] = useState<string>(() => getBridgeToken());
   const [tokenVisible, setTokenVisible] = useState<boolean>(false);
   const [copiedToken, setCopiedToken] = useState<boolean>(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   // Endereço da ponte: rascunho até "Aplicar" — gravar a cada tecla re-geraria o script .py
   // e deixaria um host inválido virar o endereço real da conexão.
   const [hostDraft, setHostDraft] = useState<string>(config.mt5Host || 'localhost');
@@ -63,13 +65,19 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const copyToClipboard = (text: string, setCopied: (v: boolean) => void) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyToClipboard = async (text: string, setCopied: (v: boolean) => void) => {
+    setCopied(false);
+    setCopyError(null);
+    try {
+      await copyTextToClipboard(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopyError('O navegador bloqueou a cópia. Para o código Python, use o botão “Baixar bot_mt5_convergencia_10r.py”.');
+    }
   };
 
   // Girar o token invalida o script atual: precisa baixar de novo e reiniciar a ponte
@@ -138,6 +146,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-slate-950 border border-slate-800/80 rounded-lg p-6 overflow-y-auto space-y-8 max-w-6xl mx-auto">
+      {copyError && <p role="alert" className="text-xs text-amber-300">{copyError}</p>}
       {/* Título Principal & Dossiê PDF */}
       <div className="border-b border-slate-800 pb-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -204,6 +213,9 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
               Baixar bot_mt5_convergencia_10r.py
             </button>
           </div>
+          <p className="text-[11px] text-slate-400">
+            Você não precisa copiar o código: clique em <b className="text-emerald-300">Baixar</b> e salve o arquivo no Windows onde está o MT5.
+          </p>
         </div>
 
         {/* ENDEREÇO DA PONTE — era fixo em localhost:8765, sem campo na tela */}
@@ -377,6 +389,11 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
               </button>
               <span className="text-[10px] text-slate-500 font-mono">{maskBridgeToken(bridgeToken)}</span>
             </div>
+            {bridgeToken && !isValidBridgeToken(bridgeToken.trim()) && (
+              <p className="text-[11px] text-rose-300">
+                Token inválido. Use o token de 28 caracteres do script MT5 ou gere um novo e baixe o script novamente.
+              </p>
+            )}
             <p className="text-[11px] text-slate-400 leading-relaxed">
               Mudou o token? <b>Baixe o script de novo</b> e rode o arquivo novo no PC do MT5 — as duas pontas
               precisam ter o mesmo valor. O segredo mora neste navegador; em outro computador, cole aqui o token que
