@@ -457,11 +457,15 @@ function readLastPriceMap(): LastPriceMap {
 /**
  * Referência viva do ativo: último preço real do MT5 (se tem menos de 7 dias) ou o `basePrice`
  * do registro. É o que alimenta o eixo Y, a partida do sintético e a tolerância do sanitizador.
+ * Protegido contra contaminação cruzada: rejeita qualquer preço gravado que fuja da faixa do ativo.
  */
 export function referencePrice(asset: AssetSpec): number {
   const seen = readLastPriceMap()[asset.id];
   if (seen && Number.isFinite(seen.price) && seen.price > 0 && Date.now() - seen.at < LAST_PRICE_MAX_AGE_MS) {
-    return seen.price;
+    const diffPct = Math.abs(seen.price - asset.basePrice) / asset.basePrice;
+    if (diffPct < 0.4) {
+      return seen.price;
+    }
   }
   return asset.basePrice;
 }
@@ -469,6 +473,12 @@ export function referencePrice(asset: AssetSpec): number {
 /** Guarda o último preço real visto do ativo (chamado do feed do MT5, amortecido por tempo). */
 export function rememberLastPrice(assetId: AssetId, price: number): void {
   if (!Number.isFinite(price) || price <= 0) return;
+  const spec = ASSETS[assetId];
+  if (!spec) return;
+  // Rejeita preço absurdo de outro contrato (ex: 170.000 gravado para dólar ou 5.500 para índice)
+  const diffPct = Math.abs(price - spec.basePrice) / spec.basePrice;
+  if (diffPct >= 0.4) return;
+
   try {
     const map = readLastPriceMap();
     map[assetId] = { price, at: Date.now() };

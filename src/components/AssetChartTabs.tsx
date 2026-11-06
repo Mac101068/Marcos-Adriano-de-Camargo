@@ -74,19 +74,13 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
           const Icon = tab.icon;
           const liveContract = spec.activeContract || spec.primarySymbol;
           const stateData = assetStates[tab.id];
-          const rawPrice = stateData?.currentPrice || spec.basePrice;
           const ordersCount = stateData?.openOrdersCount ?? 0;
-
-          const formattedPrice = Number(rawPrice).toLocaleString('pt-BR', {
-            minimumFractionDigits: spec.decimals,
-            maximumFractionDigits: spec.decimals,
-          });
 
           return (
             <button
               key={tab.id}
               onClick={() => onSelectAsset(tab.id)}
-              className={`group relative flex items-center gap-2 px-3 h-8 rounded-t-md text-xs transition-all cursor-pointer ${
+              className={`group relative flex items-center gap-2 px-3.5 h-8 rounded-t-md text-xs transition-all cursor-pointer ${
                 isActive
                   ? `${tab.activeBorder} font-bold z-10`
                   : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border-b border-transparent'
@@ -105,15 +99,9 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
                 {liveContract}
               </span>
 
-              {/* Ticker de Preço ao Vivo */}
-              <span
-                className={`text-[11px] font-mono px-1.5 py-0.2 rounded border ${
-                  isActive
-                    ? 'bg-zinc-950/80 border-zinc-700/80 text-zinc-100 font-bold'
-                    : 'bg-zinc-900/50 border-zinc-800 text-zinc-400 group-hover:text-zinc-300'
-                }`}
-              >
-                {formattedPrice}
+              {/* Nome amigável do contrato */}
+              <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 hidden md:inline">
+                {spec.label.split('(')[0].trim()}
               </span>
 
               {/* Ponto indicador de feed ativo se conectado */}

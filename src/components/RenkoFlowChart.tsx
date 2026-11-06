@@ -3232,7 +3232,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       className="relative w-full h-full flex flex-col bg-zinc-950 select-none overflow-hidden"
     >
       {/* ========================================================================= */}
-      {/* TIRA DE STATUS COMPACTA: sem botões (todos vivem na barra lateral)         */}
+      {/* TIRA DE STATUS DA SÉRIE / CONTROLES COLADA NO GRÁFICO (LINHA 4)          */}
       {/* ========================================================================= */}
       <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
         <div className="flex items-center gap-2 min-w-0">
@@ -3246,7 +3246,29 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             <span className="text-[10px] font-sans">Controles</span>
           </button>
 
-          {/* Seletor da série: Pontos (Renko) x Range, com escala editável (Tempo saiu do gráfico) */}
+          {/* DADOS DO ATIVO E VALOR ATUAL (INVERTIDOS PARA ESTA LINHA MAIS PRÓXIMA DO GRÁFICO) */}
+          <div className="flex items-center gap-1.5 shrink-0 rounded bg-zinc-950 border border-zinc-700/80 px-2 h-[22px]">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                asset.id === 'WIN'
+                  ? 'bg-emerald-400 shadow-[0_0_6px_#10b981]'
+                  : asset.id === 'WDO'
+                  ? 'bg-amber-400 shadow-[0_0_6px_#f59e0b]'
+                  : 'bg-orange-400 shadow-[0_0_6px_#f97316]'
+              }`}
+            />
+            <span className="font-bold text-zinc-100 text-[11px] tracking-tight">
+              {asset.activeContract || asset.primarySymbol}
+            </span>
+            <span className="text-zinc-600">|</span>
+            <span className="text-[9.5px] text-zinc-400 uppercase">Preço:</span>
+            <span className="text-[11.5px] font-bold text-emerald-300 tabular-nums">
+              {formatPrice(currentPrice, asset)}
+            </span>
+            <span className="text-[9.5px] text-zinc-500">pts</span>
+          </div>
+
+          {/* Seletor da série: Pontos (Renko) x Range, com escala editável */}
           <div className="flex items-center gap-1.5 shrink-0 rounded-md border border-zinc-600/70 bg-zinc-950/60 px-1.5 py-0" title="Escolha o tipo de gráfico e a escala">
             <span className="text-[9.5px] text-zinc-400 font-sans uppercase tracking-wide hidden sm:inline">Gráfico</span>
             <select
@@ -3278,7 +3300,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                     if (!isNaN(v) && v > 0) applyRenkoR(v);
                   }}
                   className="w-9 h-4 bg-black/60 border border-zinc-700 rounded text-center text-[10.5px] font-mono font-bold text-emerald-300 focus:outline-none focus:border-emerald-500 tabular-nums p-0"
-                  title={`Digite o valor em R (1R = ${asset.tickSize} pts -> ${renkoBoxPoints} pts). Clique para digitar.`}
+                  title={`Digite o valor em R (1R = ${asset.tickSize} pts -> ${formatPrice(renkoBoxPoints, asset)} pts). Clique para digitar.`}
                 />
                 <span className="text-[10px] font-mono text-zinc-400 select-none">R</span>
                 <button
@@ -3295,7 +3317,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                   className="text-[9.5px] text-zinc-500 hover:text-zinc-300 cursor-pointer ml-0.5 tabular-nums"
                   title="Abrir no painel de Parâmetros"
                 >
-                  ({renkoBoxPoints}p)
+                  ({formatPrice(renkoBoxPoints, asset)}p)
                 </button>
               </div>
             )}
@@ -3306,9 +3328,14 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 className="h-[22px] rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
                 title="Escala do Range em pontos (variação High-Low por barra)"
               >
-                {[10, 25, 50, 75, 100, 150].map((p) => (
+                {(asset.id === 'WDO'
+                  ? [2.5, 5, 10, 15, 20]
+                  : asset.id === 'BTCBR' || asset.id === 'BTC'
+                  ? [100, 200, 400, 500, 1000]
+                  : [10, 25, 50, 75, 100, 150]
+                ).map((p) => (
                   <option key={p} value={p}>
-                    {p} pts
+                    {formatPrice(p, asset)} pts
                   </option>
                 ))}
               </select>

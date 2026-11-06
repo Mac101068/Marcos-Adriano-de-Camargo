@@ -2468,11 +2468,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         const now = Date.now();
 
         if (now - lastPriceWriteRef.current > 30_000) {
-
           lastPriceWriteRef.current = now;
-
-          rememberLastPrice(asset.id, tick.price);
-
+          const tickSym = String((tick as any).symbol || config.symbol || '').toUpperCase();
+          const tickAssetId = getAssetIdForSymbol(tickSym);
+          rememberLastPrice(tickAssetId, tick.price);
         }
 
       }
@@ -7259,6 +7258,29 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   // (1,4s), porque a tela mostra um toast por vez — o que ficou por último é este.
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem('fluxo_asset_last_price_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        let changed = false;
+        for (const k of Object.keys(parsed)) {
+          const sp = ASSETS[k as AssetId];
+          if (sp && parsed[k]?.price) {
+            const diff = Math.abs(parsed[k].price - sp.basePrice) / sp.basePrice;
+            if (diff >= 0.4) {
+              delete parsed[k];
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          localStorage.setItem('fluxo_asset_last_price_v1', JSON.stringify(parsed));
+        }
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
 
     const m = assetMigrationRef.current;
 
@@ -7626,9 +7648,15 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     setConfig(updated);
 
     // Motores e eixos no preço de referência do ativo novo; o livro é o DELE (persistido à parte).
-    const nextRangePts = assetParams.rangePoints || (next.id === 'WDO' ? 10 : (next.id === 'BTCBR' || next.id === 'BTC' ? 400 : 100));
+    const nextRangePts = assetParams.rangePoints || (next.id === 'WDO' ? 5 : (next.id === 'BTCBR' || next.id === 'BTC' ? 400 : 100));
     const targetState = assetStateRef.current[id];
-    if (targetState && targetState.boxes.length > 0) {
+
+    const isPriceSane = (p?: number) =>
+      Number.isFinite(p) && (p || 0) > 0 && Math.abs((p || 0) - next.basePrice) / next.basePrice < 0.4;
+
+    const hasSaneBoxes = targetState && targetState.boxes.length > 0 && isPriceSane(targetState.boxes[0].open);
+
+    if (hasSaneBoxes) {
       engineRef.current = targetState.engine;
       rangeEngineRef.current = targetState.rangeEngine;
       timeEngineRef.current = targetState.timeEngine;
@@ -7640,7 +7668,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       setTicks([...targetState.ticks]);
       setRangeBoxes([...targetState.rangeBoxes]);
       setRangeCurrentBox(targetState.rangeCurrentBox);
-      setCurrentPrice(targetState.currentPrice || referencePrice(next));
+      const safeP = isPriceSane(targetState.currentPrice) ? targetState.currentPrice : referencePrice(next);
+      setCurrentPrice(safeP);
     } else {
       handleResetData({
         assetOverride: next,
