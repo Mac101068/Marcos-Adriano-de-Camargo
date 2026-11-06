@@ -108,30 +108,32 @@ const BoxRows: React.FC<{ box: RenkoBox; haState: RenkoBoxCardProps['haState']; 
 );
 
 const ConvergenceTag: React.FC<{ box: RenkoBox }> = ({ box }) => {
+  const isUp = box.direction === 'UP' || box.close >= box.open;
+  const d = box.delta ?? 0;
   if (box.convergenceType === 'BUY_CONVERGENCE') {
     return (
-      <div className="text-[10px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 rounded px-2 py-0.5 text-center">
-        ▲ CONVERGÊNCIA COMPRA DISPARADA
+      <div className="text-[10px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 rounded px-2 py-0.5 text-center flex items-center justify-center gap-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> ▲ CONVERGÊNCIA COMPRA DISPARADA
       </div>
     );
   }
   if (box.convergenceType === 'SELL_CONVERGENCE') {
     return (
-      <div className="text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded px-2 py-0.5 text-center">
-        ▼ CONVERGÊNCIA VENDA DISPARADA
+      <div className="text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-500/30 rounded px-2 py-0.5 text-center flex items-center justify-center gap-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-rose-500" /> ▼ CONVERGÊNCIA VENDA DISPARADA
       </div>
     );
   }
-  if (box.convergenceType === 'DIVERGENCE') {
+  if (box.convergenceType === 'DIVERGENCE' || (isUp && d < -100) || (!isUp && d > 100)) {
     return (
-      <div className="text-[10px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 rounded px-2 py-0.5 text-center">
-        ⚡ DIVERGÊNCIA DE FLUXO (ABSORÇÃO)
+      <div className="text-[10px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 rounded px-2 py-0.5 text-center flex items-center justify-center gap-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" /> ⚡ ABSORÇÃO / DIVERGÊNCIA DE FLUXO
       </div>
     );
   }
   return (
-    <div className="text-[10px] text-slate-500 bg-slate-900/60 rounded px-2 py-0.5 text-center">
-      Fluxo Regular / Neutro
+    <div className="text-[10px] text-slate-400 bg-slate-900/60 border border-slate-800 rounded px-2 py-0.5 text-center flex items-center justify-center gap-1">
+      <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" /> Fluxo Regular / Neutro
     </div>
   );
 };

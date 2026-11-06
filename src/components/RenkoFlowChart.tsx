@@ -58,6 +58,104 @@ const CHART_SHIFT_MAX = 160;
 const STORAGE_KEY_SIGNAL_ARROWS = 'fluxo_renko_signal_arrows_v1';
 // Como o operador lê o resultado ao vivo das ordens no gráfico: em pontos (padrão) ou em R$.
 const STORAGE_KEY_ORDER_VALUE_MODE = 'fluxo_renko_order_value_mode_v1';
+// Regra de coloração dos blocos: 'flow' = confluência do fluxo com o robô | 'direction' = clássico direção
+const STORAGE_KEY_BOX_COLORING_MODE = 'fluxo_renko_coloring_mode_v1';
+
+export type BoxColoringMode = 'flow' | 'direction';
+
+export interface BoxColorResult {
+  fill: string;
+  stroke: string;
+  ghostFill: string;
+  ghostStroke: string;
+  state: 'BUY_FLOW' | 'SELL_FLOW' | 'ABSORPTION' | 'NEUTRAL';
+  label: string;
+}
+
+export function getBoxColoring(
+  b: RenkoBox,
+  prevBox: RenkoBox | null,
+  minDeltaThreshold: number,
+  mode: BoxColoringMode
+): BoxColorResult {
+  const isUp = b.direction === 'UP' || b.close >= b.open;
+
+  if (mode === 'direction') {
+    return {
+      fill: isUp ? '#10b981' : '#ef4444',
+      stroke: isUp ? 'rgba(4, 120, 87, 0.95)' : 'rgba(153, 27, 27, 0.95)',
+      ghostFill: isUp ? 'rgba(16, 185, 129, 0.45)' : 'rgba(239, 68, 68, 0.45)',
+      ghostStroke: isUp ? '#34d399' : '#f87171',
+      state: isUp ? 'BUY_FLOW' : 'SELL_FLOW',
+      label: isUp ? 'Alta' : 'Baixa',
+    };
+  }
+
+  const effThreshold = Math.max(1, minDeltaThreshold * (b.regimeFactor ?? 1));
+  const d = b.delta ?? 0;
+  const prevDelta = prevBox ? (prevBox.delta ?? 0) : 0;
+
+  // Exaustão: mesmo lado e agressão caiu mais de 30% em relação ao box anterior do mesmo lado
+  const sameSide = d !== 0 && prevDelta !== 0 && Math.sign(d) === Math.sign(prevDelta);
+  const isExhausted = sameSide && Math.abs(d) <= Math.abs(prevDelta) * EXHAUST_DECAY_RATIO;
+
+  // Absorção / Divergência:
+  // - Preço sobe mas com delta vendedor expressivo (absorção de venda passiva no suporte)
+  // - Preço cai mas com delta comprador expressivo (absorção de compra passiva na resistência)
+  // - Ou marcado como DIVERGENCE
+  const isAbsorptionBuy = isUp && d <= -effThreshold * 0.25;
+  const isAbsorptionSell = !isUp && d >= effThreshold * 0.25;
+  const isDivergence = b.convergenceType === 'DIVERGENCE' || isAbsorptionBuy || isAbsorptionSell;
+
+  if (isDivergence) {
+    return {
+      fill: '#eab308', // Âmbar / Amarelo ouro
+      stroke: '#ca8a04',
+      ghostFill: 'rgba(234, 179, 8, 0.45)',
+      ghostStroke: '#fde047',
+      state: 'ABSORPTION',
+      label: 'Absorção / Divergência',
+    };
+  }
+
+  // Compra Validada: preço em alta + fluxo comprador validado + sem exaustão
+  const isBuyFlow =
+    b.convergenceType === 'BUY_CONVERGENCE' || (isUp && d >= effThreshold && !isExhausted);
+  if (isBuyFlow) {
+    return {
+      fill: '#10b981', // Verde Esmeralda vibrante
+      stroke: 'rgba(4, 120, 87, 0.95)',
+      ghostFill: 'rgba(16, 185, 129, 0.45)',
+      ghostStroke: '#34d399',
+      state: 'BUY_FLOW',
+      label: 'Compra Validada',
+    };
+  }
+
+  // Venda Validada: preço em baixa + fluxo vendedor validado + sem exaustão
+  const isSellFlow =
+    b.convergenceType === 'SELL_CONVERGENCE' || (!isUp && d <= -effThreshold && !isExhausted);
+  if (isSellFlow) {
+    return {
+      fill: '#ef4444', // Carmesim vibrante
+      stroke: 'rgba(153, 27, 27, 0.95)',
+      ghostFill: 'rgba(239, 68, 68, 0.45)',
+      ghostStroke: '#f87171',
+      state: 'SELL_FLOW',
+      label: 'Venda Validada',
+    };
+  }
+
+  // Neutro / Sem convicção institucional / Ruído de book
+  return {
+    fill: '#52525b', // Zinc neutro
+    stroke: '#3f3f46',
+    ghostFill: 'rgba(113, 113, 122, 0.45)',
+    ghostStroke: '#a1a1aa',
+    state: 'NEUTRAL',
+    label: isExhausted ? 'Fluxo Exaurido' : 'Sem Convicção (Ruído)',
+  };
+}
 
 type OrderValueMode = 'points' | 'money';
 
@@ -513,6 +611,27 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     } catch (e) {
       // Ignora
     }
+  };
+  // Regra de Coloração: 'flow' = Fluxo & Robô (confluência de delta) | 'direction' = Direção clássica
+  const [boxColoringMode, setBoxColoringMode] = useState<BoxColoringMode>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_BOX_COLORING_MODE);
+      if (saved === 'flow' || saved === 'direction') return saved;
+    } catch (e) {
+      // Ignora
+    }
+    return 'flow';
+  });
+  const toggleBoxColoringMode = () => {
+    setBoxColoringMode((prev) => {
+      const next = prev === 'flow' ? 'direction' : 'flow';
+      try {
+        localStorage.setItem(STORAGE_KEY_BOX_COLORING_MODE, next);
+      } catch (e) {
+        // Ignora
+      }
+      return next;
+    });
   };
   // 'compact' = tijolos sempre agrupados à direita | 'fill' = auto-ajuste que preenche a tela
   const [spacingMode, setSpacingMode] = useState<'compact' | 'fill'>(() => {
@@ -1677,6 +1796,39 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.stroke();
 
     // =======================================================================
+    // REALCE DAS JANELAS DE CONFLUÊNCIA NO FUNDO (FLUXO DO ROBÔ)
+    // =======================================================================
+    if (boxColoringMode === 'flow') {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, Math.max(0, lineRight), Math.max(1, pricePaneHeight - 1));
+      ctx.clip();
+
+      displayedBoxes.forEach((b, i) => {
+        if (!isBoxSane(b)) return;
+        const centerX = xs[i];
+        if (centerX < -30 || centerX > plotRight + 30) return;
+        const prevBox = i > 0 ? displayedBoxes[i - 1] : null;
+        const colorInfo = getBoxColoring(b, prevBox, minDeltaThreshold, boxColoringMode);
+
+        const stripW = boxWidth + boxSpacing;
+        const stripLeft = centerX - stripW / 2;
+
+        if (colorInfo.state === 'BUY_FLOW') {
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.08)';
+          ctx.fillRect(stripLeft, 0, stripW, pricePaneHeight);
+        } else if (colorInfo.state === 'SELL_FLOW') {
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.08)';
+          ctx.fillRect(stripLeft, 0, stripW, pricePaneHeight);
+        } else if (colorInfo.state === 'ABSORPTION') {
+          ctx.fillStyle = 'rgba(234, 179, 8, 0.06)';
+          ctx.fillRect(stripLeft, 0, stripW, pricePaneHeight);
+        }
+      });
+      ctx.restore();
+    }
+
+    // =======================================================================
     // DESENHO DOS TIJOLOS RENKO (PAINEL SUPERIOR)
     // =======================================================================
     let lastBuySignalX = -999;
@@ -1691,6 +1843,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const haState = flowHaData[i]?.state;
       boxPositions.push({ x: centerX, box: b, index: startIdx + i, haState });
 
+      const prevBox = i > 0 ? displayedBoxes[i - 1] : null;
+      const colorInfo = getBoxColoring(b, prevBox, minDeltaThreshold, boxColoringMode);
       const isUp = b.direction === 'UP';
       const isForming = i === displayedBoxes.length - 1 && currentBox !== null;
       // Ghost de conclusão ("faltam Xp") só faz sentido no Renko por pontos
@@ -1716,7 +1870,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       // o corpo é fechado (open→close = 1 box) e o "pavio" vinha da janela de acumulação —
       // era ele que dava ao tijolo o aspecto de candle sujo e borrava a emenda dos pregões.
       if (chartSeries === 'range') {
-        ctx.strokeStyle = isUp ? '#059669' : '#dc2626';
+        ctx.strokeStyle = colorInfo.stroke;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(centerX, highY);
@@ -1730,8 +1884,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         const ghostTopY = Math.min(openY, targetCloseY);
         const ghostH = Math.max(3, Math.abs(targetCloseY - openY));
 
-        ctx.fillStyle = isUp ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)';
-        ctx.strokeStyle = isUp ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)';
+        ctx.fillStyle = colorInfo.ghostFill.replace('0.45', '0.12');
+        ctx.strokeStyle = colorInfo.ghostStroke;
         ctx.setLineDash([2, 2]);
         ctx.beginPath();
         ctx.roundRect(left, ghostTopY, boxWidth, ghostH, 1);
@@ -1739,15 +1893,15 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.fillStyle = isUp ? 'rgba(16, 185, 129, 0.45)' : 'rgba(239, 68, 68, 0.45)';
-        ctx.strokeStyle = isUp ? '#34d399' : '#f87171';
+        ctx.fillStyle = colorInfo.ghostFill;
+        ctx.strokeStyle = colorInfo.ghostStroke;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.roundRect(left, topY, boxWidth, boxH, 1);
         ctx.fill();
         ctx.stroke();
 
-        ctx.fillStyle = isUp ? '#34d399' : '#f87171';
+        ctx.fillStyle = colorInfo.ghostStroke;
         ctx.beginPath();
         ctx.arc(centerX, closeY, isMobile ? 2.5 : 3, 0, Math.PI * 2);
         ctx.fill();
@@ -1761,7 +1915,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.font = '9px "JetBrains Mono", monospace';
           ctx.textAlign = 'center';
           ctx.fillText(`+${b.ticksCount}t`, centerX, ghostLabelY - 12);
-          ctx.fillStyle = isUp ? '#34d399' : '#f87171';
+          ctx.fillStyle = colorInfo.ghostStroke;
           ctx.fillText(
             `${ptsRemaining > 0 ? `faltam ${formatPrice(ptsRemaining, asset)}p` : 'fechando'}`,
             centerX,
@@ -1773,11 +1927,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         // família da cor (escurecer demais engorda o desenho) e realce de 1px no topo para
         // dar relevo sem virar candle.
         const radius = boxWidth >= 6 ? 2 : 1;
-        ctx.fillStyle = isUp ? '#10b981' : '#ef4444';
+        ctx.fillStyle = colorInfo.fill;
         ctx.beginPath();
         ctx.roundRect(left, topY, boxWidth, boxH, radius);
         ctx.fill();
-        ctx.strokeStyle = isUp ? 'rgba(4, 120, 87, 0.95)' : 'rgba(153, 27, 27, 0.95)';
+        ctx.strokeStyle = colorInfo.stroke;
         ctx.lineWidth = 1;
         ctx.stroke();
         if (boxWidth >= 4 && boxH >= 4) {
@@ -1785,8 +1939,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.fillRect(left + 1, topY + 1, Math.max(1, boxWidth - 2), 1);
         }
       } else {
-        ctx.fillStyle = isUp ? '#10b981' : '#ef4444';
-        ctx.strokeStyle = isUp ? '#059669' : '#dc2626';
+        ctx.fillStyle = colorInfo.fill;
+        ctx.strokeStyle = colorInfo.stroke;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.roundRect(left, topY, boxWidth, boxH, 1);
@@ -1805,7 +1959,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       // Setas ▲/▼ são preferência de leitura (opção "Setas de sinal" na janela Dados), além do
       // dia de contexto estático, que nunca operou e continua sem marcas.
       const hideSignals = b.isStaticContext === true || !showSignalArrows;
-      const prevBox = i > 0 ? displayedBoxes[i - 1] : null;
       const isFirstBuyConvergence =
         b.convergenceType === 'BUY_CONVERGENCE' &&
         (!prevBox || prevBox.convergenceType !== 'BUY_CONVERGENCE');
@@ -2598,6 +2751,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     chartShift,
     showSignalArrows,
     orderValueMode,
+    boxColoringMode,
     assetWatermark,
     sessionGaps,
   ]);
@@ -3227,6 +3381,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     onToggleOrderLines: () => setShowOrderLines((prev) => !prev),
     showSignalArrows,
     onToggleSignalArrows: toggleSignalArrows,
+    boxColoringMode,
+    onToggleBoxColoringMode: toggleBoxColoringMode,
     orderValueMode,
     onOrderValueMode: handleOrderValueMode,
     activeDrawingTool,
@@ -3381,6 +3537,48 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             )}
           </div>
           <span className="text-emerald-400 font-semibold tabular-nums">{boxes.length} blk</span>
+
+          {/* Seletor da Regra de Coloração: Fluxo & Robô vs Direção clássica */}
+          <button
+            type="button"
+            onClick={toggleBoxColoringMode}
+            className={`flex items-center gap-1.5 px-2 h-[22px] rounded border font-sans text-[10.5px] cursor-pointer transition-colors ${
+              boxColoringMode === 'flow'
+                ? 'bg-emerald-950/80 border-emerald-500/70 text-emerald-300 hover:bg-emerald-900/60 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
+                : 'bg-zinc-900 border-zinc-700/80 text-zinc-400 hover:text-white'
+            }`}
+            title={
+              boxColoringMode === 'flow'
+                ? 'Regra de Coloração: FLUXO & ROBÔ ativa. Tijolos e janelas refletem a confluência institucional das entradas. Clique para alternar para Direção clássica.'
+                : 'Regra de Coloração: DIREÇÃO clássica (Verde Alta / Vermelho Baixa). Clique para alternar para Fluxo & Robô.'
+            }
+          >
+            <span>🎨</span>
+            <span className="font-semibold">
+              {boxColoringMode === 'flow' ? 'Cor: Fluxo & Robô' : 'Cor: Direção'}
+            </span>
+          </button>
+
+          {/* Mini-legenda explicativa da coloração por fluxo */}
+          {boxColoringMode === 'flow' && (
+            <div className="hidden xl:flex items-center gap-2 px-2 py-0.5 rounded bg-zinc-950/80 border border-zinc-800 text-[9.5px] font-sans select-none" title="Legenda da coloração por confluência do fluxo com o robô">
+              <span className="flex items-center gap-1 text-emerald-400 font-medium">
+                <span className="w-2 h-2 rounded-sm bg-[#10b981] inline-block shadow-[0_0_4px_#10b981]" /> Compra
+              </span>
+              <span className="text-zinc-700">·</span>
+              <span className="flex items-center gap-1 text-rose-400 font-medium">
+                <span className="w-2 h-2 rounded-sm bg-[#ef4444] inline-block shadow-[0_0_4px_#ef4444]" /> Venda
+              </span>
+              <span className="text-zinc-700">·</span>
+              <span className="flex items-center gap-1 text-amber-300 font-medium">
+                <span className="w-2 h-2 rounded-sm bg-[#eab308] inline-block shadow-[0_0_4px_#eab308]" /> Absorção
+              </span>
+              <span className="text-zinc-700">·</span>
+              <span className="flex items-center gap-1 text-zinc-400 font-normal">
+                <span className="w-2 h-2 rounded-sm bg-[#52525b] inline-block" /> Neutro
+              </span>
+            </div>
+          )}
 
           {/* ROBÔ 2 (sombra): atalho para a janela do segundo robô de papel. Sem sombra ligada,
               o chip é só o "+" — clicar abre a janela, onde se escolhe estratégia e escala. */}
