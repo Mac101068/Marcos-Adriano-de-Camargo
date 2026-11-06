@@ -998,8 +998,9 @@ class MT5OrderManager:
             close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
             tick = mt5.symbol_info_tick(self.symbol)
             price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
-            # PnL aproximado desta posição em R$ pelo valor do ponto DO ATIVO (registro de ativos:
-            # WIN R$0,20/pt, WDO R$0,10/pt, BTC R$1,00/pt — nada soldado no mini-índice)
+            # PnL aproximado desta posição em R$: usa o ASSET_POINT_VALUE interpolado deste script na
+            # geração (nada soldado no mini-índice). Não copiar números para cá — a régua mora no
+            # registro de ativos da interface e é conferida pelo assert do R$/ponto.
             dir_sign = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else -1.0
             pnl_brl += (price - pos.price_open) * dir_sign * ASSET_POINT_VALUE * pos.volume
             req = {

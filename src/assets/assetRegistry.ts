@@ -71,7 +71,12 @@ export interface AssetSpec {
   watermarkCaption: string;
   /** Prefixos de código B3/MT5 do ativo: casa 'WIN$N', 'WINZ26', 'WDO$N', 'WBRA10'... */
   prefixes: string[];
-  /** R$ por ponto, por contrato. WIN = 0,20 | WDO = 0,10. */
+  /**
+   * R$ por ponto, por contrato — a régua que transforma pontos em dinheiro na tela. Cada ativo
+   * declara o valor abaixo e o `contractNote` diz de onde ele vem (WIN R$0,20/pt · WDO R$10,00/pt).
+   * Os números são conferidos por `scripts/robotMagicAssert.ts` contra o tick da B3: mexer aqui sem
+   * rodar o assert é mudar o PnL que o operador lê.
+   */
   pointValue: number;
   /** Menor variação de preço, em pontos. WIN = 5 | WDO = 0,5. */
   tickSize: number;
