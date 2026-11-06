@@ -1,0 +1,30 @@
+# ── Fim de linha ────────────────────────────────────────────────────────────
+# O Windows cria CRLF e o macOS/Linux criam LF. Sem esta regra, os dois sistemas
+# operacionais divergem em TODO arquivo de texto ao trocar commits. Aqui todo
+# texto é armazenado como LF no repositório e entregue como LF no disco.
+* text=auto eol=lf
+
+# Batch/PowerShell: o cmd.exe interpreta rótulos (goto/labels) de forma
+# inconsistente com LF puro, então estes continuam com CRLF no disco.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# ── Binários: nunca processar como texto ────────────────────────────────────
+# Sem esta marca o Git tenta fazer diff e normalização byte a byte, o que é caro
+# em fitas de 300 MB e pode corromper conteúdo.
+*.gz binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.xlsx binary
+*.xls binary
+
+# ── Diff de texto para os formatos do projeto ───────────────────────────────
+# (sem driver customizado: `* text=auto` já classifica e normaliza os fontes)
+*.json text
+*.md text

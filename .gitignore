@@ -23,9 +23,16 @@ interface_github/dist/
 backups/
 *.zip
 *.csv
-# Base de ticks: o Git recebe apenas os recortes por pregão (data/pregoes/*.csv.gz)
-# e os .gz compactos. Os CSVs acumulados multi-pregão passam de 100 MB e ficam locais.
-!data/pregoes/*.csv.gz
-!data/*.gz
+
+# Base de ticks (fitas de segundos): ficam APENAS no disco de quem as coletou.
+# Um pregão descompactado passa de 300 MB e o .gz dele custa ~7 MB por dia, então
+# o histórico inteiro inchava o repositório sem servir como código. Os recortes
+# que o replay precisa já viajam prontos no frontend (interface_github/dados/,
+# ~6 MB, com verificação de soma de fluxos), não é preciso duplicá-los aqui.
+# Atenção à semântica: '*.csv' nunca casou com 'arquivo.csv.gz' (termina em .gz),
+# por isso as fitas entravam no Git mesmo "ignoradas". E não adianta re-incluir
+# ('!data/*.gz') depois de excluir o diretório pai: o Git nem desce nele.
+data/
+
 .vscode/
 .agents/
