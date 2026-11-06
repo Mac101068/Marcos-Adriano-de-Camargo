@@ -23,10 +23,17 @@ reprodução offline (reproduzir_pregao.py) consiga ser comparada linha a linha 
 fez ao vivo. Nunca deixe uma falha de disco derrubar o loop de trading: toda gravação passa por
 try/except e pelo interruptor AUDITORIA_ENABLED.
 """
+import sys
 
 import csv
 import os
 from datetime import datetime
+
+# O console do Windows é cp850/cp1252 e morre em UnicodeEncodeError ao imprimir travessão
+# com a saída redirecionada — que é exatamente o modo como log, launcher e agente rodam isto.
+# Forçar UTF-8 no stdout é o que faz o mesmo script valer nas duas máquinas sem perder acento.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 PASTA_AUDITORIA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "auditoria")
 

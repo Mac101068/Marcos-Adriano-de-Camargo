@@ -8,11 +8,18 @@ os que viraram ordem errada — e exige o mesmo veredito que o avaliador da tela
 (interface_github/src/utils/convergenceEvaluator.ts) daria. Sem este casamento, a tela
 mostra um sinal filtrado e o robô opera outro critério.
 """
+import sys
 
 import copy
 import time
 
 from bot_mt5_ciclo15 import EVAL_CONFIG, ENGINES, RenkoFlowEngine, apply_ea_config, efficiency_ratio, is_exhausted_flow
+
+# O console do Windows é cp850/cp1252 e morre em UnicodeEncodeError ao imprimir travessão
+# com a saída redirecionada — que é exatamente o modo como log, launcher e agente rodam isto.
+# Forçar UTF-8 no stdout é o que faz o mesmo script valer nas duas máquinas sem perder acento.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 CONFIG_ORIGINAL = copy.deepcopy(EVAL_CONFIG)
 FAILS = []

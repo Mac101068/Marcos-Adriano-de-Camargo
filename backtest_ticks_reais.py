@@ -26,7 +26,34 @@ import argparse
 
 from datetime import datetime, timedelta
 
-import MetaTrader5 as mt5
+try:
+
+    import MetaTrader5 as mt5
+
+except ImportError:
+
+    # A lib é Windows-only (o pip não entrega roda para macOS/Linux). Quem lê a fita que já está em
+    # disco -- list_local_pregoes() e o replay_dados.py -- continua funcionando nas duas máquinas.
+    # Quem precisa do terminal embaixo chama _precisa_mt5() e recebe o motivo, não um AttributeError.
+
+    mt5 = None
+
+
+def _precisa_mt5():
+
+    """Falha legível no lugar de NoneType.hasattr: aqui não existe terminal MetaTrader 5."""
+
+    if mt5 is None:
+
+        raise RuntimeError(
+
+            "MetaTrader5 indisponível nesta máquina (a lib só roda no Windows). Os pregões já "
+
+            "gravados em disco continuam acessíveis por list_local_pregoes() -- é por aí que o "
+
+            "replay de validação roda em qualquer sistema operacional."
+
+        )
 
 
 
@@ -47,6 +74,8 @@ TICK_SIZE = 5.0      # 1 tick = 5 pontos = R$ 1,00
 def list_available_pregoes(symbol="WINZ26", max_days=35):
 
     """Varre e lista os pregões que contêm histórico de ticks reais disponíveis na corretora."""
+
+    _precisa_mt5()
 
     if not mt5.initialize():
 
@@ -145,6 +174,8 @@ def run_backtest_date(target_date_str, symbol="WINZ26", renko_r=10, strategy="PY
     - Ordens de Pirâmide a cada box consecutivo com Take Profit de +1 box
 
     """
+
+    _precisa_mt5()
 
     if not mt5.initialize():
 

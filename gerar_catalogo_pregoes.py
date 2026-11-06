@@ -19,12 +19,19 @@ catálogo da ponte (dados mais frescos) e usa este arquivo como base.
 Uso:
     .\\venv\\Scripts\\python.exe gerar_catalogo_pregoes.py
 """
+import sys
 
 import json
 import os
 from datetime import datetime
 
 import backtest_ticks_reais
+
+# O console do Windows é cp850/cp1252 e morre em UnicodeEncodeError ao imprimir travessão
+# com a saída redirecionada — que é exatamente o modo como log, launcher e agente rodam isto.
+# Forçar UTF-8 no stdout é o que faz o mesmo script valer nas duas máquinas sem perder acento.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE_DIR = r"C:\Users\Lucas\Documents\RoboFluxoB3"
 

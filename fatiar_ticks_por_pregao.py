@@ -5,14 +5,18 @@ FATIADOR DE TICKS REAIS POR PREGÃO
 Lê a base acumulada (data/<ativo>_ticks.csv) e gera uma saída por sessão de pregão,
 no fuso de Brasília (UTC-3), compatível com backtest_ticks_reais.py.
 
-Por padrão gera .csv.gz (um arquivo por dia, ~5-13 MB) — formato enxuto para
-versionamento no Git. Use --csv para gravar os CSVs puros.
+Por padrão gera .csv.gz (um arquivo por dia, ~5-13 MB) — economiza o disco de
+quem guarda meses de fita. Use --csv para gravar os CSVs puros.
+
+Os recortes NÃO vão para o Git: `data/` é ignorado de propósito (a política está
+no .gitignore). O que o replay consome viaja pronto em interface_github/dados/.
 
 Uso:
     python fatiar_ticks_por_pregao.py
     python fatiar_ticks_por_pregao.py --ativo WDOZ26 --csv
 ========================================================================================
 """
+import sys
 
 import argparse
 import glob
@@ -20,6 +24,12 @@ import gzip
 import os
 
 import pandas as pd
+
+# O console do Windows é cp850/cp1252 e morre em UnicodeEncodeError ao imprimir travessão
+# com a saída redirecionada — que é exatamente o modo como log, launcher e agente rodam isto.
+# Forçar UTF-8 no stdout é o que faz o mesmo script valer nas duas máquinas sem perder acento.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 COLUNAS = ['time_msc', 'bid', 'ask', 'last', 'volume', 'flags']
 OFFSET_BR = pd.Timedelta(hours=3)   # horário de Brasília = UTC-3

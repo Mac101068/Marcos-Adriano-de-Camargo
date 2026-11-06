@@ -1,11 +1,16 @@
 """Testes do replay_dados — a camada que serve ticks REAIS comprimidos ao replay da web.
 
-Roda com:  .\\venv\\Scripts\\python.exe test_replay_dados.py
+Roda com:  .\\venv\\Scripts\\python.exe test_replay_dados.py   (Windows)
+           ./venv/bin/python test_replay_dados.py             (macOS/Linux)
 
 O que este arquivo protege é o invariante que faz o replay valer alguma coisa: depois de comprimir,
 o motor precisa ver OS MESMOS contratos por lado e o MESMO caminho de preço que veria na fita
 inteira. Se isso quebrar, delta/CVD voltam a ser decorativos e a validação de estratégia passa a
 mentir — silenciosamente, que é o pior tipo de quebra.
+
+As seções que dependem do MetaTrader5 são PULADAS fora do Windows, com o motivo impresso: a lib só
+tem rodagem Windows e o motor de replay é portátil por construção (espelha as flags em vez de
+importá-la). Vermelho continua significando problema de código, nunca de ambiente.
 """
 
 import os
@@ -13,17 +18,30 @@ import sys
 
 import numpy as np
 
+# O console do Windows é cp850/cp1252 e morre em UnicodeEncodeError ao imprimir travessão
+# com a saída redirecionada — que é exatamente o modo como log, launcher e agente rodam isto.
+# Forçar UTF-8 no stdout é o que faz o mesmo script valer nas duas máquinas sem perder acento.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import replay_dados as rd
 
 FALHAS = []
+PULOS = []
 
 
 def checa(nome, ok, detalhe=""):
     print(f"  [{'OK ' if ok else 'XX '}] {nome}" + (f" — {detalhe}" if detalhe else ""))
     if not ok:
         FALHAS.append(nome)
+
+
+def pula(nome, motivo):
+    """Registra o que o ambiente não permite conferir — sem poluir a contagem de falhas."""
+    print(f"  [PULA] {nome} — {motivo}")
+    PULOS.append(f"{nome} — {motivo}")
 
 
 def linha_crua(raw, last, vol, flags):
@@ -100,16 +118,32 @@ checa("linhas de só bid/ask não viram tick", len(so_negocio) == 1
 
 # ---------------------------------------------------------------------------------------------
 # E. constantes espelhadas da ponte/MT5 (o módulo não importa a ponte, por isso conferimos aqui)
+#
+# Dois blocos separados e independentes: a ponte (que importa MetaTrader5 no topo) e o pacote. Em
+# macOS os dois caem por ImportError — e isso NÃO é falha do replay, é limite de plataforma.
+# Qualquer outra exceção, porém, é alarme verdadeiro: a ponte existe e não monteou.
 # ---------------------------------------------------------------------------------------------
 print("\nE. constantes batem com a ponte e com o pacote MetaTrader5")
 try:
     import bot_mt5_ciclo15 as ponte
+except ImportError as exc:
+    ponte = None
+    pula("conferências contra a ponte", f"fora do Windows não há MetaTrader5 ({exc})")
+except Exception as exc:
+    ponte = None
+    checa("ponte importável para conferir constantes", False, f"{type(exc).__name__}: {exc}")
+try:
     import MetaTrader5 as mt5
+except ImportError as exc:
+    mt5 = None
+    pula("conferências contra o pacote MetaTrader5", f"o pip não entrega esta lib fora do Windows ({exc})")
+except Exception as exc:
+    mt5 = None
+    checa("pacote MetaTrader5 importável", False, f"{type(exc).__name__}: {exc}")
+
+if ponte is not None:
     checa("BRT_OFFSET_MSC igual ao da ponte", rd.BRT_OFFSET_MSC == ponte.MT5_BRT_OFFSET_MSC,
           f"{rd.BRT_OFFSET_MSC} vs {ponte.MT5_BRT_OFFSET_MSC}")
-    checa("FLAG_BUY/FLAG_SELL iguais aos do MetaTrader5",
-          rd.FLAG_BUY == mt5.TICK_FLAG_BUY and rd.FLAG_SELL == mt5.TICK_FLAG_SELL,
-          f"{rd.FLAG_BUY}/{rd.FLAG_SELL} vs {mt5.TICK_FLAG_BUY}/{mt5.TICK_FLAG_SELL}")
     # Estas três são as costuras do protocolo: se divergirem, a tela recebe chunk do tamanho
     # errado ou um rótulo de fonte que ela não sabe ler.
     checa("TAMANHO_LOTE == HISTORY_CHUNK_TICKS da ponte", rd.TAMANHO_LOTE == ponte.HISTORY_CHUNK_TICKS,
@@ -120,8 +154,11 @@ try:
     checa("dias servidos cabem no teto que a ponte aceita",
           rd.MAX_DIAS_POR_PEDIDO <= ponte.HISTORY_MAX_DAYS,
           f"{rd.MAX_DIAS_POR_PEDIDO} vs {ponte.HISTORY_MAX_DAYS}")
-except Exception as exc:
-    checa("constantes conferidas contra a ponte", False, f"não rodou: {exc}")
+
+if mt5 is not None:
+    checa("FLAG_BUY/FLAG_SELL iguais aos do MetaTrader5",
+          rd.FLAG_BUY == mt5.TICK_FLAG_BUY and rd.FLAG_SELL == mt5.TICK_FLAG_SELL,
+          f"{rd.FLAG_BUY}/{rd.FLAG_SELL} vs {mt5.TICK_FLAG_BUY}/{mt5.TICK_FLAG_SELL}")
 
 # ---------------------------------------------------------------------------------------------
 # F. a janela horária vetorizada tem de dar a MESMA contagem da regra usada pela reprodução
@@ -133,7 +170,15 @@ if not arquivo:
 else:
     import pandas as pd
     from zoneinfo import ZoneInfo
-    import bot_mt5_ciclo15 as ponte
+    try:
+        import bot_mt5_ciclo15 as ponte
+        janelas = (("09:00", "16:00"), (ponte.START_TIME, ponte.CLOSE_ALL_TIME))
+    except ImportError as exc:
+        # A fita em disco e o oráculo IANA são portáveis; o que não existe fora do Windows são as
+        # constantes de sessão da ponte. Estas sim viram PULO com motivo -- nunca passe livre.
+        pula("janela da sessão conferida contra as constantes da ponte",
+             f"fora do Windows não há MetaTrader5 ({exc})")
+        janelas = (("09:00", "16:00"),)
     # AMOSTRA ESTRATIFICADA da fita inteira (uma linha a cada 240), não o começo do arquivo: as
     # primeiras 400k linhas caem todas dentro da manhã, então uma janela 09:00-16:00 não cortava
     # nada e a checagem virava empate por acaso. Espalhando pelo pregão inteiro a borda da sessão
@@ -151,7 +196,7 @@ else:
               .dt.tz_convert(ZoneInfo("America/Sao_Paulo")))
     minutos = parede.dt.strftime("%H:%M")
 
-    for desde, ate in (("09:00", "16:00"), (ponte.START_TIME, ponte.CLOSE_ALL_TIME)):
+    for desde, ate in janelas:
         masc = rd._filtrar_por_hora(ts, desde, ate)
         referencia = int(((minutos >= desde) & (minutos < ate)).sum())
         checa(f"vetorizado == fuso IANA ({desde}-{ate})",
@@ -282,6 +327,11 @@ checa("o orçamento de bytes é maior que o payload do padrão (senão ele nunca
       <= rd.MAX_BYTES_POR_PEDIDO,
       f"{rd.FIDELIDADE_MEDIDA[rd.BUCKET_PADRAO_MS]['payload_mb']} MB de "
       f"{rd.MAX_BYTES_POR_PEDIDO / 1048576:.0f} MB")
+
+if PULOS:
+    print(f"\nPULOS ({len(PULOS)}) — limite de ambiente, não falha de código:")
+    for p in PULOS:
+        print(f"  [PULA] {p}")
 
 print("\n" + ("TUDO VERDE" if not FALHAS else f"FALHAS: {FALHAS}"))
 sys.exit(1 if FALHAS else 0)

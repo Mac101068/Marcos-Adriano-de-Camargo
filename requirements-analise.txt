@@ -1,0 +1,23 @@
+# Instalação para quem SÓ ANALISA dados (macOS, Linux ou Windows sem MT5 aberto).
+#
+#   pip install -r requirements-analise.txt
+#
+# Por que existe: o requirements.txt começa com MetaTrader5==5.0.45, pacote que a
+# PyPI só distribui para Windows. No macOS o `pip install` inteiro morre nesse
+# item -- inclusive o dos que não pretendem operar. Aqui fica o mínimo real do
+# caminho de análise, que é o que roda nas duas plataformas.
+#
+# O que NÃO está aqui (e por quê):
+#   MetaTrader5      -> só o Windows tem; ponte e robôs já tratam a ausência dele
+#                       com import condicional (mt5 = None) e pulam o que exige
+#                       terminal. Operar de verdade continua sendo tarefa desta
+#                       máquina, não do notebook.
+#   fastapi/uvicorn/jinja2/aiofiles/python-multipart -> são só do painel web
+#                       (web_app.py). Para rodar o servidor aqui, use o
+#                       requirements.txt completo num Windows.
+#
+# Versões iguais às do requirements.txt para os dois ambientes não divergirem.
+# Exige Python 3.9+ (o código usa zoneinfo para fuso America/Sao_Paulo).
+pandas==2.2.2
+numpy==1.26.4
+websockets==13.1

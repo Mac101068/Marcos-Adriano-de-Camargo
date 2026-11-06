@@ -29,11 +29,18 @@ fita cheia, no MESMO motor. Nada aqui é "parecido com" — é comparado.
 Convenção de horário idêntica à da ponte: `timestamp = time_msc_cru + BRT_OFFSET_MSC`, que é o
 relógio de parede BRT (validado contra tick ao vivo: 18:30 na máquina -> stamp decodifica 18:30).
 """
+import sys
 
 import os
 from datetime import datetime
 
 import numpy as np
+
+# O console do Windows é cp850/cp1252 e morre em UnicodeEncodeError ao imprimir travessão
+# com a saída redirecionada — que é exatamente o modo como log, launcher e agente rodam isto.
+# Forçar UTF-8 no stdout é o que faz o mesmo script valer nas duas máquinas sem perder acento.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # Espelha bot_mt5_ciclo15.MT5_BRT_OFFSET_MSC. Este módulo NÃO importa a ponte de propósito: é a
 # ponte que importa este (import circular derrubaria o processo vivo). test_replay_dados.py
