@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const store = new Map<string, string>();
 (globalThis as any).localStorage = {
@@ -70,25 +71,71 @@ for (const [nome, busca] of [
   if (!tem(busca)) falhas.push(`procedência de ordem ausente no script gerado: ${nome}`);
 }
 
-// 4. O Python gerado precisa compilar. Sem o venv do projeto local, isto é AVISO (o arquivo foi
-//    gerado por outra máquina), não falha: o assert roda em CI de frontend também.
+// 4. O Python gerado precisa compilar DE VERDADE. Este bloco já produziu verde mentiroso: sem
+//    interpretador no caminho ele imprimia "AVISO: py_compile não rodou" e o banner seguinte
+//    jurava mesmo assim que "py_compile aceitou" (provado no Mac em 06/11: sair=0 + banner verde
+//    + aviso de que o compilador não rodou). Regra nova: interpretador ausente é FALHA, e o banner
+//    só afirma o que rodou neste processo, dizendo QUEM checou.
 const pasta = mkdtempSync(join(tmpdir(), 'bridge-assert-'));
 const alvo = join(pasta, 'script_gerado.py');
 writeFileSync(alvo, py, 'utf-8');
-const python = process.env.PYTHON || join('..', 'venv', 'Scripts', 'python.exe');
-const compilado = spawnSync(python, ['-m', 'py_compile', alvo], { encoding: 'utf8' });
-if (compilado.error) {
-  console.log(`AVISO: py_compile não rodou (${compilado.error.message}); script em ${alvo}`);
-} else if (compilado.status !== 0) {
-  falhas.push(`py_compile recusou o script gerado:\n${compilado.stderr}`);
-  rmSync(pasta, { recursive: true, force: true });
-} else {
-  rmSync(pasta, { recursive: true, force: true });
+
+// Caminho absoluto a partir deste arquivo: '../venv' relativo ao cwd só funcionava quando o
+// assert era rodado de dentro do frontend -- em qualquer outro cwd ele virava AVISO silencioso.
+const raizProjeto = fileURLToPath(new URL('../..', import.meta.url));
+const candidatos = process.env.PYTHON
+  ? [process.env.PYTHON] // escolhido na cara: se não existir, é falha; não se troca em silêncio
+  : [
+      join(raizProjeto, 'venv', 'Scripts', 'python.exe'), // Windows: o mesmo interpretador da ponte
+      join(raizProjeto, 'venv', 'bin', 'python3'), // macOS / Linux
+      'python3',
+      'python',
+    ];
+
+let compilou = '';
+const tentativas: string[] = [];
+for (const candidato of candidatos) {
+  const r = spawnSync(candidato, ['-m', 'py_compile', alvo], { encoding: 'utf8' });
+  if (r.error) {
+    // Só "não consegui nem começar" leva ao próximo candidato.
+    const erro = r.error as NodeJS.ErrnoException;
+    tentativas.push(`${candidato}: ${erro.code === 'ENOENT' ? 'não existe' : erro.message}`);
+    continue;
+  }
+  if (r.status === 0) {
+    compilou = candidato;
+    break;
+  }
+  // Compilou e RECUSOU: isso é veredito sobre o template, não problema de ambiente.
+  falhas.push(`py_compile recusou o script gerado (${candidato}):\n${r.stderr}`);
+  break;
 }
+rmSync(pasta, { recursive: true, force: true });
+
+if (!compilou && !falhas.length) {
+  falhas.push(
+    `nenhum Python executável para o py_compile — o script que o usuário baixou NÃO foi validado.\n` +
+      `  tente com PYTHON=/caminho/do/python (ou rode do venv do projeto). Tentativas: ${tentativas.join(' | ') || candidatos.join(' | ')}`,
+  );
+}
+
+const quemChecou = compilou
+  ? (() => {
+      const v = spawnSync(
+        compilou,
+        ['-c', 'import sys;print(".".join(map(str, sys.version_info[:3])))'],
+        { encoding: 'utf8' },
+      );
+      return v.status === 0 && v.stdout.trim() ? `${compilou} (Python ${v.stdout.trim()})` : compilou;
+    })()
+  : '';
 
 console.log(`script gerado: ${py.length} chars, ${py.split('\n').length} linhas`);
 if (falhas.length) {
   for (const f of falhas) console.log(`  ✗ ${f}`);
   process.exit(1);
 }
-console.log('TUDO VERDE: trava nos dois níveis, saídas liberadas, ORDER_RESULT presente, py_compile aceitou.');
+console.log(
+  `TUDO VERDE: trava nos dois níveis, saídas liberadas, ORDER_RESULT presente, ` +
+    `py_compile aceitou o script — checado por ${quemChecou}.`,
+);
