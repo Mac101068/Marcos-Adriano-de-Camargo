@@ -10,6 +10,15 @@ import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, renkoScaleLabel, snapToTick } from
  * 3. Detector de Convergência Preço vs Fluxo
  */
 export class RenkoFlowEngine {
+  /**
+   * Teto de salto aceito em UM único tick, medido em boxes (adimensional — vale para qualquer
+   * escala/ativo). Um print que varre mais que isso não é negócio real: é salto do leilão de
+   * fechamento, cotação atrasada de outro vencimento ou buraco de dado. Nesse caso o motor
+   * RE-ANCORA no preço real em vez de cospir dezenas de tijolos vazios (a explosão de fim de
+   * pregão que bagunçava a formação dos blocos).
+   */
+  private static readonly MAX_JUMP_BOXES = 10;
+
   private boxPoints: number;
   private boxes: RenkoBox[] = [];
   private currentBox: Partial<RenkoBox> | null = null;
@@ -120,13 +129,16 @@ export class RenkoFlowEngine {
     signal?: 'BUY' | 'SELL';
     signalReason?: string;
   } {
+    // Guarda A (tick lixo): preço ausente/não-finito/não-positivo NÃO forma box nem polui o CVD —
+    // é print órfão do leilão de fechamento, cotação zerada ou outro vencimento. Ignoramos o tick
+    // inteiro (CVD e âncora continuam onde estavam).
+    if (!Number.isFinite(tick.price) || tick.price <= 0) {
+      return { newBoxClosed: false, closedBoxes: [] };
+    }
+
     this.lastPrice = tick.price;
     // A janela do medidor segue a config (permite ajustar 10–50 boxes em Ajustes sem reiniciar o dia)
     this.regimeMeter.setLookbackBoxes(config.regimeLookbackBoxes ?? 20);
-
-    // Acumula no CVD global
-    const tickDelta = tick.aggressor === 'BUY' ? tick.volume : tick.aggressor === 'SELL' ? -tick.volume : 0;
-    this.currentCvd += tickDelta;
 
     if (!this.currentBox) {
       this.initialize(tick.price, tick.timestamp);
@@ -158,6 +170,23 @@ export class RenkoFlowEngine {
         isConvergence: false,
       };
     }
+
+    // Guarda B (anti-explosão de fim de pregão): um único tick que varre mais que
+    // MAX_JUMP_BOXES não é negócio real — é salto do leilão, print atrasado de outro vencimento
+    // ou buraco de dado. Em vez de cospir dezenas de tijolos vazios (o "tiro pra tudo quanto é
+    // lado" que bagunçava os blocos), IGNORAMOS o tick por completo: sem box, sem CVD, sem mover a
+    // referência de formação. Se o mercado realmente reanivar, ele o faz por vários ticks pequenos
+    // (cada um abaixo do teto), que o laço clássico trata normalmente — a referência segue a fita.
+    const refLast = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1] : undefined;
+    const refSame = !!refLast && this.sessionKey(refLast.timeEnd) === tickSession;
+    const refPrice = refSame ? refLast!.close : (this.currentBox?.open ?? tick.price);
+    if (Math.abs(tick.price - refPrice) > this.boxPoints * RenkoFlowEngine.MAX_JUMP_BOXES) {
+      return { newBoxClosed: false, closedBoxes: [] };
+    }
+
+    // Acumula no CVD global (só depois das guardas: tick rejeitado não entra na fita)
+    const tickDelta = tick.aggressor === 'BUY' ? tick.volume : tick.aggressor === 'SELL' ? -tick.volume : 0;
+    this.currentCvd += tickDelta;
 
     const curr = this.currentBox!;
     curr.ticksCount = (curr.ticksCount || 0) + 1;

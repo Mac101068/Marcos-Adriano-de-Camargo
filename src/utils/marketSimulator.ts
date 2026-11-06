@@ -138,7 +138,8 @@ export class B3MarketSimulator {
 
 /**
  * Gera histórico SINTÉTICO de N dias (sessões completas no horário do ativo),
- * com 1 tick a cada 2 segundos e perfil intradiário realista da B3:
+ * com chegada NÃO-UNIFORME dos ticks (média ~2 s, mas rajadas de milissegundos na
+ * abertura/fechamento e espaçamento maior no almoço — como na fita real) e perfil intradiário realista da B3:
  * - Pré-abertura/leilão e abertura (08:55–10:30): alta volatilidade e volume
  * - Meio da manhã: fluxo ainda forte
  * - Almoço (11:30–13:30): mercado lateral e quieto
@@ -219,11 +220,17 @@ function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: nu
     const open = new Date(day); open.setHours(clock.openHour, clock.openMinute, 0, 0);
     const close = new Date(day); close.setHours(clock.closeHour, clock.closeMinute, 0, 0);
 
-    for (let ts = open.getTime(); ts <= close.getTime(); ts += TICK_STEP_MS) {
+    // Gera os negócios no TEMPO NOMINAL uniforme (mesmo RNG/ordem de sempre → calibração do
+    // caminho de preço e dos boxes preservada). Só depois o relógio da fita é reescrito com
+    // chegada não-uniforme. Guardamos a intensidade de cada tick em __act para esse reuso.
+    const dayTicks: Array<Tick & { __act?: number }> = [];
+    const slots = Math.max(1, Math.round((close.getTime() - open.getTime()) / TICK_STEP_MS));
+    for (let k = 0; k <= slots; k++) {
+      const ts = open.getTime() + k * TICK_STEP_MS;
       const d = new Date(ts);
       const minutes = d.getHours() * 60 + d.getMinutes();
 
-      // Intensidade por horário (volume e chance de mover)
+      // Intensidade por horário (volume, chance de mover E espaçamento real da fita)
       let activity = 1.0;
       if (minutes < 10 * 60 + 30) activity = 1.7; // abertura
       else if (minutes < 11 * 60 + 30) activity = 1.2;
@@ -286,16 +293,43 @@ function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: nu
       }
 
       counter++;
-      ticks.push({
+      dayTicks.push({
         id: `hist-${counter}`,
         timestamp: ts,
-        timeStr: d.toTimeString().split(' ')[0],
+        timeStr: '',
         price,
         volume,
         aggressor,
         buyerBroker,
         sellerBroker,
+        __act: activity,
       });
+    }
+
+    // RELÓGIO DA FITA (o salto de realidade): o pregão de verdade NÃO tem um negócio a cada 2,0 s
+    // cravados — na abertura/fechamento os ticks se AGLOMERAM (rajadas, milissegundos apartados) e
+    // no almoço ESPEÇAM (silêncio de vários segundos). Distribuímos o MESMO total de negócios ao
+    // longo da sessão com peso inverso ao QUADRADO da intensidade (1/activity²): o quadrado acentua
+    // o contraste (ativo → rajadas sub-segundo, quieto → vazio) sem mexer no número de negócios nem
+    // no caminho de preço. Isso quebra a grade mecânica de segundos sempre pares e o ".000" de
+    // milissegundo, os dois maiores "olhos clínicos" de dado sintético.
+    const span = close.getTime() - open.getTime();
+    const weights = dayTicks.map((t) => {
+      const a = t.__act ?? 1;
+      return 1 / (a * a);
+    });
+    const wsum = weights.reduce((a, b) => a + b, 0) || 1;
+    const openMs = open.getTime();
+    let acc = 0;
+    for (let i = 0; i < dayTicks.length; i++) {
+      const t = dayTicks[i];
+      const realTs = Math.round(openMs + (span * acc) / wsum);
+      t.timestamp = realTs;
+      const rd = new Date(realTs);
+      t.timeStr = rd.toTimeString().split(' ')[0] + '.' + String(rd.getMilliseconds()).padStart(3, '0');
+      acc += weights[i];
+      delete t.__act;
+      ticks.push(t as Tick);
     }
   }
 

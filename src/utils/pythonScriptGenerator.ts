@@ -1188,6 +1188,47 @@ def _field(row, name, default):
     return default if value is None else value
 
 
+def classify_aggressor(price, bid, ask, flags, prev_price=None):
+    """Bid/Ask test: diz QUEM AGREDIU usando o proprio MqlTick do MT5 (que ja traz bid e ask
+    junto do ultimo preco), em vez de deduzir so pela flag ou pelo uptick/downtick.
+    Ordem de confianca: (1) flag real da corretora; (2) negocio no ask = compra agressiva,
+    negocio no bid = venda agressiva; (3) dentro do spread ou sem book = regra do tick contra o
+    preco anterior (o mesmo fallback de hoje, entao nunca regride quando bid/ask nao vem)."""
+    if flags & mt5.TICK_FLAG_BUY:
+        return "BUY"
+    if flags & mt5.TICK_FLAG_SELL:
+        return "SELL"
+    if bid > 0 and ask > 0 and ask != bid:
+        if price >= ask:
+            return "BUY"
+        if price <= bid:
+            return "SELL"
+    if prev_price is not None:
+        if price > prev_price:
+            return "BUY"
+        if price < prev_price:
+            return "SELL"
+    return "CROSS"
+
+
+def refine_aggressors(ticks):
+    """Pos-processa ticks ja ordenados: reclassifica todo CROSS pelo bid/ask test (com a regra
+    do tick como ultimo recurso). Devolve (compras, vendas, cruzados restantes) para o log."""
+    prev = None
+    buy = sell = cross = 0
+    for t in ticks:
+        if t["aggressor"] == "CROSS":
+            t["aggressor"] = classify_aggressor(t["price"], t.get("bid", 0), t.get("ask", 0), 0, prev)
+        if t["aggressor"] == "BUY":
+            buy += 1
+        elif t["aggressor"] == "SELL":
+            sell += 1
+        else:
+            cross += 1
+        prev = t["price"]
+    return buy, sell, cross
+
+
 def _history_tick_record(raw, seq):
     """Tick cru do MT5 no MESMO shape do TICK ao vivo — o app já sabe ler isto, não precisa
     de um segundo contrato. O campo "id" é único e estável porque o front deduplica por id."""
@@ -1206,6 +1247,8 @@ def _history_tick_record(raw, seq):
         "price": round(float(_field(raw, "price", 0) or 0), ASSET_DECIMALS),
         "volume": int(_field(raw, "volume", 0) or 0),
         "aggressor": aggressor,
+        "bid": float(_field(raw, "bid", 0) or 0),
+        "ask": float(_field(raw, "ask", 0) or 0),
     }
 
 
@@ -1279,6 +1322,11 @@ async def handle_request_history(websocket, req_id, symbol, days):
     ticks = [_history_tick_record(raw, i) for i, raw in enumerate(raw_ticks)]
     ticks.sort(key=lambda t: (t["timestamp"], t["id"]))
 
+    # Bid/Ask test no historico: transforma ticks CROSS (flag nao veio) em BUY/SELL usando o
+    # proprio book bid/ask do MqlTick, antes de qualquer proxy de volume. Nao toca em quem ja
+    # chegou com flag real. Vale igual para a fonte TICK genuina e para a base M1_RATE.
+    _hist_buy, _hist_sell, _hist_cross = refine_aggressors(ticks)
+
     volume_source = "TICK"
     zero_volume = sum(1 for t in ticks if t["volume"] <= 0)
     if zero_volume >= max(1, int(len(ticks) * HISTORY_VOLUME_FALLBACK_RATIO)):
@@ -1310,11 +1358,12 @@ async def handle_request_history(websocket, req_id, symbol, days):
             "volumeSource": volume_source
         }
     })
-    print(f"📜 HISTÓRICO enviado a {get_peer_ip(websocket)}: {total} ticks de '{symbol}' ({days} dia(s), volume {volume_source}) em {chunks} chunk(s).")
+    print(f"\ud83d\udcdc HISTÓRICO enviado a {get_peer_ip(websocket)}: {total} ticks de '{symbol}' ({days} dia(s), volume {volume_source}) em {chunks} chunk(s) \u2014 agressores: {_hist_buy} C / {_hist_sell} V / {_hist_cross} cruzados (bid/ask test).")
 
 
 async def mt5_stream_loop():
     last_tick_time_msc = 0
+    last_trade_price = None
     print(f" Monitorando Times & Trades em '{SYMBOL}'...")
     print(f" Modo de Entrada: {'RETESTE NO PULLBACK DA ABERTURA' if ENTRY_TRIGGER_TYPE == 'PULLBACK_ENTRY' else 'A MERCADO NO FECHAMENTO'}\\n")
 
@@ -1332,7 +1381,16 @@ async def mt5_stream_loop():
                 price = tick['price']
                 volume = int(tick['volume'])
                 flags = tick['flags']
-                aggressor = "BUY" if (flags & mt5.TICK_FLAG_BUY) else ("SELL" if (flags & mt5.TICK_FLAG_SELL) else "CROSS")
+                try:
+                    bid = float(tick['bid'])
+                    ask = float(tick['ask'])
+                except Exception:
+                    bid = 0.0
+                    ask = 0.0
+                # Bid/Ask test ao vivo: quando a flag nao veio (CROSS), decide a agressao pelo book
+                # do proprio tick; se nem book houver, cai na regra do tick sobre o preco anterior.
+                aggressor = classify_aggressor(price, bid, ask, flags, last_trade_price)
+                last_trade_price = price
 
                 # Transmite tick ao Terminal Web
                 await broadcast_to_web({

@@ -106,6 +106,10 @@ import {
 
 } from './services/marketHistoryService';
 
+import { realTapeService } from './services/realTapeService';
+
+import { formatTickTimeStr } from './utils/timeFormat';
+
 import { computeSessionLevels, computeRunningVwap, PriceLevel, VwapCurve } from './utils/priceLevels';
 
 import type { HedgeBook, HedgeSideBook } from './components/BoletaTicket';
@@ -308,6 +312,10 @@ type ReplayRunSummary = {
   /** Volume usado nos ticks reais ('TICK' do feed, 'M1_RATE' sintetizado) — undefined no sintético. */
 
   volumeSource?: VolumeSource;
+
+  /** Quando REAL: 'LIVE' veio da ponte agora; 'BANK' veio do banco local de fita capturada. */
+
+  origin?: 'LIVE' | 'BANK';
 
   tickCount: number;
 
@@ -4663,6 +4671,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const targetState = assetStateRef.current[tickAssetId];
             const rawTick: Tick = payload.data;
 
+            // O timeStr da ponte vem do relógio do servidor MT5 (UTC?); a fita deve bater com o
+            // gráfico (fuso do navegador) — então reescrevemos a partir do timestamp local.
+            if (rawTick && Number.isFinite(Number(rawTick.timestamp))) rawTick.timeStr = formatTickTimeStr(Number(rawTick.timestamp));
+
             if (targetState && rawTick && rawTick.price > 0) {
               // 1. Alimenta o Times & Trades estrito daquele ativo
               targetState.ticks = [rawTick, ...targetState.ticks.slice(0, 99)];
@@ -4700,7 +4712,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const bfSym = String(payload.symbol || '').toUpperCase();
             const bfAssetId = getAssetIdForSymbol(bfSym);
             const targetState = assetStateRef.current[bfAssetId];
-            const bfTicks: Tick[] = payload.data?.ticks || [];
+            const bfTicks: Tick[] = (payload.data?.ticks || []).map((t: Tick) =>
+              t && Number.isFinite(Number(t.timestamp)) ? { ...t, timeStr: formatTickTimeStr(Number(t.timestamp)) } : t,
+            );
 
             if (targetState && Array.isArray(bfTicks) && bfTicks.length > 0) {
               const firstTick = bfTicks[0];
@@ -5823,7 +5837,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     days: number; speed: number; seed: number; operated: boolean; aborted: boolean;
 
-    source: 'REAL' | 'SYNTHETIC'; volumeSource?: VolumeSource; tickCount: number;
+    source: 'REAL' | 'SYNTHETIC'; volumeSource?: VolumeSource; origin?: 'LIVE' | 'BANK'; tickCount: number;
 
   } | null>(null);
 
@@ -5973,6 +5987,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       volumeSource?: VolumeSource;
 
+      origin?: 'LIVE' | 'BANK';
+
       note?: string;
 
     }> => {
@@ -5986,6 +6002,28 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       const socket = wsRef.current;
 
       if (mt5State.status !== 'CONNECTED' || !socket || socket.readyState !== WebSocket.OPEN) {
+
+        // Sem ponte, ainda assim podemos tocar REAL: o banco local guarda a fita dos pulls
+        // conectados anteriores. Só caímos no sintético se não houver NADA real capturado.
+        const bank = realTapeService.loadMostRecent(daysToRequest);
+
+        if (bank && bank.ticks.length > 0) {
+
+          return {
+
+            ticks: bank.ticks,
+
+            source: 'REAL' as const,
+
+            volumeSource: bank.volumeSource,
+
+            origin: 'BANK' as const,
+
+            note: `Origem: fita REAL CAPTURADA (banco local deste navegador, ${bank.days} dia(s)).${bank.truncated ? ' Obs.: algum dia foi recortado pelo teto de armazenamento.' : ''}`,
+
+          };
+
+        }
 
         return { ticks: synthetic(), source: 'SYNTHETIC' as const };
 
@@ -6027,6 +6065,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
         }
 
+        // Banca a fita real: daqui pra frente o replay pode tocá-la mesmo sem ponte.
+        realTapeService.save(res.ticks, res.volumeSource);
+
         const sufficiency = MarketHistoryService.assessSufficiency(res.ticks);
 
         const sufficiencyNote =
@@ -6048,6 +6089,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           source: 'REAL' as const,
 
           volumeSource: res.volumeSource,
+
+          origin: 'LIVE' as const,
 
           note: sufficiencyNote,
 
@@ -6545,7 +6588,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           days: replayTargetDays, speed: pace.speed, seed: seedForRun, operated: operate, aborted,
 
-          source: run.source, volumeSource: run.volumeSource, tickCount: ticks.length,
+          source: run.source, volumeSource: run.volumeSource, origin: run.origin, tickCount: ticks.length,
 
         };
 
@@ -6565,11 +6608,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             aborted
               ? `${cursor.toLocaleString('pt-BR')} ticks reproduzidos; o feed ao vivo retoma do último preço.`
               : `${replayTicks.toLocaleString('pt-BR')} ticks ${
-                  run.source === 'REAL' ? 'REAIS do MT5' : 'sintéticos'
+                  run.source === 'REAL' ? (run.origin === 'BANK' ? 'REAIS capturados' : 'REAIS do MT5') : 'sintéticos'
                 } reproduzidos com sucesso no pregão de ${label}.`
           } ${
             run.source === 'REAL'
-              ? `Fonte: HISTÓRICO REAL (MT5) · ${volumeSourceLabel(run.volumeSource)}.`
+              ? `Fonte: HISTÓRICO REAL (${run.origin === 'BANK' ? 'capturado no banco local' : 'MT5'}) · ${volumeSourceLabel(run.volumeSource)}.`
               : `Seed do pregão: #${seedForRun}.`
           } Velocidade ${pace.speed}x.${operate ? ' Operações ativas na simulação (Paper Trading).' : ' Replay silencioso (OPERA desligado).'}`,
 
@@ -8235,7 +8278,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 lastReplay.source === 'REAL'
 
-                  ? `HISTÓRICO REAL (MT5), ${lastReplay.tickCount.toLocaleString('pt-BR')} ticks${lastReplay.volumeSource ? ` · volume: ${volumeSourceLabel(lastReplay.volumeSource)}` : ''}`
+                  ? `HISTÓRICO REAL (${lastReplay.origin === 'BANK' ? 'CAPTURADO' : 'MT5'}), ${lastReplay.tickCount.toLocaleString('pt-BR')} ticks${lastReplay.volumeSource ? ` · volume: ${volumeSourceLabel(lastReplay.volumeSource)}` : ''}`
 
                   : `SINTÉTICO, seed #${lastReplay.seed}`
 

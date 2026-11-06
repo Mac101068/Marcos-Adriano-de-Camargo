@@ -1,5 +1,6 @@
 import { Tick } from '../types/trading';
 import { AssetSpec, snapToTick } from '../assets/assetRegistry';
+import { formatTickTimeStr } from '../utils/timeFormat';
 
 /**
  * HISTÓRICO REAL PELA PONTE MT5/XP.
@@ -206,10 +207,9 @@ export function normalizeTick(raw: any, asset: AssetSpec): Tick | null {
   return {
     id: String(raw.id ?? `mt5-h-${timestamp}`),
     timestamp,
-    timeStr:
-      typeof raw.timeStr === 'string' && raw.timeStr.length > 0
-        ? raw.timeStr
-        : new Date(timestamp).toTimeString().split(' ')[0],
+    // Sempre no fuso LOCAL do navegador (derivado do timestamp), NUNCA o timeStr da ponte —
+    // que vem do relógio da máquina MT5/Windows (possivelmente UTC) e desalinharia a fita do gráfico.
+    timeStr: formatTickTimeStr(timestamp),
     price: near ? snapped : price,
     volume: Number.isFinite(Number(raw.volume)) && Number(raw.volume) > 0 ? Number(raw.volume) : 0,
     aggressor,
