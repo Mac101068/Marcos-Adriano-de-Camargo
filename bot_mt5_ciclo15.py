@@ -343,7 +343,10 @@ CLOSE_ALL_TIME = "17:30"
 
 # ==============================================================================
 
-AUTH_TOKEN = "AUTO_PIN_ON_FIRST_CONNECT"
+# Comeca VAZIA de proposito: vazio significa "ainda sem pino". Um sentinela texto
+# (era "AUTO_PIN_ON_FIRST_CONNECT") era autenticavel -- quem mandasse a propria
+# string do sentinela passava no compare_digest antes de qualquer cliente legitimo.
+AUTH_TOKEN = ""
 
 REQUIRE_AUTH = True
 
@@ -2512,7 +2515,12 @@ async def ws_handler(websocket):
 
                 provided = str(data.get("token") or "")
 
-                if len(provided) >= 16:
+                # Pino UNICO: o primeiro cliente com token valido grava a chave, e depois disso
+                # ninguem mais a reescreve. Antes era um `if len(provided) >= 16` solto: qualquer
+                # aparelho da rede mandava um token de 16+ caracteres, re-pinhava a ponte para si
+                # mesmo e virava dono da conta logada no MT5 (comprovado do Mac em 06/11/2026).
+
+                if not AUTH_TOKEN and len(provided) >= 16:
 
                     AUTH_TOKEN = provided
 
