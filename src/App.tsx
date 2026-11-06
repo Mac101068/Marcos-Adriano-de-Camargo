@@ -4519,6 +4519,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         try {
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
           socket.send(EaConfigService.buildBridgeSyncMessage(config));
+          socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset) }));
           socket.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(asset) }));
         } catch {}
 
@@ -4875,25 +4876,69 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             }
 
           } else if (payload.type === 'SESSION_BACKFILL') {
-            // Inicialização limpa: apenas calibra o preço de referência atual do ativo,
-            // sem preencher o gráfico com blocos estáticos do passado que depois somem.
             const bfSym = String(payload.symbol || '').toUpperCase();
             const bfAssetId = getAssetIdForSymbol(bfSym);
             const targetState = assetStateRef.current[bfAssetId] || (bfAssetId === 'BTC' ? assetStateRef.current.BTCBR : bfAssetId === 'BTCBR' ? assetStateRef.current.BTC : undefined);
             const bfAssetSpec = ASSETS[bfAssetId] || (bfAssetId === 'BTC' ? ASSETS.BTCBR : undefined) || asset;
             const bfTicks: Tick[] = (payload.data?.ticks || [])
-              .filter((t: Tick) => t && Number.isFinite(t.price) && t.price > 0 && Math.abs(t.price - bfAssetSpec.basePrice) / bfAssetSpec.basePrice < 0.4);
+              .filter((t: Tick) => t && Number.isFinite(t.price) && t.price > 0 && Math.abs(t.price - bfAssetSpec.basePrice) / bfAssetSpec.basePrice < 0.4)
+              .map((t: Tick) =>
+                t && Number.isFinite(Number(t.timestamp)) ? { ...t, timeStr: formatTickTimeStr(Number(t.timestamp)) } : t,
+              );
 
             if (targetState && Array.isArray(bfTicks) && bfTicks.length > 0) {
-              const lastTick = bfTicks[bfTicks.length - 1];
-              if (lastTick && lastTick.price > 0) {
-                targetState.currentPrice = lastTick.price;
-                rememberLastPrice(bfAssetId, lastTick.price);
-                const currentActiveId = activeAssetIdRef.current;
-                const isCurrent = bfAssetId === currentActiveId || (currentActiveId === 'BTC' && bfAssetId === 'BTCBR') || (currentActiveId === 'BTCBR' && bfAssetId === 'BTC');
-                if (isCurrent) {
-                  setCurrentPrice(lastTick.price);
-                }
+              const bfAssetSpec = ASSETS[bfAssetId] || asset;
+              const bfTradeParams = getAssetTradeParams(bfAssetId);
+              targetState.engine.setAsset(bfAssetSpec);
+              targetState.engine.setBoxPoints(bfTradeParams.boxPoints);
+
+              const firstTick = bfTicks[0];
+              if (firstTick && firstTick.price > 0) {
+                targetState.engine.initialize(firstTick.price, firstTick.timestamp);
+                targetState.rangeEngine.initialize(firstTick.price);
+                targetState.timeEngine.initialize(firstTick.price);
+              }
+              targetState.allTicks = [...bfTicks];
+              targetState.ticks = [...bfTicks.slice(-100)].reverse();
+              const bgBfConfig: AutomationConfig = {
+                ...config,
+                assetId: bfAssetId,
+                boxPoints: bfTradeParams.boxPoints,
+                minDeltaThreshold: bfTradeParams.minDeltaThreshold,
+              };
+              for (const raw of bfTicks) {
+                if (!raw || !(raw.price > 0)) continue;
+                targetState.engine.processTick(raw, bgBfConfig);
+                targetState.rangeEngine.processTick(raw);
+                targetState.timeEngine.processTick(raw);
+              }
+              targetState.boxes = [...targetState.engine.getBoxes()];
+              targetState.sessionGaps = [...targetState.engine.getSessionGaps()];
+              targetState.currentBox = targetState.engine.getCurrentBox();
+              targetState.cvd = targetState.engine.getCvd();
+              targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
+              targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
+              targetState.timeBoxes = [...targetState.timeEngine.getBoxes()];
+              targetState.timeCurrentBox = targetState.timeEngine.getCurrentBox();
+              targetState.currentPrice = bfTicks[bfTicks.length - 1].price;
+
+              const currentActiveId = activeAssetIdRef.current;
+              const isCurrent = bfAssetId === currentActiveId || (currentActiveId === 'BTC' && bfAssetId === 'BTCBR') || (currentActiveId === 'BTCBR' && bfAssetId === 'BTC');
+              if (isCurrent) {
+                engineRef.current = targetState.engine;
+                rangeEngineRef.current = targetState.rangeEngine;
+                timeEngineRef.current = targetState.timeEngine;
+                allTicksRef.current = targetState.allTicks;
+                setBoxes([...targetState.boxes]);
+                setSessionGaps([...targetState.sessionGaps]);
+                setCurrentBox(targetState.currentBox);
+                setCvd(targetState.cvd);
+                setTicks([...targetState.ticks]);
+                setRangeBoxes([...targetState.rangeBoxes]);
+                setRangeCurrentBox(targetState.rangeCurrentBox);
+                setTimeBoxes([...targetState.timeBoxes]);
+                setTimeCurrentBox(targetState.timeCurrentBox);
+                setCurrentPrice(targetState.currentPrice);
               }
             }
 
@@ -6205,10 +6250,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     }> => {
 
-      const daysToRequest = targetDays === 1 ? 1 : Math.max(1, Math.min(10, targetDays));
+      // Pede targetDays + 1 para ter sempre o dia anterior estático como contexto de suporte/resistência no gráfico
+      const daysToRequest = Math.max(2, Math.min(10, targetDays + 1));
 
       const synthetic = () =>
-
         generateHistoricalTicks(daysToRequest, referencePrice(asset), seed, asset);
 
       const socket = wsRef.current;
@@ -6509,23 +6554,29 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       let ticks: Tick[] = rawTicks;
       let label = '';
+      let calculatedContextEnd = 0;
 
-      if (replayTargetDays === 1) {
-        // Seleção Hoje: isola 100% o pregão mais recente retornado (04/11)
-        const latestDayKey = sortedDays[sortedDays.length - 1];
-        ticks = (latestDayKey && daysMap.get(latestDayKey)) || rawTicks;
-        const [y, m, d] = (latestDayKey || '').split('-');
-        const isToday = !latestDayKey || new Date().toISOString().startsWith(latestDayKey) || (d === '04' && m === '11');
-        label = latestDayKey ? `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''}` : 'Hoje (04/11)';
-      } else if (replayTargetDays === 2) {
-        // Seleção Ontem: se houver mais de um pregão, isola o pregão imediatamente anterior
-        const yesterdayKey = sortedDays.length > 1 ? sortedDays[sortedDays.length - 2] : sortedDays[0];
-        ticks = (yesterdayKey && daysMap.get(yesterdayKey)) || rawTicks;
-        const [y, m, d] = (yesterdayKey || '').split('-');
-        label = yesterdayKey ? `${d}/${m}/${y} (Ontem)` : 'Ontem (03/11)';
+      if (sortedDays.length >= 2 && replayTargetDays <= 2) {
+        // Modo com DIA ANTERIOR ESTÁTICO:
+        // O pregão anterior entra como contexto de fundo no gráfico (níveis de preço e fluxo).
+        // A animação reproduz o pregão-alvo a partir da sua abertura!
+        const targetDayKey = replayTargetDays === 2 && sortedDays.length >= 3
+          ? sortedDays[sortedDays.length - 2]
+          : sortedDays[sortedDays.length - 1];
+        const targetIdx = sortedDays.indexOf(targetDayKey);
+        const prevDayKey = targetIdx > 0 ? sortedDays[targetIdx - 1] : sortedDays[0];
+
+        const prevTicks = daysMap.get(prevDayKey) || [];
+        const targetTicks = daysMap.get(targetDayKey) || [];
+        ticks = [...prevTicks, ...targetTicks];
+        calculatedContextEnd = prevTicks.length;
+
+        const [y, m, d] = (targetDayKey || '').split('-');
+        const isToday = !targetDayKey || new Date().toISOString().startsWith(targetDayKey) || (d === '04' && m === '11');
+        label = `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''} [com contexto anterior]`;
       } else {
-        // 3 ou 5 dias: série contínua
         ticks = rawTicks;
+        calculatedContextEnd = 0;
         const firstKey = sortedDays[0];
         const lastKey = sortedDays[sortedDays.length - 1];
         label = `${replayTargetDays} pregões (${firstKey} a ${lastKey})`;
@@ -6726,15 +6777,26 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-      // Início limpo: a reprodução começa direto no 1º tick da abertura do pregão selecionado
-      const contextEnd = 0;
-      publish(0);
-      const replayTicks = ticks.length;
+      // DIA ANTERIOR ESTÁTICO: se houver ticks de contexto anterior, processa de uma vez
+      // para aparecer no gráfico imediatamente, sem animação (servindo de suporte/resistência).
+      const contextEnd = calculatedContextEnd;
+      if (contextEnd > 0) {
+        for (let i = 0; i < contextEnd; i += 1) ingestSilent(ticks[i]);
+        const markStaticContext = (arr: { isStaticContext?: boolean }[]) => {
+          for (const b of arr) b.isStaticContext = true;
+        };
+        markStaticContext(engine.getBoxes());
+        markStaticContext(rangeEng.getBoxes());
+        markStaticContext(timeEng.getBoxes());
+        ALT_RENKO_SCALES.forEach((alt) => markStaticContext(altEnginesRef.current[alt.key].getBoxes()));
+      }
+      publish(contextEnd); // o dia anterior aparece instantaneamente inteiro na tela!
+      const replayTicks = Math.max(1, ticks.length - contextEnd);
 
       // Compasso de velocidade adaptativo pelo volume total de ticks da fita:
       // Em 1x: reprodução em velocidade fluida permitindo acompanhar a formação dos blocos e Heikin-Ashi (~2-3min por pregão).
       // Em 2x, 3x, 5x, 10x: acelera o avanço para análise ágil e instantânea.
-      const isDense = ticks.length > 25000;
+      const isDense = replayTicks > 25000;
       const paceFor = (s: number) => {
         const speed = Math.max(1, Math.min(10, Math.round(s)));
         if (speed === 1) {
