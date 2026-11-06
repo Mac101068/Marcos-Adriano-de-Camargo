@@ -51,6 +51,14 @@ ARQUITETURA (2 máquinas na mesma rede Wi-Fi):
      - Tetos de risco: ${config.mt5MaxContractsPerOrder || 2} contrato(s) por ordem e
        ${config.mt5MaxOrdersPerMinute || 12} ordem(s) de entrada por minuto.
      - Toda tentativa recusada aparece no console com o IP de origem.
+  4a. TRAVA DE EXECUÇÃO (modo replay/validação): rode com a variável de ambiente ORDERS_BLOCKED=1
+     (PowerShell: $env:ORDERS_BLOCKED="1" antes de iniciar o .py) e a ponte passa a servir ticks,
+     histórico comprimido da fita real, sinais e diário sem enviar NENHUMA ordem de entrada, mesmo
+     com o robô ligado no app. É o modo de ensaiar estratégia sobre pregão gravado enquanto o loop
+     vivo continua vendo o mercado real. Sem a variável, o comportamento é o de sempre. Dá para ligar
+     e desligar essa trava sem reiniciar nada: no Simulador, ao lado dos botões de replay, o chip
+     "Validação" manda SET_REPLAY_MODE para o processo (não é persistente: reiniciou, volta desligado).
+     A trava de ambiente fica por cima -- desligar pela tela nunca vence um ORDERS_BLOCKED=1.
   4b. IDENTIDADE POR ROBÔ (magic): cada entrada carimba o magic de quem mandou — Robô 1 com
      o magic do Ajustes (${config.magicNumber || 102030}), Boleta manual com \${MANUAL_ORDER_MAGIC}.
      As saídas automáticas do robô (inversão de fluxo, zeragem de horário) só tocam posições
@@ -67,6 +75,7 @@ ARQUITETURA (2 máquinas na mesma rede Wi-Fi):
 """
 
 import sys
+import os
 import time
 import json
 import secrets
@@ -173,6 +182,25 @@ TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_
 # mostrar o motivo real quando o MT5 não executa (horário, símbolo ausente ou RetCode).
 ORDER_EXEC_NOTE = {"msg": ""}
 
+# TRAVA DE EXECUÇÃO (MODO REPLAY/VALIDAÇÃO). PADRÃO = DESLIGADA, não muda nada. Ligue com a
+# variável de ambiente ORDERS_BLOCKED=1 no PC do terminal: a ponte passa a servir ticks, histórico,
+# sinais e diário sem enviar NENHUMA ordem de entrada, mesmo com o robô ligado no app. É necessário
+# porque o loop vivo continua julgando o pregão real enquanto a tela roda um replay da fita gravada
+# -- sem a trava o ensaio abriria posição de verdade no meio do estudo.
+ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "").strip().lower() in ("1", "true", "sim", "on")
+
+# Versão acionável da mesma trava, ligada pelo app com {"action":"SET_REPLAY_MODE","on":true}, para
+# não precisar reiniciar a ponte a cada ensaio. Não é persistente: morre com o processo. A trava de
+# ambiente fica por cima -- ligar pelo app sempre funciona, desligar pelo app nunca vence um
+# ORDERS_BLOCKED=1 definido no PC do terminal.
+REPLAY_MODE = False
+
+
+def ordens_bloqueadas():
+    """Verdade única da trava: ambiente (irreversível por rede) OU modo replay ligado na tela."""
+    return bool(ORDERS_BLOCKED or REPLAY_MODE)
+
+
 # HISTÓRICO REAL (rota REQUEST_HISTORY): teto de dias corridos por pedido e tamanho do chunk
 # transmitido. A corretora demo limita a profundidade disponível — pedir mais dias que isso
 # simplesmente volta vazio, e o app cai no gerador sintético ROTULANDO a origem na tela.
@@ -217,9 +245,14 @@ async def send_json(websocket, payload):
 
 
 def check_trade_allowed(state, data, action):
-    """Concentra as três travas (token, armado, tetos). Retorna (liberado, motivo)."""
+    """Concentra as travas (token, trava de execução, armado, tetos). Retorna (liberado, motivo)."""
     if REQUIRE_AUTH and not state["authenticated"]:
         return False, "conexão não autenticada (token ausente ou errado)"
+    if action in ENTRY_ACTIONS and ordens_bloqueadas():
+        return False, ("ponte com TRAVA DE EXECUÇÃO ativa (" + ("ORDERS_BLOCKED=1" if ORDERS_BLOCKED else "MODO REPLAY ligado na tela") + "): "
+                       "nenhuma ordem de ENTRADA sai, armada ou não. Saídas (parcial, stop, zeragem) "
+                       "seguem LIBERADAS de propósito: encerrar posição reduz risco e você precisa "
+                       "poder se proteger no meio de um ensaio")
     if action in ENTRY_ACTIONS and not state["armed"]:
         return False, "ponte EM SEGURO: ligue o Robô no app para liberar entradas"
     if action == "ORDER_SEND":
@@ -1011,6 +1044,9 @@ async def send_account_info(websocket):
             "partialExit": ENABLE_PARTIAL_EXIT,
             "trailingStop": TRAILING_STOP,
             "requireAuth": REQUIRE_AUTH,
+            "ordersBlocked": ordens_bloqueadas(),
+            "replayMode": REPLAY_MODE,
+            "travaAmbiente": ORDERS_BLOCKED,
             "armed": state["armed"],
             "symbol": SYMBOL,
             "decimals": ASSET_DECIMALS,
@@ -1023,6 +1059,7 @@ async def send_account_info(websocket):
     })
 
 async def ws_handler(websocket):
+    global REPLAY_MODE
     peer = get_peer_ip(websocket)
     CONNECTED_CLIENTS.add(websocket)
     state = client_state(websocket)
@@ -1076,7 +1113,36 @@ async def ws_handler(websocket):
                     continue
                 state["armed"] = action == "ARM"
                 await send_json(websocket, {"type": "ARM_RESULT", "data": {"armed": state["armed"]}})
-                print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if state['armed'] else '🔒 PONTE EM SEGURO: nenhuma entrada nova'} — {peer}")
+                print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if state['armed'] else '🔒 PONTE EM SEGURO: nenhuma entrada nova'}{' — mas TRAVA ligada: nenhuma entrada sai de fato' if ordens_bloqueadas() else ''} — {peer}")
+                continue
+
+            if action == "SET_REPLAY_MODE":
+                # Mesmo contrato de segurança do ARM: só quem provou o token mexe na execução.
+                # Desligar com ORDERS_BLOCKED=1 no ambiente é RECUSADO em voz alta.
+                if REQUIRE_AUTH and not state["authenticated"]:
+                    print(f" ⛔ SET_REPLAY_MODE de {peer} sem autenticação — ignorado")
+                    continue
+                wants = bool(data.get("on", True))
+                recusa_ambiente = (not wants) and ORDERS_BLOCKED
+                REPLAY_MODE = wants
+                if REPLAY_MODE:
+                    nota = ("MODO REPLAY/VALIDAÇÃO ligado: ticks, histórico, sinais e diário seguem "
+                            "servidos, mas nenhuma ordem de ENTRADA sai, armada ou não")
+                elif recusa_ambiente:
+                    nota = ("o modo replay da tela foi desligado, mas a TRAVA DE AMBIENTE "
+                            "(ORDERS_BLOCKED=1) continua ligada neste processo -- para operar de "
+                            "verdade, reinicie a ponte sem a variável")
+                else:
+                    nota = "entradas liberadas de novo para os clientes ARMADOS (pregão ao vivo)"
+                payload = {
+                    "on": REPLAY_MODE,
+                    "blocked": ordens_bloqueadas(),
+                    "envLocked": ORDERS_BLOCKED,
+                    "recusaAmbiente": recusa_ambiente,
+                    "note": nota,
+                }
+                await broadcast_to_web({"type": "REPLAY_MODE_RESULT", "data": payload})
+                print(f" {'🎥 MODO REPLAY/VALIDAÇÃO LIGADO' if REPLAY_MODE else '▶️ MODO REPLAY/VALIDAÇÃO desligado'} — {nota} — {peer}")
                 continue
 
             if action == "REQUEST_HISTORY":
@@ -1417,6 +1483,11 @@ async def mt5_stream_loop():
                     ORDER_MANAGER.watch_closed_pyramids()
 
                     # GATILHO DE CONVERGÊNCIA:
+                    if signal and ordens_bloqueadas():
+                        # A trava vale também para o loop vivo: o sinal continua calculado e transmitido
+                        # para a tela (o estudo vê o que o robô faria), mas nenhuma ordem sai.
+                        print(f" ORDEM BLOQUEADA POR TRAVA [{'ORDERS_BLOCKED' if ORDERS_BLOCKED else 'MODO REPLAY'}]: sinal {signal} em {new_box['index']} transmitido, nenhuma ordem enviada")
+                        signal = None
                     if signal:
                         if STRATEGY_MODE == "PYRAMID_FLOW_CONFLUENCE":
                             # ESTRATÉGIA PIRÂMIDE (TP 50p) + ORDEM MÃE SURFE ATÉ INVERSÃO
@@ -1463,6 +1534,13 @@ async def main():
 
     server = await websockets.serve(ws_handler, WS_HOST, WS_PORT)
     print(f" Servidor WebSocket ativo em toda a rede local na porta {WS_PORT} — no app (outro PC da rede) use MT5 Host = IP desta maquina (veja ipconfig)")
+    if ORDERS_BLOCKED:
+        print(" TRAVA DE EXECUÇÃO ATIVA (ORDERS_BLOCKED): a ponte serve ticks, histórico, sinais e diário, "
+              "mas NÃO envia nenhuma ordem de ENTRADA -- modo replay/validação. Essa trava do ambiente "
+              "só cai reiniciando o processo sem a variável.")
+    else:
+        print(" ▶️ TRAVA DE EXECUÇÃO desligada: entradas liberadas para clientes ARMADOS (pregão ao vivo). "
+              "Para ensaiar sem tocar na conta, ligue o MODO REPLAY na tela (ou rode com ORDERS_BLOCKED=1).")
     try:
         await asyncio.gather(server.wait_closed(), mt5_stream_loop())
     except KeyboardInterrupt:

@@ -414,4 +414,27 @@ export class EaConfigService {
     this.saveConfig(validConfig);
     return validConfig;
   }
+
+  /**
+   * Mensagem que replica na ponte as REGRAS de julgamento do sinal que estão ligadas na
+   * tela. Sem isso a ponte opera com constantes compiladas e o robô compra uma coisa enquanto
+   * o gráfico desenha outra — é a divergência que fazia a tela parecer certa e o resultado,
+   * errado. Só julgamento: nenhum campo daqui dispara ordem.
+   */
+  public static buildBridgeSyncMessage(config: AutomationConfig): string {
+    return JSON.stringify({
+      action: 'SYNC_EA_CONFIG',
+      symbol: config.symbol,
+      strategyMode: config.strategyMode,
+      minDeltaThreshold: config.minDeltaThreshold,
+      adaptiveThresholdEnabled: config.adaptiveThresholdEnabled,
+      regimeLookbackBoxes: config.regimeLookbackBoxes,
+      consolidationFilterEnabled: config.consolidationFilterEnabled,
+      consolidationLookbackBoxes: config.consolidationLookbackBoxes,
+      consolidationErMax: config.consolidationErMax,
+      exhaustionFilterEnabled: config.exhaustionFilterEnabled,
+      exhaustionDeltaRatio: config.exhaustionDeltaRatio,
+      requireCvdNewExtreme: config.requireCvdNewExtreme,
+    });
+  }
 }
