@@ -2110,33 +2110,31 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   // mantém a MESMA referência de objeto, então o registro no coletor continua valendo.
 
   useEffect(() => {
-
     const eng = engineRef.current;
-
     eng.setBoxPoints(config.boxPoints);
-
     const hist = allTicksRef.current;
-
     if (hist.length > 0) {
-
       eng.initialize(hist[0].price, hist[0].timestamp);
-
       for (const t of hist) eng.processTick(t, config);
-
     }
-
     setBoxes([...eng.getBoxes()]);
-
     setCurrentBox(eng.getCurrentBox());
-
     setCvd(eng.getCvd());
 
-    
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: 'SET_BOX_POINTS', boxPoints: config.boxPoints }));
+    // Sincroniza o repositório do ativo em memória
+    const curState = assetStateRef.current[asset.id];
+    if (curState) {
+      curState.boxes = [...eng.getBoxes()];
+      curState.currentBox = eng.getCurrentBox();
+      curState.cvd = eng.getCvd();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
 
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: 'SET_BOX_POINTS', boxPoints: config.boxPoints, symbol: chartSymbolFor(asset) }));
+      if (hist.length === 0) {
+        wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset) }));
+      }
+    }
   }, [config.boxPoints]);
 
 
@@ -5257,9 +5255,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         const saved = StrategyLibraryService.updateStrategyConfig(strategy.id, operational);
         if (saved) updatedStrategy = saved;
       }
-      const nextConfig = StrategyLibraryService.resolveOperational(updatedStrategy, { ...prev, ...runtime });
-      EaConfigService.saveConfig(nextConfig);
-      return nextConfig;
+      const nextConfig = StrategyLibraryService.resolveOperational(updatedStrategy, { ...prev, ...runtime, ...operational, ...patch });
+      const finalConfig: AutomationConfig = { ...nextConfig, ...patch };
+      EaConfigService.saveConfig(finalConfig);
+      return finalConfig;
     });
   };
 

@@ -287,7 +287,7 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
 };
 
 /**
- * Alavanca da faixa: rótulo + slider + valor atual. `value` é a grandeza do SLIDER (inteiro ou
+ * Alavanca da faixa: rótulo + botões (−/+) + slider + valor atual. `value` é a grandeza do SLIDER (inteiro ou
  * escalado); `onChange` recebe o mesmo número do slider — quem converte de volta é o chamador.
  */
 const FunnelSlider: React.FC<{
@@ -302,12 +302,37 @@ const FunnelSlider: React.FC<{
   disabled?: boolean;
   hint: string;
 }> = ({ label, value, display, min, max, step, disabled, onChange, hint }) => {
+  const handleDec = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!disabled) {
+      onChange(Math.max(min, Number((value - step).toFixed(2))));
+    }
+  };
+
+  const handleInc = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!disabled) {
+      onChange(Math.min(max, Number((value + step).toFixed(2))));
+    }
+  };
+
   return (
-    <label
-      className={`flex items-center gap-1.5 select-none ${disabled ? 'opacity-40' : 'cursor-pointer'}`}
+    <div
+      className={`flex items-center gap-1 select-none ${disabled ? 'opacity-40' : ''}`}
       title={hint}
     >
       <span className="text-[9px] font-sans uppercase tracking-wide text-zinc-500 shrink-0">{label}</span>
+      <button
+        type="button"
+        disabled={disabled || value <= min}
+        onClick={handleDec}
+        className="w-4 h-4 flex items-center justify-center rounded bg-zinc-800 text-[10px] font-bold text-zinc-300 hover:bg-zinc-700 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+        title={`Diminuir ${label}`}
+      >
+        −
+      </button>
       <input
         type="range"
         min={min}
@@ -316,10 +341,19 @@ const FunnelSlider: React.FC<{
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-16 sm:w-20 h-1 accent-sky-400 cursor-pointer disabled:cursor-default"
+        className="w-14 sm:w-16 h-1 accent-sky-400 cursor-pointer disabled:cursor-default"
       />
-      <span className="text-[10px] font-semibold text-zinc-200 tabular-nums shrink-0 w-[64px]">{display}</span>
-    </label>
+      <button
+        type="button"
+        disabled={disabled || value >= max}
+        onClick={handleInc}
+        className="w-4 h-4 flex items-center justify-center rounded bg-zinc-800 text-[10px] font-bold text-zinc-300 hover:bg-zinc-700 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+        title={`Aumentar ${label}`}
+      >
+        +
+      </button>
+      <span className="text-[10px] font-semibold text-zinc-200 tabular-nums shrink-0 min-w-[56px] text-right">{display}</span>
+    </div>
   );
 };
 
