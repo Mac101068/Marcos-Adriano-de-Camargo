@@ -129,13 +129,13 @@ SUPPORTED_ASSETS = {
         "decimals": 1,
         "tick_size": 0.5,
         "point_value": 10.0,
-        "box_points": 5.0,
-        "min_delta": 30,
+        "box_points": 2.5,
+        "min_delta": 20,
         "magic": 150201,
         "contracts": 1,
-        "sl_points": 5.0,
-        "tp_points": 10.0,
-        "partial_points": 5.0,
+        "sl_points": 2.5,
+        "tp_points": 5.0,
+        "partial_points": 2.5,
     },
     "BTCBR": {
         "symbol": "BITX26",
@@ -2663,6 +2663,9 @@ async def ws_handler(websocket):
                     print(f" 🔑 AUTH OK de {peer} — ponte {'ARMADA (entradas liberadas)' if state['armed'] else 'EM SEGURO (sem entradas)'}{' + TRAVA DE EXECUÇÃO ligada (nenhuma entrada sai)' if ordens_bloqueadas() else ''}", flush=True)
 
                     await send_today_session_backfill(websocket, SYMBOL)
+                    for extra_s in STREAM_SYMBOLS:
+                        if extra_s != SYMBOL:
+                            await send_today_session_backfill(websocket, extra_s)
 
                 else:
 
@@ -2787,7 +2790,8 @@ async def ws_handler(websocket):
                 continue
 
             if action == "GET_BACKFILL":
-                await send_today_session_backfill(websocket, SYMBOL)
+                req_sym = str(data.get("symbol") or SYMBOL)
+                await send_today_session_backfill(websocket, req_sym)
                 continue
 
             if action in ("SELECT_ASSET", "SELECT_SYMBOL"):
@@ -2805,34 +2809,39 @@ async def ws_handler(websocket):
                     BOX_POINTS = new_box_pts if new_box_pts > 0 else spec["box_points"]
                 elif new_sym:
                     SYMBOL = new_sym
+                    spec = get_asset_spec(SYMBOL)
+                    ASSET_LABEL = spec["label"]
+                    ASSET_DECIMALS = spec["decimals"]
+                    ASSET_TICK_SIZE = spec["tick_size"]
+                    ASSET_POINT_VALUE = spec["point_value"]
                     if new_box_pts > 0:
                         BOX_POINTS = new_box_pts
+                    else:
+                        BOX_POINTS = spec["box_points"]
 
-                if SYMBOL in ENGINES:
-                    ENGINES[SYMBOL].box_points = BOX_POINTS
-
-
+                eng = get_or_create_engine(SYMBOL)
+                eng.box_points = BOX_POINTS
+                eng.tick_size = ASSET_TICK_SIZE
+                RENKO_ENGINE = eng
 
                 with MT5_LOCK:
                     mt5.symbol_select(SYMBOL, True)
                     ref_new = mt5.symbol_info_tick(SYMBOL)
 
-                RENKO_ENGINE = RenkoFlowEngine(box_points=BOX_POINTS)
                 if ref_new and (ref_new.last > 0 or ref_new.bid > 0):
                     p0 = float(ref_new.last if ref_new.last > 0 else ref_new.bid)
                     definir_cursor_ticks(SYMBOL, int(ref_new.time_msc))
                     RENKO_ENGINE.init_engine(p0, LAST_TICK_TIMES[SYMBOL] + MT5_BRT_OFFSET_MSC)
-                    print(f" 🎯 Renko reancorado para {SYMBOL} em {p0} pts (Box {BOX_POINTS} pts)", flush=True)
+                    print(f" 🎯 Renko reancorado para {SYMBOL} em {p0} pts (Box {BOX_POINTS} pts, Tick {ASSET_TICK_SIZE})", flush=True)
                 else:
                     rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, 1)
                     if rates is not None and len(rates) > 0:
                         p0 = float(rates[-1]["close"])
                         t0 = (int(rates[-1]["time"]) + MT5_BRT_OFFSET_SEC) * 1000
                         RENKO_ENGINE.init_engine(p0, t0)
-                        print(f" 🎯 Renko reancorado via M1 para {SYMBOL} em {p0} pts (Box {BOX_POINTS} pts)", flush=True)
+                        print(f" 🎯 Renko reancorado via M1 para {SYMBOL} em {p0} pts (Box {BOX_POINTS} pts, Tick {ASSET_TICK_SIZE})", flush=True)
 
-                if ORDER_MANAGER:
-                    ORDER_MANAGER.symbol = SYMBOL
+                ORDER_MANAGER = get_or_create_order_manager(SYMBOL)
 
                 LAST_BACKFILL_CACHE.pop(SYMBOL, None)
                 LAST_BACKFILL_PAYLOAD = None
