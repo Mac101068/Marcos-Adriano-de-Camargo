@@ -1263,14 +1263,15 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.textAlign = 'center';
 
     const startGridPrice = Math.ceil(effectiveMinPrice / gridStep) * gridStep;
-    for (let p = startGridPrice; p <= effectiveMaxPrice; p += gridStep) {
-      const y = priceToY(p);
+    for (let p = startGridPrice; p <= effectiveMaxPrice + (gridStep * 0.1); p += gridStep) {
+      const snappedP = snapToTick(p, asset);
+      const y = priceToY(snappedP);
       if (y >= 10 && y <= pricePaneHeight - 10) {
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(lineRight, y);
         ctx.stroke();
-        ctx.fillText(formatPrice(p, asset), chartWidth + rightAxisWidth / 2, y + 3.5);
+        ctx.fillText(formatPrice(snappedP, asset), chartWidth + rightAxisWidth / 2, y + 3.5);
       }
     }
 
@@ -1725,7 +1726,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.fillText(`+${b.ticksCount}t`, centerX, ghostLabelY - 12);
           ctx.fillStyle = isUp ? '#34d399' : '#f87171';
           ctx.fillText(
-            `${ptsRemaining > 0 ? `faltam ${ptsRemaining}p` : 'fechando'}`,
+            `${ptsRemaining > 0 ? `faltam ${formatPrice(ptsRemaining, asset)}p` : 'fechando'}`,
             centerX,
             ghostLabelY - 3
           );

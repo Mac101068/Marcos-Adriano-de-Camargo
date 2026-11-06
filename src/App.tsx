@@ -2000,8 +2000,8 @@ export default function App() {
       rangeCurrentBox: null,
       timeBoxes: [],
       timeCurrentBox: null,
-      engine: new RenkoFlowEngine(5, ASSETS.WDO),
-      rangeEngine: new RangeBarEngine(10),
+      engine: new RenkoFlowEngine(2.5, ASSETS.WDO),
+      rangeEngine: new RangeBarEngine(5),
       timeEngine: new TimeBarEngine(30000),
       allTicks: [],
     },
@@ -4866,12 +4866,20 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 // Processa o tick no motor principal, fita, robô e ordens (sem chamada duplicada)
                 handleIncomingTick(rawTick);
               } else if (targetState) {
-                // Ativo secundário em background: processa em memória silenciosamente
+                // Ativo secundário em background: processa em memória silenciosamente com as regras e escala DELE
                 targetState.ticks = [rawTick, ...targetState.ticks.slice(0, 99)];
                 targetState.currentPrice = rawTick.price;
                 if (targetState.allTicks.length < 50000) targetState.allTicks.push(rawTick);
 
-                const renkoRes = targetState.engine.processTick(rawTick, config);
+                const bgParams = getAssetTradeParams(tickAssetId);
+                const bgConfig: AutomationConfig = {
+                  ...config,
+                  assetId: tickAssetId,
+                  boxPoints: bgParams.boxPoints,
+                  minDeltaThreshold: bgParams.minDeltaThreshold,
+                };
+
+                const renkoRes = targetState.engine.processTick(rawTick, bgConfig);
                 targetState.cvd = targetState.engine.getCvd();
                 targetState.currentBox = targetState.engine.getCurrentBox();
                 if (renkoRes.newBoxClosed && renkoRes.closedBox) {
@@ -4895,6 +4903,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             );
 
             if (targetState && Array.isArray(bfTicks) && bfTicks.length > 0) {
+              const bfAssetSpec = ASSETS[bfAssetId] || asset;
+              const bfTradeParams = getAssetTradeParams(bfAssetId);
+              targetState.engine.setAsset(bfAssetSpec);
+              targetState.engine.setBoxPoints(bfTradeParams.boxPoints);
+
               const firstTick = bfTicks[0];
               if (firstTick && firstTick.price > 0) {
                 targetState.engine.initialize(firstTick.price, firstTick.timestamp);
@@ -4903,9 +4916,15 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               }
               targetState.allTicks = [...bfTicks];
               targetState.ticks = [...bfTicks.slice(-100)].reverse();
+              const bgBfConfig: AutomationConfig = {
+                ...config,
+                assetId: bfAssetId,
+                boxPoints: bfTradeParams.boxPoints,
+                minDeltaThreshold: bfTradeParams.minDeltaThreshold,
+              };
               for (const raw of bfTicks) {
                 if (!raw || !(raw.price > 0)) continue;
-                targetState.engine.processTick(raw, config);
+                targetState.engine.processTick(raw, bgBfConfig);
                 targetState.rangeEngine.processTick(raw);
                 targetState.timeEngine.processTick(raw);
               }
@@ -4915,6 +4934,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               targetState.cvd = targetState.engine.getCvd();
               targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
               targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
+              targetState.timeBoxes = [...targetState.timeEngine.getBoxes()];
+              targetState.timeCurrentBox = targetState.timeEngine.getCurrentBox();
               targetState.currentPrice = bfTicks[bfTicks.length - 1].price;
 
               const isCurrent = bfAssetId === asset.id || (asset.id === 'BTC' && bfAssetId === 'BTCBR') || (asset.id === 'BTCBR' && bfAssetId === 'BTC');
@@ -4923,8 +4944,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 rangeEngineRef.current = targetState.rangeEngine;
                 timeEngineRef.current = targetState.timeEngine;
                 allTicksRef.current = targetState.allTicks;
-
-                handleBackfillTicks(bfTicks);
+                setBoxes([...targetState.boxes]);
+                setSessionGaps([...targetState.sessionGaps]);
+                setCurrentBox(targetState.currentBox);
+                setCvd(targetState.cvd);
+                setTicks([...targetState.ticks]);
+                setRangeBoxes([...targetState.rangeBoxes]);
+                setRangeCurrentBox(targetState.rangeCurrentBox);
+                setTimeBoxes([...targetState.timeBoxes]);
+                setTimeCurrentBox(targetState.timeCurrentBox);
+                setCurrentPrice(targetState.currentPrice);
               }
             }
 
@@ -7644,6 +7673,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         symbol: chartSymbolFor(next),
         boxPoints: assetParams.boxPoints,
       }));
+      wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(next) }));
       wsRef.current.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(next) }));
     }
 
