@@ -194,6 +194,34 @@ export class SessionRegimeMeter {
     return Math.max(1, Math.round(sorted[idx]));
   }
 
+  /**
+   * Limiar AUTO-CALIBRADO (zero valor físico): o corte é o MAIOR entre
+   *   1) o percentil `percentile` das agressões do próprio lado na janela rolante da sessão
+   *      (a régua local: abertura forte sobe o corte, almoço magro o abaixa), e
+   *   2) `floorMultiple` × média do DIA inteiro do mesmo lado (o piso relativo: impede o
+   *      funil de afrouxar junto com um pregão morto — dia lateral só sinaliza caixa que é
+   *      agressiva PARA aquele dia, e em dia sem agressão nenhuma simplesmente não sinaliza).
+   * Zera na virada de dia (como todo o medidor), então cada pregão calibra a própria régua.
+   * Sem estatística (menos de 10 boxes ou 5 amostras do lado) cai no fixo físico informado
+   * — aquecimento conservador, nunca inventa sinal.
+   */
+  getSelfCalibratedLimit(side: 'BUY' | 'SELL', percentile: number, floorMultiple: number, baseThreshold: number): number {
+    if (this.records.length < 10) return baseThreshold;
+    const win = this.records.slice(-Math.max(this.lookbackBoxes, 20));
+    const mags =
+      side === 'BUY'
+        ? win.map((r) => r.delta).filter((d) => d > 0)
+        : win.map((r) => -r.delta).filter((d) => d > 0);
+    if (mags.length < 5) return baseThreshold;
+    const sorted = [...mags].sort((a, b) => a - b);
+    const idx = Math.min(sorted.length - 1, Math.floor(clamp(percentile, 0, 0.95) * sorted.length));
+    const p = sorted[idx];
+    const dayCount = side === 'BUY' ? this.dayPosDeltaCount : this.dayNegDeltaCount;
+    const daySum = side === 'BUY' ? this.dayPosDeltaSum : this.dayNegDeltaSum;
+    const dayFloor = dayCount >= 5 ? (daySum / dayCount) * clamp(floorMultiple, 1, 5) : 0;
+    return Math.max(1, Math.round(Math.max(p, dayFloor)));
+  }
+
   isWarmedUp(): boolean {
     return this.lastFactor !== 1 || this.records.length >= MIN_BOXES_WARMUP;
   }

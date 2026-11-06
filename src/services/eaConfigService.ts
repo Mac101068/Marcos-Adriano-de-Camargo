@@ -37,8 +37,9 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   symbol: chartSymbolFor(ASSETS[DEFAULT_ASSET_ID]),
   boxPoints: 50, // 10R no Mini-Índice
   contracts: 1, // 1 contrato padrão na Ordem Mãe
-  minDeltaThreshold: 100, // Delta mínimo de agressão líquida (limiar FÍSICO; vale com o adaptativo desligado). 100 foi o melhor nas 3 seeds (mais ordens e maior fator que 150)
-  adaptiveThresholdEnabled: false, // OFF por padrão: no bench (3 seeds) o corte P60 sufocava sinais e subia o DD; com ele desligado o Δ físico acima (100) governa o disparo
+  minDeltaThreshold: 50, // Δ físico: agora só VALE NO AQUECIMENTO (<10 boxes do dia). No bench (10 réplicas × 10d) Δ50 dominou Δ100; abaixo de ~50 é platô
+  adaptiveThresholdEnabled: true, // LIGADO por padrão: o corte passa a ser AUTO-CALIBRADO pelo próprio pregão (P60 + piso 1,3× média do dia; zero valor físico). Base real WINZ26 (11 pregões): PF 2,43→3,94, DD 759→318, trades −56%; dia lateral deixa de virar roleta
+  flowDivergenceMin: 0.4, // Divergência de fluxo mínima (escala-free): só vale box com |Δ| ≥ 40% do volume do tijolo. Único braço com TODOS os pregões positivos na base real. 0/undefined desliga
   regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
   consolidationFilterEnabled: false, // Bench A/B (3 seeds × real): o filtro ER silencia scalps de pirâmide lucrativos — ligado derruba a expectativa de +5,4 para +2,0 R$/tr e sobe o DD. Voltamos ao "Padrão DESLIGADO" que o tipo documenta.
   consolidationLookbackBoxes: 10, // Janela da Efficiency Ratio (boxes recentes)
@@ -129,7 +130,9 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       accountMode: 'HEDGE',
       maxSimultaneousPositions: 15,
       hedgeOppositeAction: 'CLOSE_OPPOSITE',
-      minDeltaThreshold: 100, // Δ físico do funil (adaptativo OFF): 100 dá mais ordens que 150 no bench
+      minDeltaThreshold: 50, // Δ físico do aquecimento; o corte de verdade é o auto-calibrado (linha acima, herada do DEFAULT)
+      adaptiveThresholdEnabled: true, // Funil AUTO-CALIBRADO do pregão (P60 + piso 1,3× média do dia) — régua relativa que sobrevive a mudança de volatilidade
+      flowDivergenceMin: 0.4, // + divergência de fluxo ≥ 40% do volume do tijolo (escala-free)
     },
   },
   {

@@ -1183,7 +1183,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           title="2. Gatilho de Disparo & Tipo de Entrada"
           icon={Zap}
           trailing={<span className="text-[10px] font-mono text-emerald-400 shrink-0">FLUXO ATEMPORAL</span>}
-          summary={`Δ ${config.minDeltaThreshold}${config.adaptiveThresholdEnabled ? ' · adaptativo' : ' · fixo'}${config.consolidationFilterEnabled ? ' · anti-acumulação' : ''} · ${config.confirmationMode === 'BOX_CLOSE' ? 'fechamento do box' : 'rompimento no tick'}`}
+          summary={`Δ ${config.minDeltaThreshold}${config.adaptiveThresholdEnabled ? ' · auto-calibrado' : ' · fixo'}${config.consolidationFilterEnabled ? ' · anti-acumulação' : ''}${config.flowDivergenceMin ? ` · diverg. ≥ ${Math.round(config.flowDivergenceMin * 100)}%` : ''} · ${config.confirmationMode === 'BOX_CLOSE' ? 'fechamento do box' : 'rompimento no tick'}`}
         >
 
           <div className="space-y-3 text-xs">
@@ -1323,33 +1323,88 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                     onChange={(e) => handleConfigChange('adaptiveThresholdEnabled', e.target.checked)}
                     className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer"
                   />
-                  <span className="font-semibold">Limiar Adaptativo de Regime</span>
+                  <span className="font-semibold">Limiar Auto-Calibrado do Pregão</span>
                 </label>
                 <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Assimetria Intradia</span>
               </div>
               {config.adaptiveThresholdEnabled && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-slate-400">Janela do Medidor</label>
-                    <span className="font-mono text-emerald-400 font-semibold">{config.regimeLookbackBoxes} boxes</span>
+                <div className="space-y-2">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-400">Percentil do dia</label>
+                      <span className="font-mono text-emerald-400 font-semibold">P{Math.round((config.adaptiveThresholdPercentile ?? 0.6) * 100)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="0.9"
+                      step="0.05"
+                      value={config.adaptiveThresholdPercentile ?? 0.6}
+                      onChange={(e) => handleConfigChange('adaptiveThresholdPercentile', Number(e.target.value))}
+                      className="w-full accent-emerald-500"
+                    />
                   </div>
-                  <input
-                    type="range"
-                    min="10"
-                    max="50"
-                    step="5"
-                    value={config.regimeLookbackBoxes}
-                    onChange={(e) => handleConfigChange('regimeLookbackBoxes', Number(e.target.value))}
-                    className="w-full accent-emerald-500"
-                  />
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-400">Piso × média do dia</label>
+                      <span className="font-mono text-emerald-400 font-semibold">{(config.adaptiveFloorMultiple ?? 1.3).toFixed(1)}×</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="1"
+                      max="2.5"
+                      step="0.1"
+                      value={config.adaptiveFloorMultiple ?? 1.3}
+                      onChange={(e) => handleConfigChange('adaptiveFloorMultiple', Number(e.target.value))}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-400">Janela do Medidor</label>
+                      <span className="font-mono text-emerald-400 font-semibold">{config.regimeLookbackBoxes} boxes</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="10"
+                      max="50"
+                      step="5"
+                      value={config.regimeLookbackBoxes}
+                      onChange={(e) => handleConfigChange('regimeLookbackBoxes', Number(e.target.value))}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
                 </div>
               )}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-400">Divergência de Fluxo mínima (escala-free)</label>
+                  <span className="font-mono text-emerald-400 font-semibold">
+                    {config.flowDivergenceMin ? `${Math.round(config.flowDivergenceMin * 100)}%` : 'desligada'}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="0.6"
+                  step="0.05"
+                  value={config.flowDivergenceMin ?? 0}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    handleConfigChange('flowDivergenceMin', v <= 0 ? undefined : v);
+                  }}
+                  className="w-full accent-emerald-500"
+                />
+              </div>
               <p className="text-[10px] text-slate-500 leading-snug">
-                O mercado é assimétrico dentro do dia (abertura forte, almoço fraco). Ligado, o Delta Mínimo deixa
-                de ser fixo e vira ±{config.minDeltaThreshold} × fator do momento (volume dos últimos{' '}
-                {config.regimeLookbackBoxes} boxes ÷ média do dia, entre 0,5x e 3x) — na Pirâmide, blocos com
-                agressão abaixo do limiar do momento não sinalizam. A medição roda sempre (desligado só volta
-                ao comportamento antigo); o histórico do fator está na aba Avaliação Técnica.
+                Ligado, o Delta Mínimo deixa de ser um número físico travado e vira uma régua que o próprio pregão
+                desenha: corte = MAIOR entre o percentil escolhido das agressões do dia (P60 = os 40% boxes verdes
+                mais agressivos deste pregão sinalizam) e o piso (multiplicador da média do próprio dia) — o piso
+                impede o funil de afrouxar junto com um pregão morto: dia lateral sem agressão simplesmente não
+                sinaliza. Zera na virada do dia; o Δ físico vale só no aquecimento (&lt;10 boxes). A Divergência de
+                Fluxo é um corte à parte, sem unidade: só vale box cuja agressão líquida é fração mínima do volume
+                do tijolo — imune a mudanças de escala e de volatilidade (eleição). Medições rodam sempre; histórico
+                na aba Avaliação Técnica.
               </p>
             </div>
 

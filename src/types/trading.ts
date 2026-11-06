@@ -161,6 +161,21 @@ export interface AutomationConfig {
    * sem o campo cai no 0.60 histórico (mesmo comportamento de antes).
    */
   adaptiveThresholdPercentile?: number;
+  /**
+   * Piso RELATIVO do limiar auto-calibrado (multiplicador da média de agressão do mesmo lado no
+   * DIA inteiro; 1–5). O corte do funil é o maior entre o percentil da janela e piso × média-do-dia:
+   * num pregão morto o piso impede o funil de afrouxar junto com o dia (dia lateral sem agressão
+   * simplesmente não sinaliza). Opcional: sem o campo, 1,3×. Zero valor físico envolvedo.
+   */
+  adaptiveFloorMultiple?: number;
+  /**
+   * DIVERGÊNCIA DE FLUXO mínima (escala-free, 0–1): fração do volume do box que precisa ser
+   * agressão LÍQUIDA (|Δ| ÷ volume total). Um box 100% comprado a mercado tem divergência ~1;
+   * um box de leilão/lado confuso tem ~0. Como é uma FRAÇÃO, não depende da grandeza física do
+   * volume — sobrevive a mudanças de escala, volatilidade e proxy de volume. Opcional: sem o
+   * campo (undefined) o funil NÃO aplica este corte (comportamento histórico intacto).
+   */
+  flowDivergenceMin?: number;
   regimeLookbackBoxes: number; // Nº de boxes recentes na janela do medidor de regime (padrão 20)
   /**
    * Filtro de ACUMULAÇÃO (range curto). Com LIGADO, um sinal só vale se o mercado estiver

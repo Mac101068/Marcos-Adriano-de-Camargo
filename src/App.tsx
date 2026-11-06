@@ -22,6 +22,10 @@ import { migrateAdaptiveThresholdOff } from './utils/adaptiveThresholdMigration'
 
 import { migrateDeltaThresholdTo100 } from './utils/deltaThresholdMigration';
 
+import { migrateDeltaThresholdTo50 } from './utils/deltaThreshold50Migration';
+
+import { migrateAutoCalibratedFunnel } from './utils/autoCalibrationMigration';
+
 import {
 
   ASSETS,
@@ -365,6 +369,12 @@ export default function App() {
   // Δ físico do funil (150 → 100): aviso de que ele baixou — com o adaptativo OFF, foi o melhor nas 3 seeds.
   const delta100Ref = useRef<{ config: boolean; strategies: number } | null>(null);
 
+  // Δ físico do funil (100 → 50): aviso de que ele baixou — no bench de 10 réplicas, 50 dominou 100.
+  const delta50Ref = useRef<{ config: boolean; strategies: number } | null>(null);
+
+  // Funil auto-calibrado (P60 do dia + piso 1,3× + divergência 40%): aviso de que o pacote chegou.
+  const autoCalRef = useRef<{ config: boolean; strategies: number } | null>(null);
+
   // Idem para a migração do preço de referência do ativo (128.500 → ajuste atual do contrato).
 
   const assetMigrationRef = useRef<AssetBaselineMigration | null>(null);
@@ -416,6 +426,14 @@ export default function App() {
     // Δ físico 150 → 100 (mesmo bench 3 seeds): com o adaptativo OFF, 100 deu mais ordens e maior fator.
     // Roda depois da migração do adaptativo (que não mexe no Δ), então o Δ ainda está em 150 aqui.
     delta100Ref.current = migrateDeltaThresholdTo100();
+
+    // Δ físico 100 → 50 (bench 10 réplicas × 10d): Δ50 domina Δ100 em PnL/PF/DD, 10/10 réplicas. Roda
+    // depois da de 100, então quem estava em 150 já chegou a 100 e agora cai a 50.
+    delta50Ref.current = migrateDeltaThresholdTo50();
+
+    // Pacote auto-calibrado do funil (adaptativo ON + divergência 40%): roda DEPOIS da migração do
+    // Δ50 — o guard "Δ nunca tocado" aqui é exatamente 50, e quem calibrou por conta própria fica quieto.
+    autoCalRef.current = migrateAutoCalibratedFunnel();
 
     // A seleção de ativo precisa estar gravada ANTES do loadSavedConfig lá embaixo: o storage
 
@@ -6864,6 +6882,52 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // AVISO DO Δ FÍSICO DO FUNIL (100 → 50): roda uma vez por versão de flag e só fala de quem
+  // estava com o Δ no padrão antigo (100). Quem calibrou por conta própria não é tocado.
+  useEffect(() => {
+    const m = delta50Ref.current;
+    if (!m || (!m.config && m.strategies === 0)) return;
+    const timer = setTimeout(() => {
+      setLatestToast({
+        id: `delta-50-migration-${Date.now()}`,
+        type: 'INFO',
+        title: `PIRÂMIDE: Δ MÍNIMO DO FUNIL BAIXOU PARA 50`,
+        description: `${[
+          m.config ? 'A estratégia ativa' : '',
+          m.strategies > 0 ? `${m.strategies} estratégia(s) salvas do Estúdio` : '',
+        ]
+          .filter(Boolean)
+          .join(' e ')} estavam com o Δ físico no padrão antigo (100). No banco A/B headless (10 réplicas × 10 dias), Δ 50 dominou Δ 100 em todos os eixos e em 10/10 réplicas: +23% PnL, fator 1,93→2,06 e rebaixamento ~28% menor. Abaixo de ~50 é platô. Calibrado em sintético (a base real chega M1_RATE). Revertido quando quiser: Ajustes → Gatilho → "Delta mínimo".`,
+        timestamp: Date.now(),
+      });
+    }, 3800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // AVISO DO FUNIL AUTO-CALIBRADO: roda uma vez por versão de flag e só fala de quem estava no
+  // pacote padrão intocado (adaptativo OFF + Δ50 + sem divergência). Quem calibrou por conta própria não é tocado.
+  useEffect(() => {
+    const m = autoCalRef.current;
+    if (!m || (!m.config && m.strategies === 0)) return;
+    const timer = setTimeout(() => {
+      setLatestToast({
+        id: `auto-cal-migration-${Date.now()}`,
+        type: 'INFO',
+        title: 'PIRÂMIDE: FUNIL AGORA SE AUTO-CALIBRA PELO PREGÃO',
+        description: `${[
+          m.config ? 'A estratégia ativa' : '',
+          m.strategies > 0 ? `${m.strategies} estratégia(s) salvas do Estúdio` : '',
+        ]
+          .filter(Boolean)
+          .join(' e ')} estavam no pacote antigo. O corte de sinal deixou de ser um número físico fixo: agora é o MAIOR valor entre o percentil 60 das agressões do PRÓPRIO dia e 1,3× a média do dia, e só vale box cuja divergência de fluxo (|Δ| ÷ volume do tijolo) é ≥ 40% — régua relativa que sobrevive à mudança de volatilidade (eleição, pânico). Na base real WINZ26 (11 pregões): PF 2,43→3,94, rebaixamento R$ 759→318, o único braço com todos os pregões positivos. Δ 50 continua valendo só nos 10 primeiros boxes do dia (aquecimento). Reversível: Ajustes → Gatilho → desmarque "Limiar Auto-Calibrado" e leve "Divergência de Fluxo" a 0%.`,
+        timestamp: Date.now(),
+      });
+    }, 4400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
 
   // AVISO DA TROCA DO PREÇO DE REFERÊNCIA DO ATIVO: roda uma única vez por versão de flag e só
@@ -7773,7 +7837,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           const limit = adaptive
 
-            ? activeEng.getRegimeMeter().getPercentileLimit(side, 0.6, config.minDeltaThreshold)
+            ? activeEng.getRegimeMeter().getSelfCalibratedLimit(side, config.adaptiveThresholdPercentile ?? 0.6, config.adaptiveFloorMultiple ?? 1.3, config.minDeltaThreshold)
 
             : config.minDeltaThreshold;
 
@@ -7785,15 +7849,17 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               `SINAL FRACO HÁ ${recentClosed.length} BOXES: último ${lastClosed.direction === 'UP' ? 'verde' : 'vermelho'} fechou com Δ ${lastClosed.delta} ctros e o limiar é ${
 
-                adaptive ? `calculado do próprio pregão (P60): ${limit} ctros` : `físico: ${limit} ctros`
+                adaptive ? `auto-calibrado do próprio pregão (percentil + piso da média do dia): ${limit} ctros` : `físico: ${limit} ctros`
 
               } — o Robô só entra com agressão acima do limiar. Baixe o Δ mínimo em Ajustes ou desligue o filtro adaptativo.`
 
             );
 
-          } else if (config.strategyMode !== 'PYRAMID_FLOW_CONFLUENCE' && config.requireCvdNewExtreme) {
+          } else if (config.requireCvdNewExtreme) {
 
-            gateReasons.push('RETESTE ESPERANDO CVD: os boxes passam no Δ calculado, mas o Reteste também exige o CVD fazendo máxima/mínima dos 3 boxes anteriores — é a espera do reteste, não um defeito.');
+            // A regra do CVD novo extremo agora vale nos dois modos: Pirâmide e Reteste.
+
+            gateReasons.push('ESPERANDO CVD: os boxes passam no Δ calculado, mas a estratégia também exige o CVD fazendo máxima/mínima dos 3 boxes anteriores — é a confluência pedida, não um defeito.');
 
           }
 
