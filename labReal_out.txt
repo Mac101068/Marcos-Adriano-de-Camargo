@@ -1,0 +1,89 @@
+
+  fita REAL WINZ26: 18765 ticks, 9 pregões
+
+  23 estratégias × 18765 ticks reais em 4.2s
+
+ESTRATÉGIA                                    PNL           PF     WIN%   TRADES  DD          SAÍDAS
+----------------------------------------------------------------------------------------------------------------------------------
+REFERÊNCIA · Pirâmide 10R original (baseline) R$ 18.007,00  6.39   90.4   675     R$ 248,00   FLIP_REVERSAL:291 PYRAMID_TP:272 DAY_CLOSE:5
+NOVA · virada só com 2 boxes + TP 50          R$ 8.156,00   6.52   92.8   422     R$ 216,00   FLIP_REVERSAL:80 PYRAMID_TP:255 DAY_CLOSE:7
+NOVA · virada só com 2 boxes + TP 75          R$ 7.597,00   3.73   90.9   422     R$ 754,00   FLIP_REVERSAL:89 PYRAMID_TP:249 DAY_CLOSE:8
+NOVA · virada só com 3 boxes + TP 50          R$ 7.366,00   6.13   93.0   420     R$ 216,00   FLIP_REVERSAL:73 PYRAMID_TP:254 DAY_CLOSE:7
+NOVA · virada 2 boxes + TP 50 + limiar fixo   R$ 9.427,00   3.85   91.7   934     R$ 465,00   PYRAMID_TP:582 FLIP_REVERSAL:167 DAY_CLOSE:10
+NOVA · virada 2 boxes + TP 50 + pirâmide a LIMR$ 1.075,00   1.73   69.1   81      R$ 547,00   FLIP_REVERSAL:49 PYRAMID_TP:16 DAY_CLOSE:4
+NOVA · escala 15R (75 pts) + virada 2 boxes + R$ 4.333,00   3.40   90.4   266     R$ 359,00   FLIP_REVERSAL:59 PYRAMID_TP:136 BREAKEVEN:65
+REFINO · limiar fixo · virada 2 · TP 35       R$ 9.427,00   3.85   91.7   934     R$ 465,00   PYRAMID_TP:582 FLIP_REVERSAL:167 DAY_CLOSE:10
+REFINO · limiar fixo · virada 2 · TP 40       R$ 9.427,00   3.85   91.7   934     R$ 465,00   PYRAMID_TP:582 FLIP_REVERSAL:167 DAY_CLOSE:10
+REFINO · limiar fixo · virada 2 · TP 60       R$ 10.035,00  3.59   90.2   931     R$ 584,00   PYRAMID_TP:576 FLIP_REVERSAL:181 DAY_CLOSE:9
+REFINO · limiar fixo · virada 1 (sem espera) ·R$ 21.402,00  4.14   85.2   1366    R$ 357,00   FLIP_REVERSAL:499 PYRAMID_TP:558 BREAKEVEN:136
+REFINO · virada 2 · TP 50 · limiar fixo · escaR$ 3.608,00   1.66   85.4   630     R$ 1.211,00 PYRAMID_TP:353 BREAKEVEN:113 DAY_CLOSE:11
+REFINO · virada 1 · TP 50 · limiar fixo · escaR$ 11.314,00  2.40   79.7   893     R$ 1.140,00 FLIP_REVERSAL:383 PYRAMID_TP:389 BREAKEVEN:110
+REFINO · virada 3 · TP 50 · limiar fixo · escaR$ 3.442,00   1.66   86.5   591     R$ 1.320,00 PYRAMID_TP:345 DAY_CLOSE:8 BREAKEVEN:109
+REFINO · limiar fixo · virada 3 · TP 50       R$ 8.431,00   3.62   92.4   891     R$ 279,00   PYRAMID_TP:562 FLIP_REVERSAL:136 DAY_CLOSE:10
+REFINO · limiar fixo · virada 2 · TP 50 · SL 3R$ 9.535,00   4.59   84.3   933     R$ 305,00   FLIP_REVERSAL:154 PYRAMID_TP:525 DAY_CLOSE:8
+REFINO · limiar fixo · virada 2 · TP 50 · mãe R$ 9.427,00   3.85   91.7   934     R$ 465,00   PYRAMID_TP:582 FLIP_REVERSAL:167 DAY_CLOSE:10
+ACUMULAÇÃO C/V · escala 10R · teto 15         R$ 9.810,00   2.29   80.5   1401    R$ 580,00   BREAKEVEN:949 DAY_CLOSE:8 FLIP_REVERSAL:243
+ACUMULAÇÃO C/V · 10R · só virada (breakeven deR$ 52.100,00  5.04   69.9   1399    R$ 620,00   FLIP_REVERSAL:1182 DAY_CLOSE:18
+ACUMULAÇÃO C/V · 10R · breakeven 300/200      R$ 27.540,00  3.33   72.1   1399    R$ 570,00   BREAKEVEN:584 FLIP_REVERSAL:604 DAY_CLOSE:12
+ACUMULAÇÃO C/V · escala 15R · teto 15         R$ 5.357,00   1.95   84.1   864     R$ 605,00   BREAKEVEN:727 DAY_CLOSE:4 FLIP_REVERSAL:133
+ACUMULAÇÃO C/V · escala 10R · teto 5          R$ 9.790,00   2.29   80.5   1400    R$ 580,00   BREAKEVEN:948 DAY_CLOSE:8 FLIP_REVERSAL:244
+NOVA · escala 20R (100 pts) + virada 2 boxes +R$ 4.261,00   2.60   89.0   158     R$ 936,00   FLIP_REVERSAL:39 PYRAMID_TP:82 DAY_CLOSE:7
+
+  SAÍDAS POR ESTRATÉGIA (quantidade · resultado):
+  · REF-PIRAMIDE-10R: FLIP_REVERSAL: 291t (R$ 16.340,00) | PYRAMID_TP: 272t (R$ 2.720,00) | DAY_CLOSE: 5t (R$ 190,00) | BREAKEVEN: 107t (R$ 107,00)
+  · NOVA-FLIP2-TP50: FLIP_REVERSAL: 80t (R$ 5.560,00) | PYRAMID_TP: 255t (R$ 2.550,00) | DAY_CLOSE: 7t (R$ 810,00) | BREAKEVEN: 80t (R$ 80,00)
+  · NOVA-FLIP2-TP75: FLIP_REVERSAL: 89t (R$ 3.810,00) | PYRAMID_TP: 249t (R$ 3.735,00) | DAY_CLOSE: 8t (R$ 820,00) | BREAKEVEN: 76t (R$ 76,00)
+  · NOVA-FLIP3-TP50: FLIP_REVERSAL: 73t (R$ 4.630,00) | PYRAMID_TP: 254t (R$ 2.540,00) | DAY_CLOSE: 7t (R$ 950,00) | BREAKEVEN: 86t (R$ 86,00)
+  · NOVA-FLIP2-TP50-FIXO: PYRAMID_TP: 582t (R$ 5.820,00) | FLIP_REVERSAL: 167t (R$ 4.750,00) | DAY_CLOSE: 10t (R$ 550,00) | BREAKEVEN: 175t (R$ 175,00)
+  · NOVA-FLIP2-TP50-LIMIT: FLIP_REVERSAL: 49t (R$ 1.015,00) | PYRAMID_TP: 16t (R$ 160,00) | DAY_CLOSE: 4t (R$ 50,00) | BREAKEVEN: 12t (R$ 12,00)
+  · NOVA-FLIP2-TP50-15R: FLIP_REVERSAL: 59t (R$ 2.805,00) | PYRAMID_TP: 136t (R$ 2.040,00) | BREAKEVEN: 65t (R$ 65,00) | DAY_CLOSE: 6t (R$ -45,00)
+  · NOVA-FIXO-TP35: PYRAMID_TP: 582t (R$ 5.820,00) | FLIP_REVERSAL: 167t (R$ 4.750,00) | DAY_CLOSE: 10t (R$ 550,00) | BREAKEVEN: 175t (R$ 175,00)
+  · NOVA-FIXO-TP40: PYRAMID_TP: 582t (R$ 5.820,00) | FLIP_REVERSAL: 167t (R$ 4.750,00) | DAY_CLOSE: 10t (R$ 550,00) | BREAKEVEN: 175t (R$ 175,00)
+  · NOVA-FIXO-TP60: PYRAMID_TP: 576t (R$ 6.912,00) | FLIP_REVERSAL: 181t (R$ 4.320,00) | DAY_CLOSE: 9t (R$ 500,00) | BREAKEVEN: 165t (R$ 165,00)
+  · NOVA-FIXO-TP50-FLIP1: FLIP_REVERSAL: 499t (R$ 17.390,00) | PYRAMID_TP: 558t (R$ 5.580,00) | BREAKEVEN: 136t (R$ 136,00) | DAY_CLOSE: 7t (R$ 100,00)
+  · NOVA-FIXO-TP50-15R-FLIP2: PYRAMID_TP: 353t (R$ 5.295,00) | BREAKEVEN: 113t (R$ 113,00) | DAY_CLOSE: 11t (R$ 105,00) | FLIP_REVERSAL: 153t (R$ -645,00)
+  · NOVA-FIXO-TP50-15R-FLIP1: FLIP_REVERSAL: 383t (R$ 7.110,00) | PYRAMID_TP: 389t (R$ 5.835,00) | BREAKEVEN: 110t (R$ 110,00) | DAY_CLOSE: 11t (R$ 45,00)
+  · NOVA-FIXO-TP50-15R-FLIP3: PYRAMID_TP: 345t (R$ 5.175,00) | DAY_CLOSE: 8t (R$ 120,00) | BREAKEVEN: 109t (R$ 109,00) | FLIP_REVERSAL: 129t (R$ -780,00)
+  · NOVA-FIXO-TP50-FLIP3: PYRAMID_TP: 562t (R$ 5.620,00) | FLIP_REVERSAL: 136t (R$ 3.880,00) | DAY_CLOSE: 10t (R$ 530,00) | BREAKEVEN: 183t (R$ 183,00)
+  · NOVA-FIXO-TP50-SL30: FLIP_REVERSAL: 154t (R$ 5.890,00) | PYRAMID_TP: 525t (R$ 5.250,00) | DAY_CLOSE: 8t (R$ 610,00) | BREAKEVEN: 161t (R$ 161,00) | PYRAMID_SL: 85t (R$ -510,00)
+  · NOVA-FIXO-TP50-BE: PYRAMID_TP: 582t (R$ 5.820,00) | FLIP_REVERSAL: 167t (R$ 4.750,00) | DAY_CLOSE: 10t (R$ 550,00) | BREAKEVEN: 175t (R$ 175,00)
+  · STACK-10R: BREAKEVEN: 949t (R$ 18.980,00) | DAY_CLOSE: 8t (R$ -350,00) | FLIP_REVERSAL: 243t (R$ -6.780,00)
+  · STACK-10R-SEM-BE: FLIP_REVERSAL: 1182t (R$ 52.620,00) | DAY_CLOSE: 18t (R$ -270,00)
+  · STACK-10R-BE-300-200: BREAKEVEN: 584t (R$ 23.360,00) | FLIP_REVERSAL: 604t (R$ 5.360,00) | DAY_CLOSE: 12t (R$ -340,00)
+  · STACK-15R: BREAKEVEN: 727t (R$ 14.540,00) | DAY_CLOSE: 4t (R$ -240,00) | FLIP_REVERSAL: 133t (R$ -7.215,00)
+  · STACK-10R-TETO5: BREAKEVEN: 948t (R$ 18.960,00) | DAY_CLOSE: 8t (R$ -350,00) | FLIP_REVERSAL: 244t (R$ -6.780,00)
+  · NOVA-FLIP2-TP50-20R: FLIP_REVERSAL: 39t (R$ 2.087,00) | PYRAMID_TP: 82t (R$ 1.640,00) | DAY_CLOSE: 7t (R$ 820,00) | BREAKEVEN: 30t (R$ 30,00)
+
+  RESULTADO POR PREGÃO (R$) — verde/vermelho por dia:
+ESTRATÉGIA                    20/10/202621/10/202622/10/202623/10/202626/10/202627/10/202628/10/202629/10/202630/10/2026
+STACK-10R-SEM-BE              0,00      0,00      960,00    2.820,00  31.820,00 4.830,00  7.280,00  3.360,00  1.280,00  
+STACK-10R-BE-300-200          0,00      0,00      660,00    1.900,00  16.810,00 2.420,00  4.310,00  1.810,00  470,00    
+NOVA-FIXO-TP50-FLIP1          0,00      0,00      642,00    1.048,00  11.039,00 4.153,00  2.783,00  2.637,00  904,00    
+
+  DIAS POSITIVOS (de 9):
+  · REF-PIRAMIDE-10R           9/9 dias positivos · pior dia R$ 193,00
+  · NOVA-FLIP2-TP50            9/9 dias positivos · pior dia R$ 67,00
+  · NOVA-FLIP2-TP75            7/9 dias positivos · pior dia R$ -329,00
+  · NOVA-FLIP3-TP50            9/9 dias positivos · pior dia R$ 96,00
+  · NOVA-FLIP2-TP50-FIXO       9/9 dias positivos · pior dia R$ 200,00
+  · NOVA-FLIP2-TP50-LIMIT      6/9 dias positivos · pior dia R$ -163,00
+  · NOVA-FLIP2-TP50-15R        8/9 dias positivos · pior dia R$ -236,00
+  · NOVA-FIXO-TP35             9/9 dias positivos · pior dia R$ 200,00
+  · NOVA-FIXO-TP40             9/9 dias positivos · pior dia R$ 200,00
+  · NOVA-FIXO-TP60             9/9 dias positivos · pior dia R$ 250,00
+  · NOVA-FIXO-TP50-FLIP1       7/9 dias positivos · pior dia R$ 0,00
+  · NOVA-FIXO-TP50-15R-FLIP2   6/9 dias positivos · pior dia R$ -414,00
+  · NOVA-FIXO-TP50-15R-FLIP1   6/9 dias positivos · pior dia R$ -620,00
+  · NOVA-FIXO-TP50-15R-FLIP3   6/9 dias positivos · pior dia R$ -374,00
+  · NOVA-FIXO-TP50-FLIP3       9/9 dias positivos · pior dia R$ 140,00
+  · NOVA-FIXO-TP50-SL30        9/9 dias positivos · pior dia R$ 178,00
+  · NOVA-FIXO-TP50-BE          9/9 dias positivos · pior dia R$ 200,00
+  · STACK-10R                  7/9 dias positivos · pior dia R$ 0,00
+  · STACK-10R-SEM-BE           7/9 dias positivos · pior dia R$ 0,00
+  · STACK-10R-BE-300-200       7/9 dias positivos · pior dia R$ 0,00
+  · STACK-15R                  7/9 dias positivos · pior dia R$ -330,00
+  · STACK-10R-TETO5            7/9 dias positivos · pior dia R$ 0,00
+  · NOVA-FLIP2-TP50-20R        8/9 dias positivos · pior dia R$ -388,00
+
+  MELHOR NO DADO REAL: ACUMULAÇÃO C/V · 10R · só virada (breakeven desligado) → R$ 52.100,00 em 1399 trades
+

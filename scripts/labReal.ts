@@ -189,6 +189,18 @@ const VARIANTS: Variant[] = [
     config: cfg({ ...base, strategyMode: 'SIGNAL_STACK', maxSimultaneousPositions: 15 }),
   },
   {
+    id: 'STACK-10R-SEM-BE',
+    label: 'ACUMULAÇÃO C/V · 10R · só virada (breakeven desligado)',
+    points: 50, seriesKey: 'renko',
+    config: cfg({ ...base, strategyMode: 'SIGNAL_STACK', maxSimultaneousPositions: 15, breakevenTriggerPoints: 0, breakevenLockPoints: 0 }),
+  },
+  {
+    id: 'STACK-10R-BE-300-200',
+    label: 'ACUMULAÇÃO C/V · 10R · breakeven 300/200',
+    points: 50, seriesKey: 'renko',
+    config: cfg({ ...base, strategyMode: 'SIGNAL_STACK', maxSimultaneousPositions: 15, breakevenTriggerPoints: 300, breakevenLockPoints: 200 }),
+  },
+  {
     id: 'STACK-15R',
     label: 'ACUMULAÇÃO C/V · escala 15R · teto 15',
     points: 75, seriesKey: 'renko15r',

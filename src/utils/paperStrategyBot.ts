@@ -590,6 +590,41 @@ export class PaperStrategyBot {
   // A pilha é limitada por maxSimultaneousPositions para não virar alavancagem sem fim.
   // =========================================================================
   private stepSignalStack(box: RenkoBox, signal: 'BUY' | 'SELL' | undefined, config: AutomationConfig) {
+    // SAÍDAS QUE NÃO SÃO A VIRADA (padronização 07/11): stop e breakeven por distância valem
+    // ANTES de qualquer entrada nova, e valem em TODA posição da pilha. O take não fecha nesta
+    // gestão — quem fecha é o sinal oposto.
+    const stopPts = config.stopLossPoints ?? 0;
+    const beTrigger = config.breakevenTriggerPoints ?? 0;
+    const beLock = config.breakevenLockPoints ?? 0;
+    const beArmado = beTrigger > 0 && beLock > 0;
+
+    for (const pos of [...this.openPositions]) {
+      const isBuy = pos.trade.direction === 'BUY';
+      const entry = pos.trade.entryPrice;
+
+      // 1) Breakeven por distância: andou o gatilho a favor, o stop trava no que se quer garantir.
+      // O colchão de taxa (breakevenOffsetPoints) nunca é violado.
+      if (beArmado) {
+        const favor = isBuy ? box.high - entry : entry - box.low;
+        if (favor >= beTrigger && !pos.slIsBreakeven) {
+          const trava = Math.max(beLock, config.breakevenOffsetPoints ?? 0);
+          const novoSl = isBuy ? entry + trava : entry - trava;
+          pos.sl = novoSl;
+          pos.slIsBreakeven = true;
+        }
+      }
+
+      // 2) Stop: vale o que veio do breakeven ou o stop fixo da boleta.
+      const slAtivo = pos.sl && pos.sl > 0 ? pos.sl : stopPts > 0 ? (isBuy ? entry - stopPts : entry + stopPts) : 0;
+      if (slAtivo > 0) {
+        const bateu = isBuy ? box.low <= slAtivo : box.high >= slAtivo;
+        if (bateu) {
+          this.book(pos.trade, slAtivo, box.timeEnd, pos.slIsBreakeven ? 'BREAKEVEN' : 'STOP_LOSS');
+          this.openPositions = this.openPositions.filter((p) => p !== pos);
+        }
+      }
+    }
+
     if (!signal) return;
 
     const opposite = this.openPositions.filter((p) => p.trade.direction !== signal);
