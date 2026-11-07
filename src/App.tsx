@@ -790,13 +790,21 @@ export default function App() {
 
     try {
 
-      return localStorage.getItem('fluxo_dados_window_v1') !== '0';
+      const saved = localStorage.getItem('fluxo_dados_window_v1');
+
+      if (saved !== null) return saved !== '0';
 
     } catch {
 
-      return true;
+      // storage indisponível: cai na regra de tela abaixo
 
     }
+
+    // Sem preferência salva (primeiro acesso, ou aparelho novo): no celular a janela nasce
+
+    // FECHADA porque ela cobre o gráfico inteiro — no desktop continua abrindo sozinha.
+
+    return typeof window === 'undefined' || window.innerWidth >= 640;
 
   });
 

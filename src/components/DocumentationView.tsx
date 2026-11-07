@@ -248,6 +248,34 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
           </button>
         </div>
 
+        {/* Ligar/desligar a ponte daqui: no celular o botão do cabeçalho é `hidden sm:flex` e
+            não aparece — sem esta linha, nenhum telefone consegue conectar na ponte. */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <button
+            onClick={() => onToggleMT5Connect()}
+            className={`px-3 py-1.5 text-xs font-semibold rounded border transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+              mt5State.status === 'CONNECTED'
+                ? 'border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/20 text-rose-200'
+                : 'border-emerald-500/40 bg-emerald-600/20 hover:bg-emerald-600/35 text-emerald-200'
+            }`}
+            title={
+              mt5State.status === 'CONNECTED'
+                ? 'Desconectar da ponte — para também a reconexão automática nesta aba'
+                : 'Conectar ao script .py no endereço de cima'
+            }
+          >
+            <Wifi className="w-3.5 h-3.5" />
+            {mt5State.status === 'CONNECTED'
+              ? 'Desconectar da ponte'
+              : mt5State.status === 'CONNECTING'
+              ? 'Conectando…'
+              : 'Conectar ao MT5'}
+          </button>
+          <span className="font-mono text-[11px] text-slate-500">
+            ws://{config.mt5Host || 'localhost'}:{config.mt5Port || 8765}
+          </span>
+        </div>
+
         {addressError && (
           <p className="text-[11px] text-rose-300 leading-relaxed flex items-start gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0" />
@@ -329,7 +357,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
           </div>
         ) : (
           <p className="text-[11px] text-slate-500">
-            Conecte o MT5 (botão acima no topo) para ver aqui se o token foi aceito e se a ponte está armada.
+            Use o botão <b>Conectar ao MT5</b> acima para ver aqui se o token foi aceito e se a ponte está armada.
           </p>
         )}
 
