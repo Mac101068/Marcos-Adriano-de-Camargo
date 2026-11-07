@@ -43,6 +43,7 @@ import {
   Cpu
 } from 'lucide-react';
 import { CollapsibleSection } from './CollapsibleSection';
+import { baixarPacoteAuditoria } from '../utils/auditExport';
 
 interface AutomationPanelProps {
   config: AutomationConfig;
@@ -469,6 +470,20 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           >
             <Download className="w-3.5 h-3.5 text-slate-400" />
             <span className="hidden sm:inline">Exportar</span>
+          </button>
+
+          <button
+            onClick={() => {
+              // Junta rodadas, ordens e fita real num JSON só. Download local: nada sai da máquina
+              // sem o operador entregar o arquivo.
+              const nome = baixarPacoteAuditoria();
+              showNotification(`📦 Auditoria exportada: ${nome}`);
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-300 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg transition-colors cursor-pointer"
+            title="Exportar auditoria completa (rodadas, ordens, fita real) em um JSON"
+          >
+            <Download className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Auditoria</span>
           </button>
 
           <label
