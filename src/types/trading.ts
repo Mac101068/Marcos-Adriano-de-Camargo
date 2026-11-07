@@ -233,6 +233,14 @@ export interface AutomationConfig {
   moveStopToBreakevenOnPartial: boolean; // Mover Stop Loss para Breakeven ao bater a parcial
   breakevenOffsetPoints: number; // Offset além da entrada (ex: +5 pontos para pagar taxas)
 
+  // Breakeven POR DISTÂNCIA (padronização 07/11/2026): a boleta é a fonte única de verdade.
+  // Quando a operação anda `breakevenTriggerPoints` a favor, o stop sobe para
+  // entrada + max(breakevenLockPoints, breakevenOffsetPoints) — o colchão de taxa nunca é
+  // violado e o operador manda no número que quer garantir. 0 em qualquer um dos dois
+  // desliga este breakeven (nada fixo no código: o valor é sempre o da boleta).
+  breakevenTriggerPoints: number; // Pontos A FAVOR até armar o breakeven (ex: 150)
+  breakevenLockPoints: number; // Pontos GARANTIDOS quando arma (ex: 100)
+
   // Trailing Stop Dinâmico
   trailingStop: boolean; // Habilitar Trailing Stop móvel
   trailingActivationPoints: number; // Pontos a favor necessários para ativar o trailing (ex: 60 pts)

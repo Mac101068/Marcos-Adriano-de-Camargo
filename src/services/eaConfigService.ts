@@ -57,6 +57,8 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   partialContracts: 1,
   moveStopToBreakevenOnPartial: false,
   breakevenOffsetPoints: 5,
+  breakevenTriggerPoints: 150,
+  breakevenLockPoints: 100,
   trailingStop: false,
   trailingActivationPoints: 60,
   trailingDistancePoints: 50,
@@ -160,6 +162,8 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       partialContracts: 1,
       moveStopToBreakevenOnPartial: true,
       breakevenOffsetPoints: 5,
+      breakevenTriggerPoints: 150,
+      breakevenLockPoints: 100,
       trailingStop: true,
       trailingActivationPoints: 60,
       trailingDistancePoints: 50,
@@ -183,6 +187,8 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       partialContracts: 1,
       moveStopToBreakevenOnPartial: true,
       breakevenOffsetPoints: 0,
+      breakevenTriggerPoints: 150,
+      breakevenLockPoints: 100,
       trailingStop: false,
       trailingActivationPoints: 50,
       trailingDistancePoints: 40,
@@ -207,6 +213,8 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       partialContracts: 1,
       moveStopToBreakevenOnPartial: true,
       breakevenOffsetPoints: 10,
+      breakevenTriggerPoints: 150,
+      breakevenLockPoints: 100,
       trailingStop: true,
       trailingActivationPoints: 100,
       trailingDistancePoints: 75,
@@ -277,6 +285,10 @@ export class EaConfigService {
           exhaustionDeltaRatio: parsed.exhaustionDeltaRatio ?? DEFAULT_EA_CONFIG.exhaustionDeltaRatio,
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
           mt5MaxOrdersPerMinute: parsed.mt5MaxOrdersPerMinute ?? DEFAULT_EA_CONFIG.mt5MaxOrdersPerMinute,
+          // Breakeven por distância: config antigo não tem os campos. Sem o `??`, ficariam
+          // `undefined` e o motor compararia contra nada (a mesma armadilha do valor gravado).
+          breakevenTriggerPoints: parsed.breakevenTriggerPoints ?? DEFAULT_EA_CONFIG.breakevenTriggerPoints,
+          breakevenLockPoints: parsed.breakevenLockPoints ?? DEFAULT_EA_CONFIG.breakevenLockPoints,
           // Endereço da ponte: o valor GRAVADO vence o default (mesma armadilha do `loadSavedConfig`
           // que já mordeu nas alavancas da Pirâmide). Config antigo gravou `localhost` quando o
           // campo não existia na tela; `localhost` nunca é o PC do MT5 nesta arquitetura, então
