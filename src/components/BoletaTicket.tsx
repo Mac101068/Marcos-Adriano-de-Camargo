@@ -119,6 +119,12 @@ interface BoletaTicketProps {
   onPartialPointsChange?: (v: number) => void;
   onBreakevenChange?: (v: number) => void;
   onTrailingChange?: (v: number) => void;
+  /** Breakeven POR DISTÂNCIA (padronização 07/11): pontos a favor até armar e pontos garantidos.
+   *  0 em qualquer um dos dois desliga — é assim que a C/V sai só na virada por padrão. */
+  breakevenTriggerPoints?: number;
+  breakevenLockPoints?: number;
+  onBreakevenTriggerChange?: (v: number) => void;
+  onBreakevenLockChange?: (v: number) => void;
   onContractsChange?: (v: number) => void;
 }
 
@@ -258,6 +264,10 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
   onBreakevenChange,
   onTrailingChange,
   onContractsChange,
+  breakevenTriggerPoints = 0,
+  breakevenLockPoints = 0,
+  onBreakevenTriggerChange,
+  onBreakevenLockChange,
 }) => {
   const [pinned, setPinned] = useState<boolean>(false);
   const [hovered, setHovered] = useState<boolean>(false);
@@ -493,6 +503,36 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
                     unit="pts"
                     onChange={onBreakevenChange}
                     hint={`Piso de proteção (taxas B3): ao proteger a posição, o stop garante entrada + ${breakevenOffsetPoints} pts. Vale para o breakeven da parcial, o do TP da pirâmide e o piso do gatilho.`}
+                  />
+                  <StepperRow
+                    label="BE gatilho"
+                    value={breakevenTriggerPoints}
+                    min={0}
+                    max={maxTP}
+                    step={pStep}
+                    decimals={dec}
+                    unit="pts"
+                    onChange={onBreakevenTriggerChange}
+                    hint={
+                      breakevenTriggerPoints <= 0 || breakevenLockPoints <= 0
+                        ? 'DESLIGADO: o breakeven por distância não arma. A posição só sai na virada do sinal (ou no Stop, se houver).'
+                        : `Breakeven por distância: quando a operação andar +${breakevenTriggerPoints} pts a favor, o stop trava em +${Math.max(breakevenLockPoints, breakevenOffsetPoints)} pts (o piso de taxas de ${breakevenOffsetPoints} pt nunca é violado). Vale o que vier primeiro: este stop, o Stop fixo ou a virada.`
+                    }
+                  />
+                  <StepperRow
+                    label="BE trava"
+                    value={breakevenLockPoints}
+                    min={0}
+                    max={maxTP}
+                    step={pStep}
+                    decimals={dec}
+                    unit="pts"
+                    onChange={onBreakevenLockChange}
+                    hint={
+                      breakevenLockPoints <= 0
+                        ? 'ZERO = breakeven por distância desligado (precisa dos dois campos preenchidos para armar).'
+                        : `Garante +${breakevenLockPoints} pts (≈ ${pointsToBRL(breakevenLockPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} por ${contracts} ctro) quando o gatilho de ${breakevenTriggerPoints} pts for atingido.`
+                    }
                   />
                   <StepperRow
                     label="Trailing"

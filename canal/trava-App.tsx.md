@@ -1,2 +1,1 @@
-windows · App.tsx + AutomationPanel.tsx · desde 17:53
-C/V lendo stopLossPoints da boleta; take nao fecha na C/V
+windows · 07/11 19:05 — App.tsx: ligar props BE na boleta, tradeKeys, assetOwned
