@@ -57,8 +57,11 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   partialContracts: 1,
   moveStopToBreakevenOnPartial: false,
   breakevenOffsetPoints: 5,
-  breakevenTriggerPoints: 150,
-  breakevenLockPoints: 100,
+  // DESLIGADO POR PADRÃO (decisão do operador, 07/11). Medido na fita real do WINZ26: com
+  // 150/100 a Acumulação C/V cai de R$ 52.100 para R$ 9.810 — 949 breakevens travam a perna
+  // antes de a virada pagar. Zero aqui = só sai na virada, como a estratégia foi desenhada.
+  breakevenTriggerPoints: 0,
+  breakevenLockPoints: 0,
   trailingStop: false,
   trailingActivationPoints: 60,
   trailingDistancePoints: 50,
@@ -206,6 +209,7 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       partialContracts: 1,
       moveStopToBreakevenOnPartial: true,
       breakevenOffsetPoints: 5,
+      // Reteste: breakeven por distância continua fazendo sentido (tem alvo e parcial próprios)
       breakevenTriggerPoints: 150,
       breakevenLockPoints: 100,
       trailingStop: true,

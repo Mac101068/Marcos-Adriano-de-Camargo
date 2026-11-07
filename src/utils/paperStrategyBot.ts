@@ -596,6 +596,9 @@ export class PaperStrategyBot {
     const stopPts = config.stopLossPoints ?? 0;
     const beTrigger = config.breakevenTriggerPoints ?? 0;
     const beLock = config.breakevenLockPoints ?? 0;
+    // C/V SÓ SAI NA VIRADA POR PADRÃO (0/0 na boleta). Se o operador ligar os dois campos, o
+    // breakeven vale — mas ele é opção, não padrão: medido na fita real, 150/100 custa 81% do
+    // resultado desta gestão.
     const beArmado = beTrigger > 0 && beLock > 0;
 
     for (const pos of [...this.openPositions]) {
