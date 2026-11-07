@@ -941,9 +941,9 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               </div>
               {config.strategyMode === 'SIGNAL_STACK' && (
                 <div className="col-span-full p-2.5 rounded-md border border-amber-700/50 bg-amber-950/30 text-[11px] text-amber-200/90">
-                  <strong className="text-amber-300">Acumulação C/V:</strong> o TP e o stop abaixo são IGNORADOS nesta
-                  gestão. Aqui a saída é uma só — o <strong>sinal oposto</strong> fecha todas as posições abertas.
-                  Se quiser alvo por contrato, use a gestão Pirâmide.
+                  <strong className="text-amber-300">Acumulação C/V:</strong> os campos de TP e stop abaixo ficam
+                  desligados nesta gestão. A saída é uma só — o <strong>sinal oposto</strong> fecha todas as posições
+                  abertas. Para alvo por contrato, use a gestão Pirâmide.
                 </div>
               )}
               <div>
@@ -954,9 +954,10 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                     min="25"
                     max="150"
                     step="25"
-                    value={config.pyramidTpPoints || 50}
+                    value={config.strategyMode === 'SIGNAL_STACK' ? 0 : config.pyramidTpPoints || 50}
+                    disabled={config.strategyMode === 'SIGNAL_STACK'}
                     onChange={(e) => handleConfigChange('pyramidTpPoints', Math.max(25, Number(e.target.value) || 25))}
-                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
+                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden disabled:opacity-40 disabled:cursor-not-allowed"
                   />
                   <span className="text-[11px] font-mono text-emerald-400 font-bold shrink-0">pts</span>
                 </div>
@@ -972,7 +973,8 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                     min="0"
                     max="150"
                     step="25"
-                    value={config.pyramidSlPoints ?? 0}
+                    value={config.strategyMode === 'SIGNAL_STACK' ? 0 : config.pyramidSlPoints ?? 0}
+                    disabled={config.strategyMode === 'SIGNAL_STACK'}
                     onChange={(e) => {
                       const raw = Number(e.target.value) || 0;
                       // 0 = sem stop fixo; valores entre 1 e 24 não são válidos → sobem para 25
@@ -1145,12 +1147,22 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                   </div>
                 )}
               </div>
-              <div className="p-2 rounded bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-300 leading-relaxed">
-                🛡️ Saídas da Pirâmide: TP próprio (+{config.pyramidTpPoints || 50} pts)
-                {(config.pyramidSlPoints ?? 0) > 0 ? ` · Stop opcional (−${config.pyramidSlPoints} pts)` : ' · sem stop fixo'} · inversão zera o resto
-                {config.moveMainToBreakevenOnPyramidTp
-                  ? ` · Mãe protegida no breakeven (+${config.breakevenOffsetPoints ?? 5} pts) a cada TP batido.`
-                  : '.'}
+              <div className={`p-2 rounded border text-[10px] leading-relaxed ${
+                config.strategyMode === 'SIGNAL_STACK'
+                  ? 'bg-amber-500/10 border-amber-500/20 text-amber-300'
+                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+              }`}>
+                {config.strategyMode === 'SIGNAL_STACK' ? (
+                  <>🅲🆅 Saída única: o <b>sinal oposto</b> fecha todas as posições abertas. Sem TP, sem stop, sem breakeven.</>
+                ) : (
+                  <>
+                    🛡️ Saídas da Pirâmide: TP próprio (+{config.pyramidTpPoints || 50} pts)
+                    {(config.pyramidSlPoints ?? 0) > 0 ? ` · Stop opcional (−${config.pyramidSlPoints} pts)` : ' · sem stop fixo'} · inversão zera o resto
+                    {config.moveMainToBreakevenOnPyramidTp
+                      ? ` · Mãe protegida no breakeven (+${config.breakevenOffsetPoints ?? 5} pts) a cada TP batido.`
+                      : '.'}
+                  </>
+                )}
               </div>
               <p className="text-[10px] text-slate-500 leading-relaxed">
                 Parcial e o bloco de Trailing Stop da estratégia <b>Reteste</b> não participam da Pirâmide. Na Pirâmide a

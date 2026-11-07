@@ -3039,7 +3039,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                   const pyramidLevel = pyramidOrders.length + 1;
 
-                  const tpPoints = config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE'
+                  // ACUMULAÇÃO C/V: nenhum alvo e nenhum stop por contrato — a única saída é o
+                  // sinal oposto. Zero aqui é intencional e é o que a estratégia promete.
+                  const isSignalStack = config.strategyMode === 'SIGNAL_STACK';
+                  const tpPoints = isSignalStack
+                    ? 0
+                    : config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE'
                     ? Math.max(config.boxPoints, config.pyramidTpPoints || config.boxPoints)
                     : (config.pyramidTpPoints || 50);
 
@@ -3055,7 +3060,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                   // Stop OPCIONAL da pirâmide: 0 = sem stop fixo (saída só pela inversão do fluxo)
 
-                  const pyrSlPoints = (config.pyramidSlPoints ?? 0) > 0 ? config.pyramidSlPoints : 0;
+                  const pyrSlPoints = !isSignalStack && (config.pyramidSlPoints ?? 0) > 0 ? config.pyramidSlPoints : 0;
 
                   const targetSl = pyrSlPoints > 0
 
@@ -3107,9 +3112,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                     contracts: pyrContracts,
 
-                    stopLoss: targetSl,
+                    stopLoss: isSignalStack ? 0 : targetSl,
 
-                    takeProfit: targetTp,
+                    takeProfit: isSignalStack ? 0 : targetTp,
 
                     status: useLimitEntry ? 'PENDING_LIMIT' : 'OPEN',
 
