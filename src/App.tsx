@@ -5280,9 +5280,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-    // Se estiver no modo Pirâmide & Confluência
-
-    if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
+    // Pirâmide & Confluência E Acumulação C/V: a ordem manual segue a regra da estratégia.
+    // Na C/V não existe alvo nem stop — a saída é o sinal oposto. Sem isso, disparar pela boleta
+    // faz a ordem nascer com o SL/TP da tela, exatamente o que o operador pediu para não ter.
+    if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' || config.strategyMode === 'SIGNAL_STACK') {
+      const isStackManual = config.strategyMode === 'SIGNAL_STACK';
 
       const activeSameDir = orders.filter((o) => o.status === 'OPEN' && o.type === type);
 
@@ -5314,21 +5316,23 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       // pirâmide, Alvo 0 cai no alvo da estratégia (pyramidTpPoints) para não virar ordem sem destino.
 
-      const tpPts =
+      const tpPts = isStackManual
 
-        config.takeProfitPoints > 0
+        ? 0
 
-          ? config.takeProfitPoints
+        : config.takeProfitPoints > 0
 
-          : role === 'PYRAMID'
+        ? config.takeProfitPoints
 
-          ? config.pyramidTpPoints || 50
+        : role === 'PYRAMID'
 
-          : 0;
+        ? config.pyramidTpPoints || 50
+
+        : 0;
 
       const tp = tpPts > 0 ? (type === 'BUY' ? entryPrice + tpPts : entryPrice - tpPts) : 0;
 
-      const slPts = config.stopLossPoints > 0 ? config.stopLossPoints : 0;
+      const slPts = isStackManual ? 0 : config.stopLossPoints > 0 ? config.stopLossPoints : 0;
 
       const sl = slPts > 0 ? (type === 'BUY' ? entryPrice - slPts : entryPrice + slPts) : 0;
 
