@@ -107,7 +107,11 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
       socket.onerror = () => {
         clearTimeout(timeout);
         setIsTesting(false);
-        setTestResult(`ERROR: Porta ${config.mt5Port} inacessível em ${wsUrl}. Inicie 'python bot_mt5_convergencia_10r.py' no seu PC.`);
+        const dica =
+          (config.mt5Host || 'localhost') === 'localhost'
+            ? ` Você está apontando para esta própria máquina. Se o MT5 roda em outro PC, troque o endereço abaixo pelo IP dele (ex.: 192.168.18.154) e clique em Aplicar.`
+            : ` Confira se o ponte_mt5.py está rodando naquele PC (janela aberta), se o firewall liberou a porta ${config.mt5Port} e se as duas máquinas estão na mesma rede.`;
+        setTestResult(`ERROR: Porta ${config.mt5Port} inacessível em ${wsUrl}.${dica}`);
       };
     } catch (e) {
       setIsTesting(false);

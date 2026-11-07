@@ -64,7 +64,10 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   maxDailyProfit: 2500,
   maxDailyTrades: 0, // 0 = sem limite para permitir piramidação contínua a cada box
   closeAllOnFinancialLock: false, // Trava batida: por padrão só para de abrir (posições abertas seguem gerenciadas)
-  mt5Host: 'localhost',
+  // Endereço da ponte: o MT5 roda no PC do Windows, não nesta máquina. `localhost` só serve
+  // quando o próprio .py roda aqui — foi o que deixou o app piscando "porta inacessível"
+  // apontando para si mesmo. O IP é o do Windows na rede local (ver canal/ do projeto).
+  mt5Host: '192.168.18.154',
   mt5Port: 8765,
   // Tetos aceitos pela ponte: defesa contra comando perdido, loop de bug ou app clonado
   mt5MaxContractsPerOrder: 2,
@@ -274,6 +277,14 @@ export class EaConfigService {
           exhaustionDeltaRatio: parsed.exhaustionDeltaRatio ?? DEFAULT_EA_CONFIG.exhaustionDeltaRatio,
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
           mt5MaxOrdersPerMinute: parsed.mt5MaxOrdersPerMinute ?? DEFAULT_EA_CONFIG.mt5MaxOrdersPerMinute,
+          // Endereço da ponte: o valor GRAVADO vence o default (mesma armadilha do `loadSavedConfig`
+          // que já mordeu nas alavancas da Pirâmide). Config antigo gravou `localhost` quando o
+          // campo não existia na tela; `localhost` nunca é o PC do MT5 nesta arquitetura, então
+          // é promovido para o IP da ponte. Qualquer outro host digitado pelo operador é mantido.
+          mt5Host:
+            !parsed.mt5Host || parsed.mt5Host === 'localhost' || parsed.mt5Host === '127.0.0.1'
+              ? DEFAULT_EA_CONFIG.mt5Host
+              : parsed.mt5Host,
           enablePartialExit: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? false : (parsed.enablePartialExit ?? true),
           // Robô 2: sempre reassemble — storage antigo não tem o campo, e um objeto parcial
           // não pode deixar `scaleR` undefined (a sombra derivaria pts de undefined).
