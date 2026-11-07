@@ -8,7 +8,7 @@ import { RangeBarEngine, TimeBarEngine, ChartSeries } from './utils/barEngines';
 
 import { evaluateBoxConvergence, ConvergenceResult } from './utils/convergenceEvaluator';
 
-import { isWithinTradingWindow, sessionFinancialLock, FinancialLock } from './utils/tradingGates';
+import { isWithinTradingWindow, sessionFinancialLock, FinancialLock, preserveRobotArmOnAssetChange } from './utils/tradingGates';
 
 import { listarPregoesLocais, mesclarPregoes } from './services/pregoesCatalogService';
 
@@ -506,15 +506,18 @@ export default function App() {
 
     const loaded = EaConfigService.loadSavedConfig();
 
-    const { strategy } = StrategyLibraryService.ensureActiveStrategy(loaded);
+    const seeded = StrategyLibraryService.ensureAssetStrategies(loaded, loaded.assetId || DEFAULT_ASSET_ID);
 
-    const resolved = StrategyLibraryService.resolveOperational(strategy, loaded);
+    const resolved = StrategyLibraryService.resolveOperational(seeded.strategy, seeded.config);
     const assetParams = getAssetTradeParams(resolved.assetId || DEFAULT_ASSET_ID);
-    return {
+    const initialized: AutomationConfig = {
       ...resolved,
+      active: resolved.assetId === 'WIN' ? resolved.active : false,
       maxDailyLoss: assetParams.maxDailyLoss,
       maxDailyProfit: assetParams.maxDailyProfit,
     };
+    EaConfigService.saveConfig(initialized);
+    return initialized;
 
   });
 
@@ -2834,7 +2837,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 
-                  wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
+                  wsRef.current.send(JSON.stringify({
+                    action: 'CLOSE_POSITIONS',
+                    symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                    robotMagic: mainRobotMagic(config),
+                  }));
 
                 }
 
@@ -2884,7 +2891,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                   if (hadOpen && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 
-                    wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
+                    wsRef.current.send(JSON.stringify({
+                      action: 'CLOSE_POSITIONS',
+                      symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                      robotMagic: mainRobotMagic(config),
+                    }));
 
                   }
 
@@ -3038,6 +3049,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                     limitPrice: useLimitEntry ? pyrLimitPrice : undefined,
 
+                    boxIndex: useLimitEntry ? result.closedBox!.index : undefined,
+
                     contracts: config.contracts,
 
                     comment: `PIRAMIDE_MAIN_${signalType}_${mt5TagShort}`,
@@ -3179,6 +3192,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     isLimit: useLimitEntry,
 
                     limitPrice: useLimitEntry ? pyrLimitPrice : undefined,
+
+                    boxIndex: useLimitEntry ? result.closedBox!.index : undefined,
 
                     contracts: pyrContracts,
 
@@ -3324,6 +3339,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                   limitPrice: isPullbackMode ? limitPrice : undefined,
 
+                  boxIndex: isPullbackMode ? result.closedBox!.index : undefined,
+
                   contracts: config.contracts,
 
                   sl: config.stopLossPoints,
@@ -3364,7 +3381,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                     if (hadOpen && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 
-                      wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
+                      wsRef.current.send(JSON.stringify({
+                        action: 'CLOSE_POSITIONS',
+                        symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                        robotMagic: mainRobotMagic(config),
+                      }));
 
                     }
 
@@ -3988,6 +4009,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                       action: 'ORDER_PARTIAL_CLOSE',
 
+                      symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+
                       ticket: ord.ticket,
 
                       partialVolume: partialCtros,
@@ -4436,7 +4459,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               wsRef.current.send(
 
-                JSON.stringify({ action: 'ORDER_MODIFY_SL', ticket: ord.ticket, newSL: beSL, robotMagic: mainRobotMagic(config) })
+                JSON.stringify({
+                  action: 'ORDER_MODIFY_SL',
+                  symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                  ticket: ord.ticket,
+                  newSL: beSL,
+                  robotMagic: mainRobotMagic(config),
+                })
 
               );
 
@@ -5894,7 +5923,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 
-      wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', type: side || 'ALL' }));
+      wsRef.current.send(JSON.stringify({
+        action: 'CLOSE_POSITIONS',
+        symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+        type: side || 'ALL',
+      }));
 
     }
 
@@ -7659,8 +7692,21 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     const assetParams = getAssetTradeParams(id);
     const unconfirmed = next.status === 'a_confirmar';
 
-    const updated: AutomationConfig = {
-      ...config,
+    const assetStrategies = StrategyLibraryService.ensureAssetStrategies(config, id);
+    const assetStrategy = StrategyLibraryService.updateStrategyConfig(assetStrategies.strategy.id, {
+      boxPoints: assetParams.boxPoints,
+      stopLossPoints: assetParams.stopLossPoints,
+      takeProfitPoints: assetParams.takeProfitPoints,
+      partialPoints: assetParams.partialPoints,
+      breakevenOffsetPoints: assetParams.breakevenOffsetPoints,
+      trailingDistancePoints: assetParams.trailingDistancePoints,
+      minDeltaThreshold: assetParams.minDeltaThreshold,
+      contracts: assetParams.contracts,
+      maxDailyLoss: assetParams.maxDailyLoss,
+      maxDailyProfit: assetParams.maxDailyProfit,
+    }) ?? assetStrategies.strategy;
+    const assetRuntime: AutomationConfig = {
+      ...assetStrategies.config,
       assetId: id,
       // Gráfico no vigente do ativo novo (sem vencimento confirmado, cai na contínua do registro).
       symbol: chartSymbolFor(next),
@@ -7675,8 +7721,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       maxDailyLoss: assetParams.maxDailyLoss,
       maxDailyProfit: assetParams.maxDailyProfit,
       // Ensaio de spec não homologado nunca acorda o Robô (decisão 2 do plano).
-      active: unconfirmed ? false : config.active,
+      // Do not carry the armed WIN state to a different market. Independent bot execution
+      // for WDO/BIT is not wired yet; an operator must explicitly arm the selected asset.
+      active: unconfirmed ? false : preserveRobotArmOnAssetChange(config.active, id),
       lastSavedTimestamp: Date.now(),
+    };
+    const updated: AutomationConfig = {
+      ...StrategyLibraryService.resolveOperational(assetStrategy, assetRuntime),
+      lastSavedTimestamp: assetRuntime.lastSavedTimestamp,
     };
 
     EaConfigService.saveConfig(updated);
@@ -7716,20 +7768,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     setOrders(OrderAuditService.loadIntradayOrders(next) ?? []);
 
-    if (config.strategyId) {
-      StrategyLibraryService.updateStrategyConfig(config.strategyId, {
-        assetId: id,
-        symbol: chartSymbolFor(next),
-        boxPoints: assetParams.boxPoints,
-        stopLossPoints: assetParams.stopLossPoints,
-        takeProfitPoints: assetParams.takeProfitPoints,
-        partialPoints: assetParams.partialPoints,
-        breakevenOffsetPoints: assetParams.breakevenOffsetPoints,
-        trailingDistancePoints: assetParams.trailingDistancePoints,
-        minDeltaThreshold: assetParams.minDeltaThreshold,
-      });
-    }
-
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         action: 'SELECT_ASSET',
@@ -7751,6 +7789,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
         : ` A trava de horário continua em ${updated.tradingStartTime}–${updated.tradingStopEntriesTime}, e o pregão de ${next.label} é ${next.session.open}–${next.session.close} (ajustar por ativo vem na Fase 3).`;
 
+    const singleAssetNote =
+      id === 'WIN'
+        ? ''
+        : ' O robô foi desarmado na troca. Esta versão ainda opera um ativo por vez; WDO/BIT não são robôs independentes.';
+
 
 
     setLatestToast({
@@ -7761,7 +7804,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       title: unconfirmed ? `🧪 ENSAIO: ${next.label} (SPEC NÃO HOMOLOGADO)` : `ATIVO: ${next.label}`,
 
-      description: `${next.contractNote}. Preço de referência ${formatPrice(referencePrice(next), next)} pts · escala ${formatPrice(assetParams.boxPoints, next)} pts (${renkoScaleLabel(assetParams.boxPoints, next)}).${unconfirmed ? ' Robô deixado OFF e ponte em seguro até você homologar R$/ponto, tick e casas decimais.' : ''}${sessionNote} Conectado ao MT5, baixe o script de novo: ele grava o símbolo na hora de subir a ponte.`,
+      description: `${next.contractNote}. Preço de referência ${formatPrice(referencePrice(next), next)} pts · escala ${formatPrice(assetParams.boxPoints, next)} pts (${renkoScaleLabel(assetParams.boxPoints, next)}).${unconfirmed ? ' Robô deixado OFF e ponte em seguro até você homologar R$/ponto, tick e casas decimais.' : ''}${singleAssetNote}${sessionNote} Conectado ao MT5, baixe o script de novo: ele grava o símbolo na hora de subir a ponte.`,
 
       timestamp: Date.now(),
 

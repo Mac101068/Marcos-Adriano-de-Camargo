@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { DEFAULT_EA_CONFIG } from '../src/services/eaConfigService';
 import type { TradeOrder } from '../src/types/trading';
-import { isWithinTradingWindow, sessionFinancialLock } from '../src/utils/tradingGates';
+import { isWithinTradingWindow, preserveRobotArmOnAssetChange, sessionFinancialLock } from '../src/utils/tradingGates';
 import { isSessionCloseLock, setEnforceTimeGates } from '../src/utils/sessionRules';
 
 const localTime = (hour: number, minute: number) => new Date(2026, 10, 6, hour, minute).getTime();
@@ -22,6 +22,13 @@ test('entry window includes its start and excludes its cutoff', () => {
   assert.equal(isWithinTradingWindow(localTime(8, 55), config), true);
   assert.equal(isWithinTradingWindow(localTime(17, 29), config), true);
   assert.equal(isWithinTradingWindow(localTime(17, 30), config), false);
+});
+
+test('switching away from WIN never carries the armed state into another asset', () => {
+  assert.equal(preserveRobotArmOnAssetChange(true, 'WIN'), true);
+  assert.equal(preserveRobotArmOnAssetChange(true, 'WDO'), false);
+  assert.equal(preserveRobotArmOnAssetChange(true, 'BTCBR'), false);
+  assert.equal(preserveRobotArmOnAssetChange(false, 'WIN'), false);
 });
 
 test('entry window is open when time gates are disabled or configuration is invalid', () => {

@@ -2,12 +2,8 @@
 // O pythonScriptGenerator é um template de string gigante, então TypeScript válido não quer dizer
 // Python válido: um merge ou uma edição mal costurada produz um script que o usuário baixa e a
 // corretora recusa na primeira linha. Este assert regera o script, confere as travas que definem
-// o modo de execução e chama py_compile de verdade.
+// o modo de execução e valida a sintaxe com o interpretador Python sem gravar arquivos auxiliares.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const store = new Map<string, string>();
 (globalThis as any).localStorage = {
@@ -38,6 +34,39 @@ if (tem('CADEIA_QUE_NAO_EXISTE_NO_TEMPLATE_9c1f')) {
 // negativo assusta a cada merge e ninguém mais confia na saída.
 if (!tem('def ordens_bloqueadas')) {
   falhas.push('a busca tem() não acha uma cadeia que está no template — comparação quebrada');
+}
+
+// O app é o único executor de estratégia; o loop de feed Python não pode abrir/gerir a mesma
+// posição em paralelo. A ponte continua aceitando comandos autenticados do app.
+const streamStart = py.indexOf('async def mt5_stream_loop():');
+const streamEnd = py.indexOf('\nasync def main():', streamStart);
+const streamLoop = streamStart >= 0 && streamEnd > streamStart ? py.slice(streamStart, streamEnd) : '';
+if (!streamLoop) falhas.push('loop de ticks Python não encontrado para verificar a origem única de execução');
+for (const duplicatePath of [
+  'ORDER_MANAGER.execute_market_order(',
+  'ORDER_MANAGER.execute_pyramid_confluence(',
+  'ORDER_MANAGER.place_pullback_limit_order(',
+  'ORDER_MANAGER.watch_closed_pyramids(',
+]) {
+  if (streamLoop.includes(duplicatePath)) {
+    falhas.push(`loop Python ainda possui caminho de execução duplicado: ${duplicatePath}`);
+  }
+}
+if (!tem('requested_symbol != SYMBOL')) {
+  falhas.push('a ponte não exige correspondência exata entre símbolo do comando e símbolo configurado');
+}
+if (!tem('ORDER_MANAGER.check_and_clean_expired_pending(new_box["index"])')) {
+  falhas.push('a ponte deixou de cancelar ordens LIMIT aceitas pelo app quando expiram');
+}
+if (!tem('"magic": p.get("magic", self.magic_number)')) {
+  falhas.push('expiração de ordem LIMIT não preserva o magic que a criou');
+}
+const scopedPositionChecks = py.split('\n').filter((line) => line.includes('pos.symbol != self.symbol or pos.magic != expected_magic')).length;
+if (scopedPositionChecks < 2) {
+  falhas.push('parcial e alteração de stop não estão ambas isoladas por símbolo e magic');
+}
+if (!tem('if magic_filter is not None and pos.magic != magic_filter:')) {
+  falhas.push('zeragem por robô não filtra posições pelo magic');
 }
 
 // 1. Trava de execução nas duas camadas, com a verdade única que o app consulta.
@@ -71,31 +100,20 @@ for (const [nome, busca] of [
   if (!tem(busca)) falhas.push(`procedência de ordem ausente no script gerado: ${nome}`);
 }
 
-// 4. O Python gerado precisa compilar DE VERDADE. Este bloco já produziu verde mentiroso: sem
-//    interpretador no caminho ele imprimia "AVISO: py_compile não rodou" e o banner seguinte
-//    jurava mesmo assim que "py_compile aceitou" (provado no Mac em 06/11: sair=0 + banner verde
-//    + aviso de que o compilador não rodou). Regra nova: interpretador ausente é FALHA, e o banner
-//    só afirma o que rodou neste processo, dizendo QUEM checou.
-const pasta = mkdtempSync(join(tmpdir(), 'bridge-assert-'));
-const alvo = join(pasta, 'script_gerado.py');
-writeFileSync(alvo, py, 'utf-8');
-
-// Caminho absoluto a partir deste arquivo: '../venv' relativo ao cwd só funcionava quando o
-// assert era rodado de dentro do frontend -- em qualquer outro cwd ele virava AVISO silencioso.
-const raizProjeto = fileURLToPath(new URL('../..', import.meta.url));
+// 4. Valide a sintaxe sem criar arquivos de scratch (o compile() do Python não executa o script
+//    nem grava bytecode). Interpretador ausente é falha: nunca imprima um verde não verificado.
 const candidatos = process.env.PYTHON
   ? [process.env.PYTHON] // escolhido na cara: se não existir, é falha; não se troca em silêncio
-  : [
-      join(raizProjeto, 'venv', 'Scripts', 'python.exe'), // Windows: o mesmo interpretador da ponte
-      join(raizProjeto, 'venv', 'bin', 'python3'), // macOS / Linux
-      'python3',
-      'python',
-    ];
+  : ['python3', 'python'];
 
 let compilou = '';
 const tentativas: string[] = [];
 for (const candidato of candidatos) {
-  const r = spawnSync(candidato, ['-m', 'py_compile', alvo], { encoding: 'utf8' });
+  const r = spawnSync(
+    candidato,
+    ['-c', "import sys; compile(sys.stdin.read(), '<generated-mt5-bridge>', 'exec')"],
+    { encoding: 'utf8', input: py },
+  );
   if (r.error) {
     // Só "não consegui nem começar" leva ao próximo candidato.
     const erro = r.error as NodeJS.ErrnoException;
@@ -107,14 +125,13 @@ for (const candidato of candidatos) {
     break;
   }
   // Compilou e RECUSOU: isso é veredito sobre o template, não problema de ambiente.
-  falhas.push(`py_compile recusou o script gerado (${candidato}):\n${r.stderr}`);
+  falhas.push(`Python recusou a sintaxe do script gerado (${candidato}):\n${r.stderr}`);
   break;
 }
-rmSync(pasta, { recursive: true, force: true });
 
 if (!compilou && !falhas.length) {
   falhas.push(
-    `nenhum Python executável para o py_compile — o script que o usuário baixou NÃO foi validado.\n` +
+    `nenhum Python executável para validar a sintaxe — o script que o usuário baixou NÃO foi validado.\n` +
       `  tente com PYTHON=/caminho/do/python (ou rode do venv do projeto). Tentativas: ${tentativas.join(' | ') || candidatos.join(' | ')}`,
   );
 }
@@ -136,6 +153,6 @@ if (falhas.length) {
   process.exit(1);
 }
 console.log(
-  `TUDO VERDE: trava nos dois níveis, saídas liberadas, ORDER_RESULT presente, ` +
-    `py_compile aceitou o script — checado por ${quemChecou}.`,
+  `TUDO VERDE: trava nos dois níveis, saídas liberadas, ordem única no app, símbolo validado, ` +
+    `Python compile() aceitou o script — checado por ${quemChecou}.`,
 );

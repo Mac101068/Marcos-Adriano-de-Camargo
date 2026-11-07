@@ -1,5 +1,14 @@
 import { AutomationConfig, TradeOrder } from '../types/trading';
+import type { AssetId } from '../assets/assetRegistry';
 import { parseHHMM, areTimeGatesEnforced } from './sessionRules';
+
+/**
+ * Never carry an armed WIN session into another asset on chart selection. Until each asset has
+ * an independent robot lifecycle, the operator must explicitly re-arm after selecting it.
+ */
+export function preserveRobotArmOnAssetChange(currentlyEnabled: boolean, targetAssetId: AssetId): boolean {
+  return currentlyEnabled && targetAssetId === 'WIN';
+}
 
 /**
  * Portões de ENTRADA compartilhados pelas duas estratégias (Pirâmide e Reteste) e pelo

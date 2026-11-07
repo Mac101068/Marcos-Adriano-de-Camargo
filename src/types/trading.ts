@@ -178,6 +178,8 @@ export interface AutomationConfig {
    * salvos antes disto não têm o campo e continuam resolvendo pelo prefixo do `symbol`.
    */
   assetId?: AssetId;
+  /** Estratégias independentes por ativo; BTC e BTCBR são aliases do mesmo robô. */
+  assetStrategyIds?: Partial<Record<AssetId, string>>;
   symbol: string; // Ex: WIN$N ou WINFUT
   boxPoints: number; // FONTE ÚNICA da escala do tijolo (WIN: 50 pts = 10R; editável na engrenagem do gráfico)
   contracts: number; // Lote (ex: 1, 2, 5 contratos)

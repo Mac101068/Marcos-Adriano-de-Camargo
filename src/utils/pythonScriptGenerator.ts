@@ -51,7 +51,11 @@ ARQUITETURA (2 máquinas na mesma rede Wi-Fi):
      - Tetos de risco: ${config.mt5MaxContractsPerOrder || 2} contrato(s) por ordem e
        ${config.mt5MaxOrdersPerMinute || 12} ordem(s) de entrada por minuto.
      - Toda tentativa recusada aparece no console com o IP de origem.
-  4a. TRAVA DE EXECUÇÃO (modo replay/validação): rode com a variável de ambiente ORDERS_BLOCKED=1
+  4a. EXECUÇÃO ÚNICA: o app é a única origem de decisões e ordens da estratégia. A ponte Python
+     transmite ticks e roteia comandos autenticados do app; o loop de sinais Python NÃO executa
+     ordens, evitando uma segunda ordem para o mesmo sinal. Ainda é uma ponte de um único símbolo:
+     solicitações com outro símbolo são rejeitadas, nunca redirecionadas silenciosamente.
+  4b. TRAVA DE EXECUÇÃO (modo replay/validação): rode com a variável de ambiente ORDERS_BLOCKED=1
      (PowerShell: $env:ORDERS_BLOCKED="1" antes de iniciar o .py) e a ponte passa a servir ticks,
      histórico comprimido da fita real, sinais e diário sem enviar NENHUMA ordem de entrada, mesmo
      com o robô ligado no app. É o modo de ensaiar estratégia sobre pregão gravado enquanto o loop
@@ -59,7 +63,7 @@ ARQUITETURA (2 máquinas na mesma rede Wi-Fi):
      e desligar essa trava sem reiniciar nada: no Simulador, ao lado dos botões de replay, o chip
      "Validação" manda SET_REPLAY_MODE para o processo (não é persistente: reiniciou, volta desligado).
      A trava de ambiente fica por cima -- desligar pela tela nunca vence um ORDERS_BLOCKED=1.
-  4b. IDENTIDADE POR ROBÔ (magic): cada entrada carimba o magic de quem mandou — Robô 1 com
+  4c. IDENTIDADE POR ROBÔ (magic): cada entrada carimba o magic de quem mandou — Robô 1 com
      o magic do Ajustes (${config.magicNumber || 102030}), Boleta manual com \${MANUAL_ORDER_MAGIC}.
      As saídas automáticas do robô (inversão de fluxo, zeragem de horário) só tocam posições
      com o magic DO ROBÔ; suas ordens manuais ficam intactas. O "ZERAR TUDO" da boleta continua
@@ -248,6 +252,9 @@ def check_trade_allowed(state, data, action):
     """Concentra as travas (token, trava de execução, armado, tetos). Retorna (liberado, motivo)."""
     if REQUIRE_AUTH and not state["authenticated"]:
         return False, "conexão não autenticada (token ausente ou errado)"
+    requested_symbol = str(data.get("symbol") or "").strip()
+    if action in TRADE_ACTIONS and requested_symbol != SYMBOL:
+        return False, f"símbolo solicitado {requested_symbol} diferente do símbolo único configurado na ponte {SYMBOL}"
     if action in ENTRY_ACTIONS and ordens_bloqueadas():
         return False, ("ponte com TRAVA DE EXECUÇÃO ativa (" + ("ORDERS_BLOCKED=1" if ORDERS_BLOCKED else "MODO REPLAY ligado na tela") + "): "
                        "nenhuma ordem de ENTRADA sai, armada ou não. Saídas (parcial, stop, zeragem) "
@@ -667,7 +674,7 @@ class MT5OrderManager:
         })
         return True, res.order, limit_price
 
-    def place_websocket_limit_order(self, signal, limit_price, comment="", volume=None, sl_points=0, tp_points=0, magic=None):
+    def place_websocket_limit_order(self, signal, limit_price, comment="", volume=None, sl_points=0, tp_points=0, magic=None, box_index=None):
         """Posiciona uma LIMITADA solicitada pelo Terminal Web no preço informado.
         'magic' é a placa de quem mandou (Robô 1 ou Boleta manual); sem ela, vale a do robô."""
         can_trade, _ = self.check_schedule()
@@ -704,6 +711,14 @@ class MT5OrderManager:
         res = mt5.order_send(request)
         if res.retcode == mt5.TRADE_RETCODE_DONE:
             print(f"⏳ [WEB LIMIT] {signal} {use_volume} ctro(s) posicionada em {limit_price:.1f} | TP: {tp_price:.1f} | SL: {sl_price:.1f} | Ticket #{res.order}")
+            if box_index is not None:
+                self.pending_orders.append({
+                    "ticket": res.order,
+                    "signal": signal,
+                    "limit_price": float(limit_price),
+                    "box_index": int(box_index),
+                    "magic": int(magic) if magic else self.magic_number,
+                })
             return True, res.order
         print(f"[ERRO MT5 WEB LIMIT] RetCode={res.retcode}, Desc={res.comment}")
         return False, 0
@@ -751,7 +766,7 @@ class MT5OrderManager:
                 req = {
                     "action": mt5.TRADE_ACTION_REMOVE,
                     "order": p["ticket"],
-                    "magic": self.magic_number
+                    "magic": p.get("magic", self.magic_number)
                 }
                 mt5.order_send(req)
                 to_remove.append(p)
@@ -918,13 +933,14 @@ class MT5OrderManager:
         'magic' carimbado é o de quem pediu, para a trilha de auditoria bater com a MT5"""
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
-            # Tenta buscar por símbolo se ticket não for direto
-            positions = mt5.positions_get(symbol=self.symbol)
-        if not positions:
-            print(f"[PARCIAL] Nenhuma posição aberta encontrada para ticket #{ticket}")
+            print(f"[PARCIAL] Posição #{ticket} não encontrada; nenhuma posição foi alterada")
             return False
 
         pos = positions[0]
+        expected_magic = int(magic) if magic else self.magic_number
+        if pos.symbol != self.symbol or pos.magic != expected_magic:
+            print(f"[PARCIAL] Posição #{ticket} rejeitada: símbolo/magic não pertence a esta ordem ({self.symbol}, {expected_magic})")
+            return False
         close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
         tick = mt5.symbol_info_tick(self.symbol)
         price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
@@ -947,7 +963,7 @@ class MT5OrderManager:
         if res.retcode == mt5.TRADE_RETCODE_DONE:
             print(f"🎯 [PARCIAL REALIZADA] {partial_volume} contrato(s) encerrado(s) na posição #{pos.ticket}!")
             if new_sl is not None:
-                self.modify_stop_loss(pos.ticket, new_sl)
+                self.modify_stop_loss(pos.ticket, new_sl, magic=expected_magic)
             return True
         else:
             print(f"[ERRO PARCIAL] RetCode={res.retcode}, Desc={res.comment}")
@@ -957,18 +973,21 @@ class MT5OrderManager:
         """Move o Stop Loss (Breakeven ou Trailing Stop) de uma posição (magic = quem pediu)"""
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
-            positions = mt5.positions_get(symbol=self.symbol)
-        if not positions:
+            print(f"[STOP] Posição #{ticket} não encontrada; nenhum stop foi alterado")
             return False
 
         pos = positions[0]
+        expected_magic = int(magic) if magic else self.magic_number
+        if pos.symbol != self.symbol or pos.magic != expected_magic:
+            print(f"[STOP] Posição #{ticket} rejeitada: símbolo/magic não pertence a esta ordem ({self.symbol}, {expected_magic})")
+            return False
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "position": pos.ticket,
             "symbol": self.symbol,
             "sl": float(new_sl),
             "tp": float(pos.tp),
-            "magic": int(magic) if magic else self.magic_number
+            "magic": expected_magic
         }
         res = mt5.order_send(request)
         if res.retcode == mt5.TRADE_RETCODE_DONE:
@@ -1185,7 +1204,8 @@ async def ws_handler(websocket):
                             data.get("contracts", 1),
                             data.get("sl", 0) or 0,
                             data.get("tp", 0) or 0,
-                            magic=order_magic
+                            magic=order_magic,
+                            box_index=data.get("boxIndex")
                         )
                     else:
                         ok, ticket = ORDER_MANAGER.execute_market_order(
@@ -1477,50 +1497,17 @@ async def mt5_stream_loop():
                 if new_box:
                     print(f"[{datetime.fromtimestamp(tick_msc/1000).strftime('%H:%M:%S')}] Box ${boxLabel} #{new_box['index']}: {new_box['direction']} | Abertura: {new_box['open']} -> Fech: {new_box['close']}")
                     await broadcast_to_web({"type": "BOX_CLOSED", "data": new_box})
-
-                    # Limpa ordens de pullback/limit antigas que expiraram
+                    # A entrada vem só do app; a ponte ainda expira LIMITs que ela própria aceitou.
                     ORDER_MANAGER.check_and_clean_expired_pending(new_box["index"])
-                    # Se alguma pirâmide fechou no TP, protege a ordem mãe no breakeven
-                    ORDER_MANAGER.watch_closed_pyramids()
-
-                    # GATILHO DE CONVERGÊNCIA:
-                    if signal and ordens_bloqueadas():
-                        # A trava vale também para o loop vivo: o sinal continua calculado e transmitido
-                        # para a tela (o estudo vê o que o robô faria), mas nenhuma ordem sai.
-                        print(f" ORDEM BLOQUEADA POR TRAVA [{'ORDERS_BLOCKED' if ORDERS_BLOCKED else 'MODO REPLAY'}]: sinal {signal} em {new_box['index']} transmitido, nenhuma ordem enviada")
-                        signal = None
                     if signal:
-                        if STRATEGY_MODE == "PYRAMID_FLOW_CONFLUENCE":
-                            # ESTRATÉGIA PIRÂMIDE (TP 50p) + ORDEM MÃE SURFE ATÉ INVERSÃO
-                            success, ticket, role = ORDER_MANAGER.execute_pyramid_confluence(signal, new_box)
-                            if success:
-                                await broadcast_to_web({
-                                    "type": "PYRAMID_ORDER_PLACED",
-                                    "data": {
-                                        "ticket": ticket,
-                                        "role": role,
-                                        "signal": signal,
-                                        "boxIndex": new_box["index"],
-                                        "reason": f"Ordem {role} ({signal}) executada no fechamento do box #{new_box['index']}"
-                                    }
-                                })
-                        elif ENTRY_TRIGGER_TYPE == "PULLBACK_ENTRY":
-                            # POSICIONA ORDEM LIMITADA NA ENTRADA / ABERTURA DO BOX
-                            success, ticket, limit_price = ORDER_MANAGER.place_pullback_limit_order(signal, new_box, reason)
-                            if success:
-                                await broadcast_to_web({
-                                    "type": "PULLBACK_LIMIT_PLACED",
-                                    "data": {
-                                        "ticket": ticket,
-                                        "signal": signal,
-                                        "limitPrice": limit_price,
-                                        "boxIndex": new_box["index"],
-                                        "reason": f"Ordem Limitada de {signal} no Reteste da Abertura ({limit_price:.1f} pts)"
-                                    }
-                                })
-                        else:
-                            # A MERCADO NO FECHAMENTO
-                            ORDER_MANAGER.execute_market_order(signal, reason)
+                        # O app processa o mesmo tick e é a única origem autorizada de ordens.
+                        # A ponte continua calculando o sinal para diagnóstico, mas não envia
+                        # uma segunda entrada nem duplica a gestão da posição.
+                        print(f" [SINAL] {signal} no box {new_box['index']} ({reason}) — execução pertence ao app")
+                        await broadcast_to_web({
+                            "type": "STRATEGY_SIGNAL",
+                            "data": {"signal": signal, "boxIndex": new_box["index"], "reason": reason}
+                        })
 
         await asyncio.sleep(0.01)
 

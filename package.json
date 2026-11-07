@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/bridgeSecurity.test.ts tests/tradingGates.test.ts && tsx scripts/bridgeScriptAssert.ts"
+    "test": "tsx --test tests/assetStrategies.test.ts tests/bridgeSecurity.test.ts tests/tradingGates.test.ts && tsx scripts/bridgeScriptAssert.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

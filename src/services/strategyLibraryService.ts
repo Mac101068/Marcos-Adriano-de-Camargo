@@ -1,7 +1,7 @@
 import { AutomationConfig } from '../types/trading';
 import { SavedStrategy } from '../types/strategy';
 import { DEFAULT_EA_CONFIG } from './eaConfigService';
-import { ASSETS, resolveAsset, DEFAULT_ASSET_ID, type AssetId } from '../assets/assetRegistry';
+import { ASSETS, chartSymbolFor, resolveAsset, DEFAULT_ASSET_ID, type AssetId } from '../assets/assetRegistry';
 
 /**
  * Biblioteca de Estratégias do Estúdio (localStorage `fluxo_strategy_library_v1`).
@@ -30,8 +30,7 @@ const RUNTIME_KEYS: ReadonlySet<keyof AutomationConfig> = new Set<keyof Automati
   'strategyId',
   'assetId',
   'symbol',
-  'maxDailyLoss',
-  'maxDailyProfit',
+  'assetStrategyIds',
 ]);
 
 /** Só os campos de runtime presentes em `cfg` (para re-aplicar por cima da estratégia). */
@@ -247,6 +246,102 @@ class StrategyLibraryStore {
     const { operational } = splitStrategyPatch(operationalPatch);
     const merged = mergeConfig({ ...target.config, ...operational });
     return this.save({ ...target, config: merged, updatedAt: Date.now() });
+  }
+
+  /**
+   * Mantém uma estratégia editável por mercado. WDO e BIT nascem como cópias do WIN,
+   * com distâncias de preço e parâmetros operacionais ajustados ao ativo; depois da
+   * criação, cada cópia evolui sem alterar as demais.
+   */
+  ensureAssetStrategies(config: AutomationConfig, selectedAssetId: AssetId) {
+    const ids: Partial<Record<AssetId, string>> = {};
+    for (const assetId of ['WIN', 'WDO', 'BTC', 'BTCBR'] as const) {
+      const strategyId = config.assetStrategyIds?.[assetId];
+      if (typeof strategyId === 'string' && strategyId) ids[assetId] = strategyId;
+    }
+    const strategies = this.list();
+    const sameAsset = (a?: AssetId, b?: AssetId) =>
+      a === b || ((a === 'BTC' || a === 'BTCBR') && (b === 'BTC' || b === 'BTCBR'));
+    const findValid = (id?: string, assetId?: AssetId) => strategies.find(
+      (strategy) => strategy.id === id && sameAsset(strategy.config.assetId, assetId),
+    );
+
+    const activeStrategy = findValid(config.strategyId ?? undefined, config.assetId)
+      ?? strategies.find((strategy) => strategy.id === config.strategyId)
+      ?? this.ensureActiveStrategy(config).strategy;
+
+    const makeAssetCopy = (source: SavedStrategy, assetId: AssetId): SavedStrategy => {
+      const target = ASSETS[assetId];
+      const sourceBoxPoints = Number(source.config.boxPoints) || ASSETS.WIN.tradeDefaults.boxPoints;
+      const scale = target.tradeDefaults.boxPoints / sourceBoxPoints;
+      const pointValues = [
+        'stopLossPoints',
+        'takeProfitPoints',
+        'partialPoints',
+        'breakevenOffsetPoints',
+        'trailingActivationPoints',
+        'trailingDistancePoints',
+        'pyramidTpPoints',
+        'pyramidSlPoints',
+        'pullbackCustomPoints',
+      ] as const;
+      const scaled = Object.fromEntries(
+        pointValues.map((key) => {
+          const value = Number(source.config[key]) || 0;
+          return [key, value === 0 ? 0 : Math.round((value * scale) / target.tickSize) * target.tickSize];
+        }),
+      );
+      const configForAsset = mergeConfig({
+        ...source.config,
+        ...scaled,
+        assetId,
+        symbol: chartSymbolFor(target),
+        profileName: `${source.name} — ${target.id}`,
+        boxPoints: target.tradeDefaults.boxPoints,
+        minDeltaThreshold: target.tradeDefaults.minDeltaThreshold,
+        contracts: target.tradeDefaults.contracts,
+        maxDailyLoss: target.tradeDefaults.maxDailyLoss,
+        maxDailyProfit: target.tradeDefaults.maxDailyProfit,
+        tradingStartTime: target.session.open,
+        tradingStopEntriesTime: target.session.close,
+        tradingCloseAllTime: target.session.close,
+        strategyId: null,
+        active: false,
+      });
+      return this.save(this.newFromConfig(configForAsset, `${source.name} — ${target.id}`));
+    };
+
+    let winStrategy = findValid(ids.WIN, 'WIN');
+    if (!winStrategy && activeStrategy.config.assetId === 'WIN') {
+      winStrategy = activeStrategy;
+    }
+    if (!winStrategy) {
+      winStrategy = makeAssetCopy(activeStrategy, 'WIN');
+    }
+    ids.WIN = winStrategy.id;
+
+    const ensureCopy = (assetId: 'WDO' | 'BTCBR') => {
+      const existing = findValid(ids[assetId], assetId);
+      const selectedLegacyStrategy = sameAsset(selectedAssetId, assetId)
+        && sameAsset(activeStrategy.config.assetId, assetId)
+        ? activeStrategy
+        : undefined;
+      const strategy = existing ?? selectedLegacyStrategy ?? makeAssetCopy(winStrategy!, assetId);
+      ids[assetId] = strategy.id;
+      return strategy;
+    };
+    ensureCopy('WDO');
+    ensureCopy('BTCBR');
+    ids.BTC = ids.BTCBR;
+
+    const resolvedId = ids[selectedAssetId] ?? ids.WIN!;
+    const selectedStrategy = strategies.find((strategy) => strategy.id === resolvedId)
+      ?? this.list().find((strategy) => strategy.id === resolvedId)
+      ?? winStrategy;
+    return {
+      config: { ...config, assetStrategyIds: ids, strategyId: selectedStrategy.id },
+      strategy: selectedStrategy,
+    };
   }
 }
 
