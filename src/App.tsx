@@ -3852,7 +3852,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             // Parcial e Trailing são exclusivos da estratégia Reteste; na Pirâmide só valem TP/stop próprios
 
-            const isPyramidMode = config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE';
+            // C/V também entra aqui: sem alvo, sem stop e sem parcial por contrato — a única saída
+            // é o sinal oposto. Sem essa marca, a C/V caía no ramo do Reteste e a parcial/breakeven
+            // liquidavam a posição sozinhas (foi o que fechou a operação com o SL em zero).
+            const isPyramidMode =
+              config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' || config.strategyMode === 'SIGNAL_STACK';
 
 
 
@@ -4151,6 +4155,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
             // 3. CHECAGEM DE TAKE PROFIT (apenas se configurado > 0)
+            //    ZERO = SEM ALVO. Um alvo em 0 não pode disparar: com preço sempre maior que zero,
+            //    uma comparação solta fecharia a posição no primeiro tick. A guarda `> 0` é a regra.
 
             const hitTP = ord.takeProfit > 0 && (isBuy ? curPrice >= ord.takeProfit : curPrice <= ord.takeProfit);
 
