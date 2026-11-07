@@ -7652,19 +7652,24 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     const assetParams = getAssetTradeParams(id);
     const unconfirmed = next.status === 'a_confirmar';
 
+    // TROCAR DE ATIVO NÃO TROCA A ESTRATÉGIA.
+    // Antes, este trecho sobrescrevia stop, alvo, parcial, breakeven, trailing, delta e contratos
+    // com os `tradeDefaults` do REGISTRO do ativo. Efeito real: o operador escolhia o preset
+    // C/V DÓLAR (stop 0, alvo 0, box 2,5) e, ao clicar na aba do dólar, tudo era derrubado pelos
+    // números de fábrica do ativo — a C/V voltava a ter stop e alvo sem ninguém pedir.
+    //
+    // Nova regra: do ativo vem só o que é DELE (box, range, símbolo). Os campos de gestão ficam
+    // com a estratégia ativa — que é a fonte única, conforme a padronização de 07/11.
+    const assetOwned = {
+      boxPoints: assetParams.boxPoints,
+      minDeltaThreshold: assetParams.minDeltaThreshold,
+    };
     const updated: AutomationConfig = {
       ...config,
       assetId: id,
       // Gráfico no vigente do ativo novo (sem vencimento confirmado, cai na contínua do registro).
       symbol: chartSymbolFor(next),
-      boxPoints: assetParams.boxPoints,
-      stopLossPoints: assetParams.stopLossPoints,
-      takeProfitPoints: assetParams.takeProfitPoints,
-      partialPoints: assetParams.partialPoints,
-      breakevenOffsetPoints: assetParams.breakevenOffsetPoints,
-      trailingDistancePoints: assetParams.trailingDistancePoints,
-      minDeltaThreshold: assetParams.minDeltaThreshold,
-      contracts: assetParams.contracts,
+      ...assetOwned,
       // Ensaio de spec não homologado nunca acorda o Robô (decisão 2 do plano).
       active: unconfirmed ? false : config.active,
       lastSavedTimestamp: Date.now(),
