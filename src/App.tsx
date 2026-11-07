@@ -264,24 +264,6 @@ const ALT_RENKO_SCALES: { key: 'renko15r' | 'renko20r' | 'renko25r'; pts: number
 
 const REPLAY_DAY_CHOICES = [1, 3, 5];
 
-function marketSessionKey(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function latestSessionTicks(ticks: Tick[]): Tick[] {
-  const grouped = new Map<string, Tick[]>();
-  for (const tick of ticks) {
-    const key = marketSessionKey(tick.timestamp);
-    const session = grouped.get(key) ?? [];
-    session.push(tick);
-    grouped.set(key, session);
-  }
-  const dates = [...grouped.keys()].sort();
-  const latestDate = dates[dates.length - 1];
-  return latestDate ? grouped.get(latestDate) ?? [] : [];
-}
-
 /** Identifica se o símbolo recebido pela rede corresponde ao ativo atualmente em foco na tela. */
 function getAssetIdForSymbol(symbolStr?: string): AssetId {
   if (!symbolStr) return 'WIN';
@@ -535,9 +517,13 @@ export default function App() {
 
   const [simulationSpeed, setSimulationSpeed] = useState<number>(() => {
 
+    // Aceita fração: 0,25x e 0,5x existem porque na série Renko o pregão inteiro vira poucas
+    // centenas de blocos — em 1x ele acaba antes de dar para acompanhar a formação.
     const saved = Number(localStorage.getItem('fluxo_sim_speed_v1'));
 
-    return saved >= 1 ? Math.min(10, Math.round(saved)) : 1;
+    const validos = [0.25, 0.5, 1, 2, 3, 5, 10];
+
+    return validos.includes(saved) ? saved : 1;
 
   });
 
@@ -556,10 +542,6 @@ export default function App() {
   });
 
   const [isReplaying, setIsReplaying] = useState<boolean>(false);
-  const isReplayingRef = useRef(isReplaying);
-  useEffect(() => {
-    isReplayingRef.current = isReplaying;
-  }, [isReplaying]);
 
   // Backtest com Ticks Reais (MT5 XP)
 
@@ -709,6 +691,14 @@ export default function App() {
   const [ticks, setTicks] = useState<Tick[]>([]);
 
   const [boxes, setBoxes] = useState<RenkoBox[]>([]);
+  // Última resposta da ponte sobre o backfill do gráfico (diagnóstico visível na tela)
+  const [bfDiag, setBfDiag] = useState<string>('');
+  // A faixa de diagnóstico é temporária: mostra o que a ponte entregou e sai da frente.
+  useEffect(() => {
+    if (!bfDiag) return;
+    const t = window.setTimeout(() => setBfDiag(''), 5000);
+    return () => window.clearTimeout(t);
+  }, [bfDiag]);
 
   // Emendas de pregão (fechamento de ontem → abertura de hoje) da série Renko em tela.
 
@@ -755,6 +745,7 @@ export default function App() {
     return 'renko';
 
   });
+
 
   const [rangePoints, setRangePoints] = useState<number>(() => Number(localStorage.getItem('fluxo_chart_range_pts_v1')) || 50);
 
@@ -3998,7 +3989,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-
                 const partialEvt = OrderAuditService.createEvent(
 
                   'PARTIAL_FILLED',
@@ -4634,66 +4624,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             });
 
-            const historyReqId = `connect-backfill-${Date.now()}`;
-            void marketHistoryService.requestHistory({
-              reqId: historyReqId,
-              symbol: chartSymbolFor(asset),
-              days: 10,
-              asset,
-              timeoutMs: 120_000,
-              send: (message) => {
-                if (socket.readyState !== WebSocket.OPEN) {
-                  throw new Error('A conexão com a ponte foi encerrada antes do pedido de histórico.');
-                }
-                socket.send(message);
-              },
-            }).then(({ ticks }) => {
-              if (
-                wsRef.current !== socket ||
-                socket.readyState !== WebSocket.OPEN ||
-                isReplayingRef.current ||
-                activeAssetIdRef.current !== asset.id
-              ) return;
-              const sessionTicks = latestSessionTicks(ticks);
-              if (sessionTicks.length === 0) {
-                setLatestToast({
-                  id: `mt5-history-empty-${Date.now()}`,
-                  type: 'INFO',
-                  title: 'PONTE CONECTADA · SEM HISTÓRICO RECENTE',
-                  description: `A conexão e autenticação funcionam, mas o MT5 não retornou ticks recentes de ${chartSymbolFor(asset)}. Confira se esse contrato tem histórico carregado no terminal.`,
-                  timestamp: Date.now(),
-                });
-                return;
-              }
-              const lastHistoryTick = sessionTicks[sessionTicks.length - 1];
-              const liveTail = allTicksRef.current
-                .filter((tick) =>
-                  tick.timestamp > lastHistoryTick.timestamp &&
-                  marketSessionKey(tick.timestamp) === marketSessionKey(lastHistoryTick.timestamp) &&
-                  tick.price > 0
-                )
-                .sort((a, b) => a.timestamp - b.timestamp);
-              const chartTicks = [...sessionTicks, ...liveTail];
-              handleBackfillTicks(chartTicks);
-              const sessionDate = new Date(sessionTicks[0].timestamp).toLocaleDateString('pt-BR');
-              setLatestToast({
-                id: `mt5-history-loaded-${Date.now()}`,
-                type: 'INFO',
-                title: 'ÚLTIMO PREGÃO CARREGADO',
-                description: `${chartTicks.length.toLocaleString('pt-BR')} ticks de ${sessionDate} exibidos no gráfico. O histórico é somente visualização; não gera ordens.`,
-                timestamp: Date.now(),
-              });
-            }).catch((error: unknown) => {
-              if (wsRef.current !== socket || socket.readyState !== WebSocket.OPEN) return;
-              setLatestToast({
-                id: `mt5-history-error-${Date.now()}`,
-                type: 'INFO',
-                title: 'PONTE CONECTADA · HISTÓRICO INDISPONÍVEL',
-                description: error instanceof Error ? error.message : 'O MT5 não conseguiu entregar o histórico recente.',
-                timestamp: Date.now(),
-              });
-            });
-
           } else if (payload.type === 'ACCOUNT_INFO') {
 
             // script antigo nunca manda AUTH_RESULT: o ACCOUNT_INFO antes denuncia a ponte legado
@@ -4958,73 +4888,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               }
             }
 
-          } else if (payload.type === 'SESSION_BACKFILL') {
-            const bfSym = String(payload.symbol || '').toUpperCase();
-            const bfAssetId = getAssetIdForSymbol(bfSym);
-            const targetState = assetStateRef.current[bfAssetId] || (bfAssetId === 'BTC' ? assetStateRef.current.BTCBR : bfAssetId === 'BTCBR' ? assetStateRef.current.BTC : undefined);
-            const bfAssetSpec = ASSETS[bfAssetId] || (bfAssetId === 'BTC' ? ASSETS.BTCBR : undefined) || asset;
-            const bfTicks: Tick[] = (payload.data?.ticks || [])
-              .filter((t: Tick) => t && Number.isFinite(t.price) && t.price > 0 && Math.abs(t.price - bfAssetSpec.basePrice) / bfAssetSpec.basePrice < 0.4)
-              .map((t: Tick) =>
-                t && Number.isFinite(Number(t.timestamp)) ? { ...t, timeStr: formatTickTimeStr(Number(t.timestamp)) } : t,
-              );
-
-            if (targetState && Array.isArray(bfTicks) && bfTicks.length > 0) {
-              const bfAssetSpec = ASSETS[bfAssetId] || asset;
-              const bfTradeParams = getAssetTradeParams(bfAssetId);
-              targetState.engine.setAsset(bfAssetSpec);
-              targetState.engine.setBoxPoints(bfTradeParams.boxPoints);
-
-              const firstTick = bfTicks[0];
-              if (firstTick && firstTick.price > 0) {
-                targetState.engine.initialize(firstTick.price, firstTick.timestamp);
-                targetState.rangeEngine.initialize(firstTick.price);
-                targetState.timeEngine.initialize(firstTick.price);
-              }
-              targetState.allTicks = [...bfTicks];
-              targetState.ticks = [...bfTicks.slice(-100)].reverse();
-              const bgBfConfig: AutomationConfig = {
-                ...config,
-                assetId: bfAssetId,
-                boxPoints: bfTradeParams.boxPoints,
-                minDeltaThreshold: bfTradeParams.minDeltaThreshold,
-              };
-              for (const raw of bfTicks) {
-                if (!raw || !(raw.price > 0)) continue;
-                targetState.engine.processTick(raw, bgBfConfig);
-                targetState.rangeEngine.processTick(raw);
-                targetState.timeEngine.processTick(raw);
-              }
-              targetState.boxes = [...targetState.engine.getBoxes()];
-              targetState.sessionGaps = [...targetState.engine.getSessionGaps()];
-              targetState.currentBox = targetState.engine.getCurrentBox();
-              targetState.cvd = targetState.engine.getCvd();
-              targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
-              targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
-              targetState.timeBoxes = [...targetState.timeEngine.getBoxes()];
-              targetState.timeCurrentBox = targetState.timeEngine.getCurrentBox();
-              targetState.currentPrice = bfTicks[bfTicks.length - 1].price;
-
-              const currentActiveId = activeAssetIdRef.current;
-              const isCurrent = bfAssetId === currentActiveId || (currentActiveId === 'BTC' && bfAssetId === 'BTCBR') || (currentActiveId === 'BTCBR' && bfAssetId === 'BTC');
-              if (isCurrent) {
-                engineRef.current = targetState.engine;
-                rangeEngineRef.current = targetState.rangeEngine;
-                timeEngineRef.current = targetState.timeEngine;
-                allTicksRef.current = targetState.allTicks;
-                setBoxes([...targetState.boxes]);
-                setSessionGaps([...targetState.sessionGaps]);
-                setCurrentBox(targetState.currentBox);
-                setCvd(targetState.cvd);
-                setTicks([...targetState.ticks]);
-                setRangeBoxes([...targetState.rangeBoxes]);
-                setRangeCurrentBox(targetState.rangeCurrentBox);
-                setTimeBoxes([...targetState.timeBoxes]);
-                setTimeCurrentBox(targetState.timeCurrentBox);
-                setCurrentPrice(targetState.currentPrice);
-              }
-            }
-
           } else if (MarketHistoryService.handles(payload.type)) {
 
             // HISTÓRICO REAL (Fase 2): chunks/done/erro do pedido feito pelo replay. A correlação,
@@ -5032,6 +4895,77 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             // a deduplicação por id e o timeout moram no serviço, não aqui.
 
             marketHistoryService.ingest(payload);
+
+          } else if (payload.type === 'SESSION_BACKFILL') {
+            const bfSym = String(payload.symbol || '').toUpperCase();
+            const bfAssetId = getAssetIdForSymbol(bfSym);
+            const bfAssetSpec = ASSETS[bfAssetId] || asset;
+            const bfBoxPoints = Number(payload.data?.boxPoints) || config.boxPoints;
+
+            // A ponte manda os boxes do ÚLTIMO PREGÃO já formados (reconstruídos do tick real).
+            // Converte o formato do Python para o RenkoBox do app e adota como estado do ativo.
+            const bfRecebidos = (payload.data?.boxes || []).length;
+            const bfBoxes: RenkoBox[] = (payload.data?.boxes || [])
+              .map((b: any, i: number) => ({
+                index: Number(b?.index ?? i),
+                direction: b?.direction === 'UP' ? 'UP' : 'DOWN',
+                open: Number(b?.open),
+                close: Number(b?.close),
+                high: Number(b?.high),
+                low: Number(b?.low),
+                timeStart: Number(b?.timestamp) || 0,
+                timeEnd: Number(b?.timestamp) || 0,
+                ticksCount: Number(b?.ticks_count) || 0,
+                totalVolume: (Number(b?.buy_volume) || 0) + (Number(b?.sell_volume) || 0),
+                buyVolume: Number(b?.buy_volume) || 0,
+                sellVolume: Number(b?.sell_volume) || 0,
+                delta: Number(b?.delta) || 0,
+                cvdAtClose: Number(b?.cvd_at_close) || 0,
+                isConvergence: false,
+                regimeFactor: Number(b?.regime_factor) || undefined,
+              }))
+              .filter((b: RenkoBox) => Number.isFinite(b.close) && b.close > 0 && Number.isFinite(b.open) && b.open > 0);
+
+            // Diagnóstico visível: se a ponte mandou algo e a tela não desenha, o toast diz o porquê
+            // (antes o descarte era silencioso e o operador via só "ponte conectada, gráfico vazio").
+            if (bfBoxes.length === 0) {
+              setBfDiag(`PONTE → ${bfSym}: ${bfRecebidos} box(es) recebido(s), NENHUM válido · box em uso ${bfBoxPoints} pts`);
+            }
+
+            if (bfBoxes.length > 0) {
+              const lastBf = bfBoxes[bfBoxes.length - 1];
+              const lastPrice = Number(payload.data?.lastPrice) || lastBf.close;
+              const targetState = assetStateRef.current[bfAssetId];
+
+              // Diagnóstico na tela: diz quantos boxes a ponte mandou e quantos sobreviveram ao
+              // filtro. Sem isso o descarte era silencioso ("aguardando ticks" eterno).
+              setBfDiag(`PONTE → ${bfSym}: ${bfRecebidos} box(es) recebido(s), ${bfBoxes.length} válido(s) · ativo=${bfAssetId} · série=${chartSeries}`);
+
+              if (targetState) {
+                targetState.boxes = bfBoxes;
+                targetState.currentPrice = lastPrice;
+                targetState.cvd = Number(payload.data?.cvd) || lastBf.cvdAtClose;
+              }
+
+              const currentActiveId = activeAssetIdRef.current;
+              const isCurrent =
+                bfAssetId === currentActiveId ||
+                (currentActiveId === 'BTC' && bfAssetId === 'BTCBR') ||
+                (currentActiveId === 'BTCBR' && bfAssetId === 'BTC');
+
+              if (isCurrent) {
+                setBoxes(bfBoxes);
+                setCurrentPrice(lastPrice);
+                if (Number.isFinite(Number(payload.data?.cvd))) setCvd(Number(payload.data.cvd));
+                setLatestToast({
+                  id: `bf-${Date.now()}`,
+                  type: 'INFO',
+                  title: '📈 PREGÃO CARREGADO DA PONTE',
+                  description: `${bfBoxes.length} boxes Renko de ${bfSym} (${payload.data?.tickSource === 'TICKS' ? 'tick real' : 'barras de 1 min'}), box de ${bfBoxPoints} pts. Gráfico parado para estudo.`,
+                  timestamp: Date.now(),
+                });
+              }
+            }
 
           } else if (payload.type === 'MT5_EQUITY_UPDATE') {
 
@@ -6597,6 +6531,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       timestamp: Date.now(),
     });
 
+    // A ponte segura o ensaio sozinha: entra em modo validação agora e só sai quando o replay
+    // termina (REPLAY_END). Assim uma queda da aba no meio do teste não abre entrada de verdade.
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ action: 'REPLAY_START' }));
+      }
+    } catch {}
+
     setIsReplaying(true);
     setReplayProgress(0);
 
@@ -6881,21 +6823,26 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       // Em 2x, 3x, 5x, 10x: acelera o avanço para análise ágil e instantânea.
       const isDense = replayTicks > 25000;
       const paceFor = (s: number) => {
+        // FRAÇÕES: 0,5x entrega 1 tick a cada 2 passos e 0,25x 1 a cada 4 — mais devagar que
+        // o passo base sem inventar espera artificial no laço.
+        if (s <= 0.5) {
+          return { speed: s, stepMs: 40, chunk: s <= 0.25 ? 1 : 1, divisor: s <= 0.25 ? 4 : 2 };
+        }
         const speed = Math.max(1, Math.min(10, Math.round(s)));
         if (speed === 1) {
-          return { speed: 1, stepMs: 30, chunk: isDense ? 45 : 4 };
+          return { speed: 1, stepMs: 30, chunk: isDense ? 45 : 4, divisor: 1 };
         }
         if (speed === 2) {
-          return { speed: 2, stepMs: 25, chunk: isDense ? 100 : 8 };
+          return { speed: 2, stepMs: 25, chunk: isDense ? 100 : 8, divisor: 1 };
         }
         if (speed === 3) {
-          return { speed: 3, stepMs: 20, chunk: isDense ? 220 : 18 };
+          return { speed: 3, stepMs: 20, chunk: isDense ? 220 : 18, divisor: 1 };
         }
         if (speed === 5) {
-          return { speed: 5, stepMs: 16, chunk: isDense ? 500 : 40 };
+          return { speed: 5, stepMs: 16, chunk: isDense ? 500 : 40, divisor: 1 };
         }
         // 10x = Modo ultrarrápido
-        return { speed: 10, stepMs: 16, chunk: isDense ? 1200 : 90 };
+        return { speed: 10, stepMs: 16, chunk: isDense ? 1200 : 90, divisor: 1 };
       };
 
       let pace = paceFor(simulationSpeedRef.current);
@@ -6931,6 +6878,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         setReplayProgress(0);
 
         setIsReplaying(false);
+
+        // Fim do ensaio: a ponte volta ao estado em que estava antes do replay.
+        try {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ action: 'REPLAY_END' }));
+          }
+        } catch {}
 
         // Meta da corrida (dias/velocidade/seed/modo). O PnL em si é somado no efeito de
 
@@ -6985,9 +6939,19 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
         const upto = Math.min(ticks.length, cursor + pace.chunk);
 
-        for (; cursor < upto; cursor += 1) stepFor(ticks[cursor]);
-
-        publish(upto);
+        // A CADA N PASSOS: nas frações (¼x e ½x) só a cada 4 ou 2 passos — o gráfico anda devagar
+        // de verdade, sem inflar o passo base e sem atrasar a interface.
+        // O cursor e o `upto` são locais deste passo: pular a entrega NÃO pode deixar o cursor
+        // para trás, senão o laço nunca alcança o fim da fita e o replay para no meio.
+        const divisor = (pace as { divisor?: number }).divisor ?? 1;
+        const entregar = divisor <= 1 || iters % divisor === 0;
+        if (entregar) {
+          for (; cursor < upto; cursor += 1) stepFor(ticks[cursor]);
+          publish(upto);
+        } else {
+          // avança o cursor mesmo sem entregar: o passo seguinte parte do lugar certo
+          cursor = upto;
+        }
 
         // O buffer de ticks (contador da tela Simulador e repick das séries) sincroniza a cada
 
@@ -7792,12 +7756,15 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     }
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setBfDiag(`ATIVO SELECIONADO → ${chartSymbolFor(next)} · box de ${assetParams.boxPoints} pts`);
       wsRef.current.send(JSON.stringify({
         action: 'SELECT_ASSET',
         assetId: id,
         symbol: chartSymbolFor(next),
         boxPoints: assetParams.boxPoints,
       }));
+      // O backfill é por contrato: ao trocar de ativo, o gráfico novo precisa do próprio pregão
+      // (o Dólar não recebia nada porque o pedido saía com o símbolo do ativo anterior).
       wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(next) }));
       wsRef.current.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(next) }));
     }
@@ -8553,7 +8520,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 ⚡ Vel:
               </span>
               <div className="flex items-center gap-0.5">
-                {[1, 2, 3, 5, 10].map((s) => (
+                {[0.25, 0.5, 1, 2, 3, 5, 10].map((s) => (
                   <button
                     key={s}
                     onClick={() => setSimulationSpeed(s)}
@@ -8562,9 +8529,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                         ? 'bg-amber-500 text-slate-950 shadow-[0_0_6px_rgba(245,158,11,0.5)] scale-105'
                         : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
                     }`}
-                    title={`Definir velocidade em ${s}x (${s === 1 ? '1min45 por pregão' : s === 2 ? '55s' : s === 3 ? '35s' : s === 5 ? '15s' : '5s'})`}
+                    title={`Definir velocidade em ${s}x (${
+                      s === 0.25 ? 'bem devagar — 1 tick a cada 4 passos'
+                      : s === 0.5 ? 'devagar — 1 tick a cada 2 passos'
+                      : s === 1 ? '1min45 por pregão'
+                      : s === 2 ? '55s' : s === 3 ? '35s' : s === 5 ? '15s' : '5s'
+                    })`}
                   >
-                    {s}x
+                    {s === 0.25 ? '¼x' : s === 0.5 ? '½x' : `${s}x`}
                   </button>
                 ))}
               </div>
@@ -8984,6 +8956,8 @@ ${
                   currentAssetId={asset.id}
                   onSelectAsset={handleSelectAsset}
                   isMt5Connected={mt5State.status === 'CONNECTED'}
+                  strategyMode={config.strategyMode}
+                  onSelectStrategy={(m) => handleBoletaConfigPatch({ strategyMode: m })}
                   assetStates={{
                     WIN: {
                       currentPrice: (asset.id === 'WIN' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4)
@@ -9014,6 +8988,7 @@ ${
                 <RenkoFlowChart
 
                   boxes={chartSeries === 'renko' ? boxes : chartSeries === 'range' ? rangeBoxes : timeBoxes}
+
 
                   sessionGaps={chartSeries === 'renko' ? sessionGaps : []}
 
@@ -10025,6 +10000,14 @@ ${
 
           Avisos marcados com chartOnly (ordens executadas/enviadas) só aparecem na aba Gráfico. */}
 
+      {/* DIAGNÓSTICO DA PONTE: faixa fixa no topo, visível em qualquer aba. Existe porque o toast
+          se sobrepõe a outros avisos e o operador não tinha como ver se o backfill chegou. */}
+      {bfDiag && (
+        <div className="fixed top-0 left-0 right-0 z-[60] bg-amber-500 text-slate-950 text-[11px] font-bold px-3 py-1 text-center">
+          {bfDiag}
+        </div>
+      )}
+
       {latestToast && (activeTab === 'chart' || !latestToast.chartOnly) && (
 
         <div
@@ -10142,3 +10125,4 @@ ${
   );
 
 }
+

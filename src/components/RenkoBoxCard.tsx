@@ -16,7 +16,7 @@ interface HudPosition {
 
 interface RenkoBoxCardProps {
   box: RenkoBox;
-  haState: 'UP' | 'DOWN' | 'REVERSAL' | null;
+  haState: 'UP' | 'DOWN' | 'REVERSAL' | 'ABSORPTION' | null;
   /** true quando o operador está inspecionando um box antigo com o mouse */
   isInspection: boolean;
   /** tamanho da área do canvas, usado para manter o card dentro da área visível */
@@ -75,13 +75,21 @@ const BoxRows: React.FC<{ box: RenkoBox; haState: RenkoBoxCardProps['haState']; 
         <span className="text-slate-400">Fluxo Heikin-Ashi:</span>
         <span
           className={`font-bold flex items-center gap-1 ${
-            haState === 'UP' ? 'text-emerald-400' : haState === 'DOWN' ? 'text-rose-400' : 'text-slate-300'
+            haState === 'UP'
+              ? 'text-emerald-400'
+              : haState === 'DOWN'
+              ? 'text-rose-400'
+              : haState === 'ABSORPTION'
+              ? 'text-amber-400'
+              : 'text-slate-300'
           }`}
         >
           {haState === 'UP'
             ? '▲ SUBIDA (VERDE)'
             : haState === 'DOWN'
             ? '▼ DESCIDA (VERMELHO)'
+            : haState === 'ABSORPTION'
+            ? '◇ ABSORÇÃO (ÂMBAR)'
             : '⚡ REVERSÃO (CINZA)'}
         </span>
       </div>

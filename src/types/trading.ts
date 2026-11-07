@@ -275,7 +275,8 @@ export interface AutomationConfig {
   tradingCloseAllTime: string; // Zeragem compulsória do pregão ("HH:MM", padrão "17:30")
 
   // Modalidade de Estratégia Quantitativa
-  strategyMode: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE'; // Reteste clássico ou Pirâmide com Confluência de Fluxo
+  // Reteste clássico, Pirâmide com Confluência de Fluxo, ou Acumulação por Sinal (só C/V)
+  strategyMode: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE' | 'SIGNAL_STACK';
   pyramidTpPoints: number; // Saída de TP para as ordens adicionais da pirâmide (padrão 50 pts)
   pyramidSlPoints: number; // Stop fixo OPCIONAL das ordens da pirâmide (0 = sem stop, saída só por inversão; se > 0, mínimo válido 25 pts)
   pyramidContracts: number; // Contratos para cada nova ordem da pirâmide (padrão 1 ctro)

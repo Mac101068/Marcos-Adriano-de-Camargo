@@ -582,7 +582,7 @@ export const DocumentationView: React.FC<DocumentationViewProps> = ({
               Executar o Script Python
             </div>
             <p className="text-slate-400 leading-relaxed pl-7">
-              Para atualizar uma ponte em execução, pressione Ctrl+C no terminal do Windows e baixe o script novamente pelo app, substituindo o arquivo nesta pasta. O download mantém o token já salvo no navegador; não gere um token novo. Depois execute:
+              Salve o arquivo baixado (<code className="text-slate-200">bot_mt5_convergencia_10r.py</code>) em uma pasta no seu computador. No terminal aberto nessa pasta, execute:
             </p>
             <div className="ml-7 flex items-center justify-between p-2.5 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-emerald-300">
               <code>python bot_mt5_convergencia_10r.py</code>

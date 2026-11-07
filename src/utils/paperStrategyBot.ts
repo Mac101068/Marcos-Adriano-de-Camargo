@@ -352,7 +352,9 @@ export class PaperStrategyBot {
       this.consecutiveDir = 0;
       return;
     }
-    if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
+    if (config.strategyMode === 'SIGNAL_STACK') {
+      this.stepSignalStack(box, signal, config);
+    } else if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
       this.stepPyramid(box, signal, config);
     } else {
       this.stepPullback(box, signal, config);
@@ -575,6 +577,45 @@ export class PaperStrategyBot {
   // =========================================================================
   // RETESTE / PULLBACK CLÁSSICO (SL, TP, parcial e breakeven pela config)
   // =========================================================================
+  // =========================================================================
+  // ACUMULAÇÃO POR SINAL (SIGNAL_STACK) — a leitura literal da tela
+  //
+  // A tela imprime C (compra) e V (venda) em cada box que fecha com confluência.
+  // Aqui o robô faz exatamente o que está escrito:
+  //   · sinal C  → abre 1 contrato comprado (se já há comprado, acumula mais um)
+  //   · sinal V  → abre 1 contrato vendido (se já há vendido, acumula mais um)
+  //   · sinal oposto → FECHA TODAS as posições abertas e zera a pilha
+  //   · tela fechando o dia → quita tudo (DAY_CLOSE)
+  // Sem TP por contrato, sem stop fixo, sem breakeven: a única saída é a virada.
+  // A pilha é limitada por maxSimultaneousPositions para não virar alavancagem sem fim.
+  // =========================================================================
+  private stepSignalStack(box: RenkoBox, signal: 'BUY' | 'SELL' | undefined, config: AutomationConfig) {
+    if (!signal) return;
+
+    const opposite = this.openPositions.filter((p) => p.trade.direction !== signal);
+    if (opposite.length > 0) {
+      for (const pos of opposite) this.book(pos.trade, box.close, box.timeEnd, 'FLIP_REVERSAL');
+      this.openPositions = this.openPositions.filter((p) => p.trade.direction === signal);
+      // A virada fecha TUDO do lado contrário e a pilha recomeça do zero.
+      this.openPositions = [];
+      this.pendingEntries = [];
+    }
+
+    if (this.entryWindowBlocked(box.timeEnd, config)) return;
+    const cap = Math.max(1, config.maxSimultaneousPositions ?? 15);
+    if (this.openPositions.length >= cap) return;
+
+    this.openPyramidPosition(
+      signal,
+      this.openPositions.length === 0 ? 'MAIN' : 'PYRAMID',
+      Math.max(1, config.contracts ?? 1),
+      box.close,
+      box.timeEnd,
+      config,
+      `Sinal ${signal === 'BUY' ? 'C' : 'V'} no box #${box.index}`
+    );
+  }
+
   private stepPullback(box: RenkoBox, signal: 'BUY' | 'SELL' | undefined, config: AutomationConfig) {
     // 1) Gere as posições abertas contra a caminhada do preço (SL antes de TP: conservador)
     for (const pos of [...this.openPositions]) {

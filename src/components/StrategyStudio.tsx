@@ -61,6 +61,7 @@ interface StrategyStudioProps {
 const MODE_LABEL: Record<AutomationConfig['strategyMode'], string> = {
   PULLBACK_RETEST: 'Reteste (Pullback)',
   PYRAMID_FLOW_CONFLUENCE: 'Pirâmide & Confluência',
+  SIGNAL_STACK: 'Acumulação por Sinal (C/V)',
 };
 
 const scaleLabel = (pts: number, asset: AssetSpec) =>

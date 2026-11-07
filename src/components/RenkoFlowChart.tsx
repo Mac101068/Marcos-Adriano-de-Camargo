@@ -104,7 +104,7 @@ interface RenkoFlowChartProps {
   onContractsChange?: (v: number) => void;
   isRealMT5Connected?: boolean;
   /** Modo da estratégia exibido na boleta (Pirâmide não tem SL/TP fixo). */
-  strategyMode?: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE';
+  strategyMode?: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE' | 'SIGNAL_STACK';
   enablePartialExit?: boolean;
   partialPoints?: number;
   partialContracts?: number;
@@ -290,7 +290,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   const lastLayoutSigRef = useRef<string>('');
 
   // Armazena posições dos boxes para hit-testing sem causar re-render cíclico
-  const boxPositionsRef = useRef<{ x: number; box: RenkoBox; index: number; haState?: 'UP' | 'DOWN' | 'REVERSAL' }[]>([]);
+  const boxPositionsRef = useRef<{ x: number; box: RenkoBox; index: number; haState?: 'UP' | 'DOWN' | 'REVERSAL' | 'ABSORPTION' }[]>([]);
 
   // Referência para gestos de touch em celulares
   const touchStartRef = useRef<{
@@ -936,7 +936,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
     // No Preencher denso (multidia) o tijolo encolhe junto com o vão, para nunca sobrepor;
     // piso 1px: com milhares de tijolos o gráfico vira um "bloco" contínuo legível como silhueta
-    boxWidth = Math.min(boxWidth, Math.max(1, stepX - (stepX >= 8 ? 2 : stepX >= 3 ? 0.5 : 0.2)));
+    // VÃO MÍNIMO REAL: o tijolo nunca encosta no vizinho. O piso do vão (0,2) somado ao piso da
+    // largura (1px) deixava os dois maiores que o passo em zoom baixo — os tijolos se sobrepunham
+    // e o gráfico virava um bloco. Aqui a largura é sempre menor que o passo.
+    boxWidth = Math.max(0.5, Math.min(boxWidth, stepX - Math.max(0.3, stepX * 0.12)));
 
     // Âncora à direita COM PAN CONTÍNUO: a série desliza effectiveScroll * stepX PIXELS, e não
     // "N tijolos inteiros." É isso que faz o arrasto horizontal seguir a mão 1:1 em vez de grudar
@@ -1040,48 +1043,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const deltaThisBox = b.delta ?? 0;
       const decisiveFlow = deltaThisBox !== 0 && Math.abs(deltaThisBox) >= effThreshold;
 
-      // ── Exaustão: verde/vermelho que perde força em relação ao anterior do mesmo lado vira cinza ──
-      const prevDelta = i > 0 ? displayedBoxes[i - 1].delta ?? 0 : 0;
-      const sameSideAsPrev =
-        deltaThisBox !== 0 && prevDelta !== 0 && Math.sign(deltaThisBox) === Math.sign(prevDelta);
-      const losingForce =
-        sameSideAsPrev && decisiveFlow && Math.abs(deltaThisBox) <= Math.abs(prevDelta) * EXHAUST_DECAY_RATIO;
-
-      const isUp = b.direction === 'UP' || b.close >= b.open;
-      // Absorção / Divergência de Fluxo:
-      // Preço sobe mas com delta vendedor expressivo (absorção passiva de venda no suporte)
-      // Preço cai mas com delta comprador expressivo (absorção passiva de compra na resistência)
-      // Ou marcado como DIVERGENCE
-      const isAbsorptionBuy = isUp && deltaThisBox <= -effThreshold * 0.25;
-      const isAbsorptionSell = !isUp && deltaThisBox >= effThreshold * 0.25;
-      const isDivergence = b.convergenceType === 'DIVERGENCE' || isAbsorptionBuy || isAbsorptionSell;
-
-      let state: 'UP' | 'DOWN' | 'REVERSAL' | 'ABSORPTION';
-      if (isDivergence) {
-        state = 'ABSORPTION';
-      } else if (!decisiveFlow || losingForce) {
-        state = 'REVERSAL';
-      } else {
-        state = deltaThisBox > 0 ? 'UP' : 'DOWN';
-      }
-
-      const colorFill =
-        state === 'ABSORPTION'
-          ? '#eab308'
-          : state === 'REVERSAL'
-          ? '#71717a'
-          : state === 'UP'
-          ? '#10b981'
-          : '#ef4444';
-
-      const colorStroke =
-        state === 'ABSORPTION'
-          ? '#ca8a04'
-          : state === 'REVERSAL'
-          ? '#52525b'
-          : state === 'UP'
-          ? '#059669'
-          : '#dc2626';
+      // COR ÚNICA POR DIREÇÃO: o candle de fluxo é verde quando o delta do box é comprador e
+      // vermelho quando é vendedor. Sem cinza de exaustão, sem âmbar de absorção — a regra
+      // anterior pintava de três cores e poluía a leitura do fluxo.
+      const state: 'UP' | 'DOWN' = deltaThisBox >= 0 ? 'UP' : 'DOWN';
+      const colorFill = state === 'UP' ? '#10b981' : '#ef4444';
+      const colorStroke = state === 'UP' ? '#059669' : '#dc2626';
 
       const haObj: FlowHeikinAshi = {
         open: haOpen,
@@ -1147,19 +1114,21 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }
     });
 
-    const isWdo = asset?.id === 'WDO';
     const isBtc = asset?.id === 'BTCBR' || asset?.id === 'BTC';
-    const minRange = isWdo ? 4 : isBtc ? 100 : 50;
+    // ESCALA ACOPLADA AO BOX (fonte única: renkoBoxPoints). Antes a folga e o piso do range eram
+    // fixos por ativo (1,5 pt no WDO, 16 no WIN): com box pequeno a folga devorava o painel e com
+    // box grande sobrava espaço morto. Agora tudo deriva do tamanho do tijolo, então trocar o R
+    // reenquadra o gráfico sozinho.
+    const boxPts = Math.max(0.5, Number(renkoBoxPoints) || (isBtc ? 500 : 50));
+    const minRange = boxPts * 4;
     const priceRange = Math.max(minRange, maxPrice - minPrice);
-    // Folga da auto-escala (sem zoom Y): 7% do range com piso proporcional ao ativo
-    const minPad = isWdo ? 1.5 : isBtc ? 60 : 16;
-    const minPadZoom = isWdo ? 3.0 : isBtc ? 120 : 30;
-    const pricePadding = scaleY === 1.0 ? Math.max(minPad, priceRange * 0.07) : Math.max(minPadZoom, priceRange * 0.12);
+    // Folga da auto-escala: 60% de um box em cima e embaixo (sem zoom), 90% com zoom Y
+    const pricePadding = scaleY === 1.0 ? Math.max(boxPts * 0.6, priceRange * 0.07) : Math.max(boxPts * 0.9, priceRange * 0.12);
     minPrice -= pricePadding;
     maxPrice += pricePadding;
 
     const baseMidPrice = (maxPrice + minPrice) / 2;
-    const minBaseRange = isWdo ? 2.5 : isBtc ? 40 : 10;
+    const minBaseRange = boxPts * 2;
     const basePriceRange = Math.max(minBaseRange, maxPrice - minPrice);
 
     const effectivePriceRange = basePriceRange / Math.max(0.2, scaleY);
@@ -1309,7 +1278,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const targetTicks = Math.max(4, Math.min(14, Math.floor(usablePriceHeight / 38)));
     const rawStep = effectivePriceRange / targetTicks;
     let gridStep: number;
-    if (isWdo) {
+    // A grade acompanha o TICK do contrato (WDO 0,5 · WIN 5), não o id do ativo: assim ela
+    // continua certa se a escala do box mudar.
+    const tickPts = Math.max(0.01, Number(asset?.tickSize) || 1);
+    if (tickPts < 1) {
       const candidates = [0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0];
       gridStep = candidates.find((c) => c >= rawStep) ?? (Math.ceil(rawStep / 50) * 50);
     } else if (isBtc) {
@@ -1698,7 +1670,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
     // Título dos painéis
     // Salva posições dos boxes para hit-testing
-    const boxPositions: { x: number; box: RenkoBox; index: number; haState?: 'UP' | 'DOWN' | 'REVERSAL' }[] = [];
+    const boxPositions: { x: number; box: RenkoBox; index: number; haState?: 'UP' | 'DOWN' | 'REVERSAL' | 'ABSORPTION' }[] = [];
 
     // Recorte na borda do desenho: box em formação, rótulos de sinal (COMPRA/VENDA) e pavios
     // não podem invadir o vão da boleta nem a faixa de 5 px antes da régua.
@@ -1949,7 +1921,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }
 
       // 2. Gráfico Heikin-Ashi de Fluxo (desenhado em modo 'heikin_ashi' ou 'hybrid')
-      // Mostrando VERDE na subida (compra), VERMELHO na descida (venda), AMARELO na absorção e CINZA na exaustão!
+      // Duas cores e só: verde = delta comprador, vermelho = delta vendedor.
       if (flowViewMode === 'heikin_ashi' || flowViewMode === 'hybrid') {
         const ha = flowHaData[i];
         if (ha) {
@@ -1959,20 +1931,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           const lowY = flowHaToY(ha.low);
           const topY = Math.min(openY, closeY);
           const candleH = Math.max(3, Math.abs(closeY - openY));
-
-          // Iluminação de fundo sutil marcando a JANELA no painel de fluxo
-          const stripW = Math.max(boxWidth + 1, stepX);
-          const stripLeft = centerX - stripW / 2;
-          if (ha.state === 'UP') {
-            ctx.fillStyle = 'rgba(16, 185, 129, 0.12)';
-            ctx.fillRect(stripLeft, haBandTop, stripW, haBandHeight);
-          } else if (ha.state === 'DOWN') {
-            ctx.fillStyle = 'rgba(239, 68, 68, 0.12)';
-            ctx.fillRect(stripLeft, haBandTop, stripW, haBandHeight);
-          } else if (ha.state === 'ABSORPTION') {
-            ctx.fillStyle = 'rgba(234, 179, 8, 0.10)';
-            ctx.fillRect(stripLeft, haBandTop, stripW, haBandHeight);
-          }
 
           // Pavio Heikin-Ashi
           ctx.strokeStyle = ha.colorStroke;
@@ -1991,18 +1949,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.fill();
           ctx.stroke();
 
-          // Destaque visual central
-          if (ha.state === 'ABSORPTION') {
-            ctx.fillStyle = '#fef08a';
-            ctx.beginPath();
-            ctx.arc(centerX, (highY + lowY) / 2, isMobile ? 1.5 : 2, 0, Math.PI * 2);
-            ctx.fill();
-          } else if (ha.state === 'REVERSAL') {
-            ctx.fillStyle = '#fafafa';
-            ctx.beginPath();
-            ctx.arc(centerX, (highY + lowY) / 2, isMobile ? 1.2 : 1.6, 0, Math.PI * 2);
-            ctx.fill();
-          }
         }
       }
       ctx.restore();

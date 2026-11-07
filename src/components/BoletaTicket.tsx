@@ -82,7 +82,7 @@ interface BoletaTicketProps {
   /** Pontos da saída parcial (1/2 do lote) — sexta linha editável da base. */
   partialPoints?: number;
   /** Modo da estratégia: na Pirâmide a Ordem Mãe não tem SL/TP fixo — a boleta diz isso, não inventa número. */
-  strategyMode?: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE';
+  strategyMode?: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE' | 'SIGNAL_STACK';
   openOrders: TradeOrder[];
   /**
    * Livro do hedge (contratos por lado, preço médio, flutuante, ganhos/perdas/PnL do dia).

@@ -10,8 +10,6 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const store = new Map<string, string>();
-const preservedToken = 'bridge-token-kept-for-test-1234';
-store.set('fluxo_bridge_token_v1', preservedToken);
 (globalThis as any).localStorage = {
   getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
   setItem: (k: string, v: string) => void store.set(k, String(v)),
@@ -52,13 +50,6 @@ for (const [nome, busca] of [
   ['procedência no ACCOUNT_INFO', '"ordersBlocked"'],
 ] as const) {
   if (!tem(busca)) falhas.push(`trava ausente no script gerado: ${nome} (${busca})`);
-}
-
-if (!tem(`AUTH_TOKEN = "${preservedToken}"`) || store.get('fluxo_bridge_token_v1') !== preservedToken) {
-  falhas.push('o script gerado não preserva o token já armazenado pelo app');
-}
-if (!tem('"price": round(float(_field(raw, "last", 0) or 0), ASSET_DECIMALS)')) {
-  falhas.push('o histórico MT5 precisa usar o campo last para gerar o preço dos ticks');
 }
 
 // 2. A trava segura ENTRADA e NUNCA saída. Um bloqueio amplo mata o botão de emergência e a

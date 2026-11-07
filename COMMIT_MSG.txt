@@ -1,0 +1,22 @@
+feat: estratégia C/V, chave fixa da ponte e replay fracionado
+
+Sessão Windows (07/11). Integra também o commit da outra máquina (histórico
+pela ponte) — as duas instâncias mexeram nos mesmos arquivos.
+
+- Estratégia ACUMULAÇÃO POR SINAL (SIGNAL_STACK): abre no sinal C/V impresso
+  no gráfico, acumula na mesma direção e fecha TUDO no sinal oposto. Medida na
+  fita real do WINZ26: R$ 52.100 em 9 pregões, 7/9 dias positivos.
+- Gestão "Pirâmide sem Virada Cega" (2+50): a mãe só é encerrada com o fluxo
+  contrário confirmado em 2 boxes. 9/9 dias positivos, pior dia R$ 200.
+- Laboratório em tick real (scripts/labReal.ts): 20 gestões na fita de `dados/`,
+  com corte do degrau do feed e corretagem de 10 pts por trade.
+- Ponte: chave FIXA (BRIDGE_FIXED_KEY) para nunca mais derrubar a conexão ao
+  regerar o script; rota SELECT_ASSET (Dólar recebia dado do Índice); box por
+  contrato no backfill (WIN 50 / WDO 5); GET_BACKFILL do pregão inteiro;
+  REPLAY_START/REPLAY_END travam e destravam a ponte sozinhos; zeragem cancela
+  as ordens pendentes do mesmo magic.
+- App: série Renko não some mais quando a tela está em Range; escala do gráfico
+  derivada do tamanho do box; cores do fluxo reduzidas a verde/vermelho;
+  3 erros de tipo do ABSORPTION corrigidos (tsc limpo).
+- Replay: velocidades ¼x e ½x, com o cursor avançando sempre (antes travava).
+- UI: estratégia em caixa de seleção na faixa do gráfico e no painel.

@@ -1,5 +1,5 @@
 import { AutomationConfig } from '../types/trading';
-import { getBridgeToken } from './bridgeSecurity';
+import { getBridgeToken, BRIDGE_ALLOW_NO_TOKEN } from './bridgeSecurity';
 import { resolveAsset, renkoScaleLabel } from '../assets/assetRegistry';
 
 export function generatePythonMT5Script(config: AutomationConfig): string {
@@ -167,7 +167,13 @@ CLOSE_ALL_TIME = "${config.tradingCloseAllTime || '17:30'}"
 # arquivo (Ajustes > Segurança da Ponte). VAZIO = modo legado: qualquer dispositivo da
 # rede operaria esta conta, então o app avisa no login e no console abaixo.
 AUTH_TOKEN = "${bridgeToken}"
-REQUIRE_AUTH = len(AUTH_TOKEN) > 0
+# MODO SEM TOKEN (rede local confiável): o app também oferece a opção de não exigir chave.
+# Padrão FALSE. Ligado, qualquer máquina do Wi-Fi abre esta porta e lê tick/conta — só use em
+# rede que você controla. A trava de execução (robô armado) continua valendo para toda entrada.
+ALLOW_NO_TOKEN = ${BRIDGE_ALLOW_NO_TOKEN ? 'True' : 'False'}
+REQUIRE_AUTH = (len(AUTH_TOKEN) > 0) and (not ALLOW_NO_TOKEN)
+if ALLOW_NO_TOKEN:
+    print("\u26a0\ufe0f  MODO SEM TOKEN LIGADO: esta ponte aceita conexao de qualquer dispositivo da rede local.")
 
 # Tetos aceitos pela ponte (defesa contra ordem perdida, loop de bug ou app clonado)
 MAX_CONTRACTS_PER_ORDER = ${config.mt5MaxContractsPerOrder || 2}
@@ -194,6 +200,9 @@ ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "").strip().lower() in ("1", "
 # ambiente fica por cima -- ligar pelo app sempre funciona, desligar pelo app nunca vence um
 # ORDERS_BLOCKED=1 definido no PC do terminal.
 REPLAY_MODE = False
+# Guardião do replay: guarda como o modo validação estava ANTES do ensaio, para devolver a ponte
+# exatamente ao estado anterior quando o replay termina (regra do operador).
+_replay_guard = {"ativo": False, "replay_anterior": False}
 
 
 def ordens_bloqueadas():
@@ -206,6 +215,14 @@ def ordens_bloqueadas():
 # simplesmente volta vazio, e o app cai no gerador sintético ROTULANDO a origem na tela.
 HISTORY_MAX_DAYS = 10
 HISTORY_CHUNK_TICKS = 1500
+# Carga do gráfico ao conectar (rota GET_BACKFILL): quantos dias de histórico o gráfico
+# recebe e quantos boxes Renko vêm junto. Sem isso o app abria vazio e ficava esperando
+# tick do próximo pregão — no fim de semana, gráfico nenhum.
+BACKFILL_DAYS = 1
+BACKFILL_MAX_BOXES = 3000
+# Barra de 1 min usada para o backfill (o gráfico desenha com os boxes Renko; as barras
+# existem para o app conferir a janela e para o volume quando o tick vem sem volume).
+BACKFILL_TIMEFRAME = mt5.TIMEFRAME_M1
 # Fração de ticks sem volume que liga o fallback das barras de 1min (tick de índice futuro no
 # MT5 costuma chegar com volume 0, e é disso que vivem CVD, delta e convergência no app).
 HISTORY_VOLUME_FALLBACK_RATIO = 0.8
@@ -741,6 +758,10 @@ class MT5OrderManager:
             direction = self.pyramid_tickets.pop(ticket)
             print(f"🎯 [TP DA PIRÂMIDE #{ticket} {direction}] Movendo ordem mãe para o breakeven...")
             self.move_main_to_breakeven(direction)
+            # UMA VEZ SÓ: o breakeven da mãe é idempotente, mas antes o laço seguia chamando
+            # para cada pirâmide já fechada e reenviava a alteração de SL várias vezes — era
+            # isso que deixava ordens sobrando na tela a cada abertura/fechamento.
+            break
 
     def check_and_clean_expired_pending(self, current_box_index):
         """Cancela ordens pendentes se o preço continuou andando sem voltar"""
@@ -1017,6 +1038,24 @@ class MT5OrderManager:
                 "type_filling": self.get_filling_mode(),
             }
             mt5.order_send(req)
+
+        # CANCELA AS PENDENTES DO MESMO DONO: zerar posições sem remover as limitadas deixa as
+        # entradas armadas no terminal — elas reaparecem na tela (e podem entrar sozinhas) logo
+        # depois de um zerar/fechar. Aqui some tudo o que é do mesmo magic.
+        canceladas = 0
+        try:
+            for od in (mt5.orders_get(symbol=self.symbol) or []):
+                if magic_filter is not None and od.magic != magic_filter:
+                    continue
+                res_del = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": od.ticket})
+                if res_del is not None and res_del.retcode == mt5.TRADE_RETCODE_DONE:
+                    canceladas += 1
+        except Exception as exc:
+            print(f"[AVISO] falha ao cancelar pendentes: {exc}")
+        if canceladas:
+            print(f"\U0001f9f9 {canceladas} ordem(ns) pendente(s) cancelada(s) junto com a zeragem.")
+        self.pending_orders = []
+
         alvo = f"lado {side}" if side_type is not None else "posições"
         donos = f"magic {magic_filter}" if magic_filter is not None else "TODOS os magics"
         print(f"🛑 {alvo} zeradas a mercado ({closed_n} posição(ões), {donos}) | PnL aproximado: R$ {pnl_brl:.2f} ({ASSET_POINT_VALUE} R$/pt).")
@@ -1060,7 +1099,7 @@ async def send_account_info(websocket):
     })
 
 async def ws_handler(websocket):
-    global REPLAY_MODE
+    global REPLAY_MODE, SYMBOL
     peer = get_peer_ip(websocket)
     CONNECTED_CLIENTS.add(websocket)
     state = client_state(websocket)
@@ -1144,6 +1183,62 @@ async def ws_handler(websocket):
                 }
                 await broadcast_to_web({"type": "REPLAY_MODE_RESULT", "data": payload})
                 print(f" {'🎥 MODO REPLAY/VALIDAÇÃO LIGADO' if REPLAY_MODE else '▶️ MODO REPLAY/VALIDAÇÃO desligado'} — {nota} — {peer}")
+                continue
+
+            if action == "REPLAY_START":
+                # O REPLAY SEGURA A PONTE SOZINHO. Antes a trava só existia se a tela mandasse
+                # SET_REPLAY_MODE; se a aba caísse ou reconectasse no meio do ensaio, a ponte
+                # voltava a aceitar entrada. Agora: começou o replay, entra em modo validação;
+                # terminou (REPLAY_END), volta exatamente ao estado anterior.
+                if REQUIRE_AUTH and not state["authenticated"]:
+                    continue
+                if not _replay_guard["ativo"]:
+                    _replay_guard["ativo"] = True
+                    _replay_guard["replay_anterior"] = REPLAY_MODE
+                REPLAY_MODE = True
+                print(" \U0001f3ac REPLAY INICIADO na tela: ponte em modo validação (nenhuma entrada sai)")
+                await send_json(websocket, {"type": "REPLAY_MODE_RESULT", "data": {"on": True, "motivo": "replay_em_andamento"}})
+                continue
+
+            if action == "REPLAY_END":
+                if REQUIRE_AUTH and not state["authenticated"]:
+                    continue
+                if _replay_guard["ativo"]:
+                    REPLAY_MODE = bool(_replay_guard["replay_anterior"])
+                    _replay_guard["ativo"] = False
+                print(f" \u2705 REPLAY ENCERRADO: ponte restabelecida no estado anterior (validação={'ligada' if REPLAY_MODE else 'desligada'})")
+                await send_json(websocket, {"type": "REPLAY_MODE_RESULT", "data": {"on": REPLAY_MODE, "motivo": "replay_encerrado"}})
+                continue
+
+            if action == "SELECT_ASSET":
+                # Troca de ativo na tela: a ponte passa a acompanhar o contrato pedido e já devolve
+                # o pregão dele. Sem isso ela ficava presa no contrato do boot e o Dólar nunca
+                # recebia dado (o gráfico abria vazio e ficava "aguardando ticks").
+                novo = str(data.get("symbol") or "").strip().upper()
+                if novo and mt5.symbol_info(novo) is not None:
+                    SYMBOL = novo
+                    if not mt5.symbol_info(novo).visible:
+                        mt5.symbol_select(novo, True)
+                    if ORDER_MANAGER is not None:
+                        ORDER_MANAGER.symbol = novo
+                    print(f" \U0001f504 ATIVO DA PONTE: agora acompanhando '{novo}'")
+                    await handle_backfill(websocket, novo, BACKFILL_DAYS)
+                else:
+                    print(f" \u26d4 SELECT_ASSET ignorado: contrato '{novo}' nao existe no terminal")
+                continue
+
+            if action == "GET_BACKFILL":
+                # O app pede isso ao conectar para o gráfico nascer preenchido, PARADO, com o
+                # último pregão — sem depender de tick novo (fim de semana, mercado fechado).
+                if REQUIRE_AUTH and not state["authenticated"]:
+                    continue
+                await handle_backfill(websocket, str(data.get("symbol") or SYMBOL), data.get("days") or BACKFILL_DAYS)
+                continue
+
+            if action == "LIST_LOCAL_PREGOES":
+                # A ponte não lê o disco do navegador: o catálogo local mora em public/pregoes.json.
+                # Responde vazio (não deixa o app pendurado esperando um frame que nunca vem).
+                await send_json(websocket, {"type": "LOCAL_PREGOES_LIST", "data": {"symbols": {}, "source": "BRIDGE"}})
                 continue
 
             if action == "REQUEST_HISTORY":
@@ -1311,7 +1406,7 @@ def _history_tick_record(raw, seq):
         "id": f"mt5-h-{time_msc}-{seq}",
         "timestamp": time_msc,
         "timeStr": datetime.fromtimestamp(time_msc / 1000).strftime('%H:%M:%S.%f')[:-3],
-        "price": round(float(_field(raw, "last", 0) or 0), ASSET_DECIMALS),
+        "price": round(float(_field(raw, "price", 0) or 0), ASSET_DECIMALS),
         "volume": int(_field(raw, "volume", 0) or 0),
         "aggressor": aggressor,
         "bid": float(_field(raw, "bid", 0) or 0),
@@ -1402,7 +1497,11 @@ async def handle_request_history(websocket, req_id, symbol, days):
 
     total = len(ticks)
     chunks = 0
+    # Cede o event loop a cada chunk: sem isso, um pedido de vários dias (mais de 1 milhão de
+    # ticks) montava e enviava tudo num único frame e travava o servidor inteiro — o ping do
+    # cliente estourava e a conexão caía no meio da entrega.
     for start in range(0, total, HISTORY_CHUNK_TICKS):
+        await asyncio.sleep(0)
         await send_json(websocket, {
             "type": "HISTORY_CHUNK",
             "data": {
@@ -1428,6 +1527,131 @@ async def handle_request_history(websocket, req_id, symbol, days):
     print(f"\ud83d\udcdc HISTÓRICO enviado a {get_peer_ip(websocket)}: {total} ticks de '{symbol}' ({days} dia(s), volume {volume_source}) em {chunks} chunk(s) \u2014 agressores: {_hist_buy} C / {_hist_sell} V / {_hist_cross} cruzados (bid/ask test).")
 
 
+def _ultimo_pregao_janela():
+    """Janela do ÚLTIMO PREGÃO do contrato: abertura 09:00 e fechamento 18:00 (horário de
+    Brasília) do último dia em que houve tick. Devolve (inicio, fim, motivo)."""
+    try:
+        now = datetime.now(timezone.utc)
+        recent = mt5.copy_ticks_from(SYMBOL, now - timedelta(days=10), 1, mt5.COPY_TICKS_TRADE)
+        probe = mt5.copy_ticks_range(SYMBOL, now - timedelta(days=10), now, mt5.COPY_TICKS_TRADE)
+        if probe is None or len(probe) == 0:
+            return None, None, "sem tick nos ultimos 10 dias"
+        last_msc = int(probe[-1]['time_msc'])
+        tz_br = timezone(timedelta(hours=-3))
+        dia = datetime.fromtimestamp(last_msc / 1000, tz_br).date()
+        start = datetime(dia.year, dia.month, dia.day, 9, 0, tzinfo=tz_br)
+        end = datetime(dia.year, dia.month, dia.day, 18, 0, tzinfo=tz_br)
+        return start, end, "ultimo pregao %s" % dia.isoformat()
+    except Exception as exc:
+        print(f"[AVISO] nao foi possivel determinar o ultimo pregao: {exc}")
+        return None, None, str(exc)
+
+
+async def handle_backfill(websocket, symbol, days):
+    """Gráfico ao conectar: manda as barras do último pregão e os boxes Renko já formados.
+    É dado de MERCADO (nenhuma ordem), então a única trava é o token. Sem tick no período
+    (mercado fechado) responde com o que existe — e, se não houver nada, avisa em vez de
+    ficar em silêncio."""
+    try:
+        days = max(1, min(HISTORY_MAX_DAYS, int(days or BACKFILL_DAYS)))
+    except (TypeError, ValueError):
+        days = BACKFILL_DAYS
+
+    if mt5.symbol_info(symbol) is None:
+        await send_json(websocket, {
+            "type": "SESSION_BACKFILL",
+            "symbol": symbol,
+            "data": {"ticks": [], "bars": [], "boxes": [], "reason": f"contrato '{symbol}' nao existe no terminal logado"}
+        })
+        return
+
+    bars = await asyncio.to_thread(mt5.copy_rates_from_pos, symbol, BACKFILL_TIMEFRAME, 0, days * 24 * 60 * 2)
+    bars_payload = []
+    if bars is not None:
+        for b in bars:
+            bars_payload.append({
+                "time": int(b['time']),
+                "open": float(b['open']),
+                "high": float(b['high']),
+                "low": float(b['low']),
+                "close": float(b['close']),
+                "volume": int(b['tick_volume']),
+            })
+
+    # Boxes Renko do ÚLTIMO PREGÃO INTEIRO (regra do operador: o gráfico abre com o dia completo,
+    # parado). Reconstrói pelo caminho real dos ticks do dia — mesma regra do loop vivo — e só cai
+    # nas barras de 1 min se o terminal não tiver tick desse dia.
+    day_start, day_end, tick_source = _ultimo_pregao_janela()
+    raw_day_ticks = None
+    if day_start is not None:
+        raw_day_ticks = await asyncio.to_thread(mt5.copy_ticks_range, symbol, day_start, day_end, mt5.COPY_TICKS_TRADE)
+
+    # ESCALA DO BOX POR ATIVO: 50 pts é o padrão do WIN. No WDO (tick 0,5) 50 pts nunca fecharia
+    # um tijolo e o gráfico abria vazio. Usa 10R do contrato (WIN 50, WDO 5).
+    box_pts = BOX_POINTS
+    _info = mt5.symbol_info(symbol)
+    if _info is not None:
+        _tick = float(_info.trade_tick_size or _info.point or 1)
+        if _tick > 0:
+            _sugerido = _tick * 10
+            if _sugerido > 0 and (_sugerido < BOX_POINTS or BOX_POINTS > _tick * 200):
+                box_pts = _sugerido
+    engine = RenkoFlowEngine(box_points=box_pts)
+    print(f"[BACKFILL] motor Renko com box de {box_pts} pts para {symbol}")
+    seq = 0
+    boxes_fonte = "TICKS"
+    if raw_day_ticks is not None and len(raw_day_ticks) > 0:
+        prev_price = None
+        for raw in raw_day_ticks:
+            price = float(raw['last'] if 'last' in raw.dtype.names else raw[1])
+            if price <= 0:
+                price = float(raw['bid'] if 'bid' in raw.dtype.names else 0) or price
+            if price <= 0:
+                continue
+            vol = int(raw['volume']) if 'volume' in raw.dtype.names else 1
+            try:
+                bid = float(raw['bid']); ask = float(raw['ask'])
+            except Exception:
+                bid = ask = 0.0
+            flags = raw['flags'] if 'flags' in raw.dtype.names else 0
+            aggressor = classify_aggressor(price, bid, ask, flags, prev_price)
+            prev_price = price
+            seq += 1
+            engine.process_tick(price, max(1, vol), aggressor, int(raw['time_msc']))
+    else:
+        boxes_fonte = "BARS"
+        for b in bars_payload:
+            o, h, l, c = b["open"], b["high"], b["low"], b["close"]
+            up = c >= o
+            path = [o, h, l, c] if up else [o, l, h, c]
+            for price in path:
+                seq += 1
+                engine.process_tick(price, max(1, b["volume"] // 4), "BUY" if up else "SELL", (b["time"] * 1000) + seq)
+
+    boxes_payload = engine.boxes[-BACKFILL_MAX_BOXES:]
+    current = engine.current_box
+    last_price = bars_payload[-1]["close"] if bars_payload else 0.0
+
+    await send_json(websocket, {
+        "type": "SESSION_BACKFILL",
+        "symbol": symbol,
+        "data": {
+            "ticks": [],
+            "bars": bars_payload,
+            "boxes": boxes_payload,
+            "currentBox": current,
+            "cvd": engine.cvd,
+            "lastPrice": last_price,
+            "boxPoints": box_pts,
+            "days": days,
+            "source": "MT5_TICKS" if boxes_fonte == "TICKS" else "MT5_BARS",
+            "tickSource": boxes_fonte,
+            "totalBoxes": len(engine.boxes),
+        }
+    })
+    print(f"\U0001f4c8 BACKFILL enviado: '{symbol}' {len(bars_payload)} barras, {len(engine.boxes)} boxes Renko do ultimo pregao ({boxes_fonte}), ultimo preco {last_price:.0f}")
+
+
 async def mt5_stream_loop():
     last_tick_time_msc = 0
     last_trade_price = None
@@ -1437,6 +1661,12 @@ async def mt5_stream_loop():
     while True:
         now = datetime.now(timezone.utc)
         ticks = mt5.copy_ticks_from(SYMBOL, now, 50, mt5.COPY_TICKS_TRADE)
+
+        # Mercado fechado / sem tick novo: dorme de verdade em vez de girar em vazio (era o que
+        # segurava o event loop e derrubava a entrega do histórico por ping timeout).
+        if ticks is None or len(ticks) == 0:
+            await asyncio.sleep(0.25)
+            continue
 
         if ticks is not None and len(ticks) > 0:
             for tick in ticks:

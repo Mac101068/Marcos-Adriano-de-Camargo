@@ -668,10 +668,45 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
             </div>
           </div>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 self-start sm:self-auto">
-            {config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE'
-              ? '🚀 PIRÂMIDE FLUXO & RENKO (TP 50P + SURFE)'
+            {config.strategyMode === 'SIGNAL_STACK'
+              ? '🅲🆅 ACUMULAÇÃO POR SINAL (C/V)'
+              : config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE'
+              ? (config.flipConfirmBoxes ?? 1) > 1
+                ? `🛡️ PIRÂMIDE SEM VIRADA CEGA (CONFIRMA ${config.flipConfirmBoxes} BOXES)`
+                : '🚀 PIRÂMIDE FLUXO & RENKO (TP 50P + SURFE)'
               : '🎯 RETESTE / PULLBACK CLÁSSICO'}
           </span>
+        </div>
+
+        {/* SELETOR VISÍVEL: a estratégia ativa em três botões grandes, no topo do painel.
+            Antes ela só aparecia como um chip pequeno e era fácil não perceber que o clique
+            não trocou de gestão. */}
+        <div className="flex flex-wrap gap-2 mb-3">
+          {([
+            { id: 'SIGNAL_STACK', label: '🅲🆅 Acumulação C/V', cls: 'amber' },
+            { id: 'PYRAMID_FLOW_CONFLUENCE', label: '🚀 Pirâmide', cls: 'emerald' },
+            { id: 'PULLBACK_RETEST', label: '🎯 Reteste', cls: 'neutral' },
+          ] as const).map((opt) => {
+            const ativo = config.strategyMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => {
+                  if (onPatchStrategy) onPatchStrategy({ strategyMode: opt.id } as Partial<AutomationConfig>);
+                  else handleConfigChange('strategyMode', opt.id);
+                }}
+                className={`px-3 py-1.5 rounded-md text-[11px] font-bold border transition-all ${
+                  ativo
+                    ? 'bg-slate-100 text-slate-900 border-slate-100 shadow'
+                    : 'bg-slate-950/60 text-slate-300 border-slate-700 hover:border-slate-500'
+                }`}
+              >
+                {opt.label}
+                {ativo ? ' ✓' : ''}
+              </button>
+            );
+          })}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -705,6 +740,98 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               <span>✓ TP Pirâmide: +50 pts</span>
               <span>✓ Principal: Surfe Contínuo</span>
               <span>✓ Saída: Inversão de Fluxo</span>
+            </div>
+          </div>
+
+          {/* Opção 3: gestão validada no laboratório de tick real */}
+          <div
+            onClick={() => {
+              // A gestão 2+50 é um PACOTE: estratégia, limiar fixo, confirmação de 2 boxes e TP.
+              // Aplicar um campo só deixaria a tela num estado que não é nenhuma das duas.
+              // A GESTÃO vem no pacote; a ESCALA fica como está. Medido em tick real, a escala
+              // 15R perde da 10R (R$ 3.608 contra R$ 9.427 e drawdown 3x maior), então sobrescrever
+              // o box do operador seria trocar uma decisão dele por um número pior.
+              const pacote = {
+                strategyMode: 'PYRAMID_FLOW_CONFLUENCE' as const,
+                adaptiveThresholdEnabled: false,
+                flipConfirmBoxes: 2,
+                pyramidTpPoints: 50,
+              };
+              if (onPatchStrategy) {
+                onPatchStrategy(pacote);
+              } else {
+                Object.entries(pacote).forEach(([k, v]) =>
+                  handleConfigChange(k as keyof AutomationConfig, v as AutomationConfig[keyof AutomationConfig])
+                );
+              }
+            }}
+            className={`p-3.5 rounded-lg border text-left cursor-pointer transition-all ${
+              config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' && (config.flipConfirmBoxes ?? 1) > 1
+                ? 'bg-sky-950/40 border-sky-500 ring-1 ring-sky-500/50 shadow-md'
+                : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300">
+                VALIDADA EM TICK REAL
+              </span>
+              {config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' && (config.flipConfirmBoxes ?? 1) > 1 && (
+                <span className="flex items-center gap-1 text-[11px] font-bold text-sky-400">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  EM EXECUÇÃO
+                </span>
+              )}
+            </div>
+            <h4 className="text-xs font-bold text-slate-100">
+              🛡️ Pirâmide sem Virada Cega (gestão 2+50)
+            </h4>
+            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+              A ordem mãe só é encerrada quando o fluxo contrário confirma em 2 boxes. Sinal isolado não vira a perna. TP de 50 pts por pirâmide e limiar de delta fixo.
+            </p>
+            <div className="mt-2.5 pt-2 border-t border-slate-800 text-[10px] font-mono text-sky-400/90 flex flex-wrap gap-x-3 gap-y-1">
+              <span>✓ Virada: 2 boxes</span>
+              <span>✓ TP Pirâmide: 50 pts</span>
+              <span>✓ Limiar: fixo</span>
+              <span>✓ Escala: livre (medida melhor em 10R)</span>
+            </div>
+          </div>
+
+          {/* Opção 4: Acumulação por Sinal (C/V) — leitura literal da tela */}
+          <div
+            onClick={() => {
+              if (onPatchStrategy) {
+                onPatchStrategy({ strategyMode: 'SIGNAL_STACK' } as Partial<AutomationConfig>);
+              } else {
+                handleConfigChange('strategyMode', 'SIGNAL_STACK');
+              }
+            }}
+            className={`p-3.5 rounded-lg border text-left cursor-pointer transition-all ${
+              config.strategyMode === 'SIGNAL_STACK'
+                ? 'bg-amber-950/40 border-amber-500 ring-1 ring-amber-500/50 shadow-md'
+                : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                C / V DIRETO DA TELA
+              </span>
+              {config.strategyMode === 'SIGNAL_STACK' && (
+                <span className="flex items-center gap-1 text-[11px] font-bold text-amber-400">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  EM EXECUÇÃO
+                </span>
+              )}
+            </div>
+            <h4 className="text-xs font-bold text-slate-100">
+              🅲🆅 Acumulação por Sinal
+            </h4>
+            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+              Abre 1 contrato a cada C ou V impresso no gráfico. Sinal repetido acumula mais um na mesma direção; o sinal oposto fecha todos de uma vez. Sem TP, sem stop: a saída é a virada.
+            </p>
+            <div className="mt-2.5 pt-2 border-t border-slate-800 text-[10px] font-mono text-amber-400/90 flex flex-wrap gap-x-3 gap-y-1">
+              <span>✓ C = compra · V = venda</span>
+              <span>✓ Acumula no mesmo lado</span>
+              <span>✓ Oposto fecha tudo</span>
             </div>
           </div>
 

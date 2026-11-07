@@ -31,9 +31,33 @@ export function maskBridgeToken(token: string): string {
   return `${token.slice(0, 4)}••••••••${token.slice(-4)}`;
 }
 
+/**
+ * CHAVE FIXA DA PONTE (decisão do operador, 07/11/2026).
+ *
+ * Antes o token era sorteado a cada geração do script: bastava eu regerar a ponte para o app
+ * ficar com a chave velha e a conexão passar a ser recusada ("AUTH RECUSADO — token errado").
+ * Agora a chave é esta constante, a mesma em todo build, e o `bridge_token.txt` só serve para
+ * alinhar outra máquina da rede. Trocar a chave é trocar esta linha e regerar o script.
+ *
+ * A proteção continua a mesma de antes: sem esta chave a ponte não entrega tick nem aceita
+ * ordem. Ela viaja no .py e no arquivo servido pelo app — nunca em chat ou e-mail.
+ */
+export const BRIDGE_FIXED_KEY = 'fluxo-renko-ponte-2026-chave-fixa-marcos';
+
+/**
+ * MODO SEM TOKEN (rede local confiável). A ponte continua aceitando a chave acima — e o app
+ * continua mandando — mas, quando o operador liga este modo, a ponte NÃO recusa conexão sem
+ * AUTH. Existe para o caso de outra máquina da rede não conseguir alinhar a chave.
+ *
+ * O que NÃO muda: a ponte só escuta enquanto o .py está rodando e o robô armado continua sendo
+ * exigido para qualquer entrada. O que muda: qualquer dispositivo no mesmo Wi-Fi pode abrir a
+ * porta e ler tick/conta. Por isso o padrão é `false` e o operador é avisado no console.
+ */
+export const BRIDGE_ALLOW_NO_TOKEN = false;
+
 const TOKEN_STORAGE_KEY = 'fluxo_bridge_token_v1';
 
-let memoryToken = '';
+let memoryToken = BRIDGE_FIXED_KEY;
 
 // Tenta sincronizar automaticamente o token com o arquivo servido pelo Vite/backend local
 if (typeof window !== 'undefined' && typeof fetch === 'function') {
@@ -41,12 +65,14 @@ if (typeof window !== 'undefined' && typeof fetch === 'function') {
     .then((r) => (r.ok ? r.text() : ''))
     .then((txt) => {
       const clean = txt.trim();
-      if (clean && clean.length >= 16) {
-        memoryToken = clean;
-        try {
-          localStorage.setItem(TOKEN_STORAGE_KEY, clean);
-        } catch {}
+      // A chave fixa manda: um bridge_token.txt antigo não pode rebaixar a chave do app.
+      if (clean && clean.length >= 16 && clean !== BRIDGE_FIXED_KEY) {
+        console.warn('[ponte] bridge_token.txt diverge da chave fixa — mantendo a chave fixa.');
       }
+      memoryToken = BRIDGE_FIXED_KEY;
+      try {
+        localStorage.setItem(TOKEN_STORAGE_KEY, BRIDGE_FIXED_KEY);
+      } catch {}
     })
     .catch(() => {});
 }
@@ -84,6 +110,15 @@ export function clearBridgeToken(): void {
  * que o script baixado e o app saiam com o MESMO segredo sem trabalho manual.
  */
 export function getBridgeToken(): string {
+  // Chave fixa primeiro: um token velho gravado no navegador nunca mais derruba a conexão.
+  memoryToken = BRIDGE_FIXED_KEY;
+  try {
+    localStorage.setItem(TOKEN_STORAGE_KEY, BRIDGE_FIXED_KEY);
+  } catch {}
+  return BRIDGE_FIXED_KEY;
+}
+
+function getBridgeTokenLegacy(): string {
   if (memoryToken && memoryToken.length >= 16) {
     try {
       localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken);

@@ -20,7 +20,18 @@ interface AssetChartTabsProps {
     openOrdersCount?: number;
   }>>;
   isMt5Connected?: boolean;
+  /** Estratégia ativa e troca direto da faixa do gráfico (sem ir em Parâmetros). */
+  strategyMode?: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE' | 'SIGNAL_STACK';
+  onSelectStrategy?: (mode: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE' | 'SIGNAL_STACK') => void;
 }
+
+// Caixa de seleção (regra do operador): uma lista só, com o nome inteiro da estratégia.
+// Os botõezinhos de sigla saíram — obrigavam a decorar o que "C/V" ou "PIR" queriam dizer.
+const STRATEGY_OPTIONS: Array<{ id: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE' | 'SIGNAL_STACK'; label: string }> = [
+  { id: 'SIGNAL_STACK', label: 'Acumulação C/V' },
+  { id: 'PYRAMID_FLOW_CONFLUENCE', label: 'Pirâmide' },
+  { id: 'PULLBACK_RETEST', label: 'Reteste' },
+];
 
 const TAB_CONFIGS: Array<{
   id: AssetId;
@@ -61,6 +72,8 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
   onSelectAsset,
   assetStates = {},
   isMt5Connected = false,
+  strategyMode,
+  onSelectStrategy,
 }) => {
   return (
     <div className="flex items-center justify-between px-2 bg-zinc-950 border-b border-zinc-800/90 select-none shrink-0 h-9 font-mono overflow-x-auto no-scrollbar">
@@ -128,11 +141,31 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
         })}
       </div>
 
+      {/* SELETOR DE ESTRATÉGIA NA FAIXA DO GRÁFICO: trocar de gestão é decisão de tela, não de
+          formulário. O operador escolhe aqui e vê o efeito no replay na hora. */}
+      {onSelectStrategy && strategyMode && (
+        <div className="flex items-center gap-1.5 pr-2 shrink-0">
+          <span className="text-[9.5px] uppercase tracking-wider text-zinc-500 hidden md:inline">Estratégia</span>
+          <select
+            value={strategyMode}
+            onChange={(e) => onSelectStrategy(e.target.value as 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE' | 'SIGNAL_STACK')}
+            title="Trocar a estratégia em execução"
+            className="h-6 rounded border border-zinc-700 bg-zinc-900 text-[10.5px] font-bold text-zinc-100 px-1.5 cursor-pointer hover:border-zinc-500 focus:outline-none focus:border-emerald-500"
+          >
+            {STRATEGY_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* Rótulo de Status das Abas */}
-      <div className="hidden sm:flex items-center gap-2 text-[10px] text-zinc-500 pr-2">
+      <div className="hidden lg:flex items-center gap-2 text-[10px] text-zinc-500 pr-2">
         <span className="flex items-center gap-1">
           <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-          <span>Multi-Ativos 100% Sincronizados</span>
+          <span>Multi-Ativos Sincronizados</span>
         </span>
       </div>
     </div>
