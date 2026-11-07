@@ -145,6 +145,50 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
     },
   },
   {
+    id: 'preset-cv-wdo',
+    name: 'C/V Acumulação por Sinal — Mini Dólar (WDO)',
+    badge: 'C/V DÓLAR',
+    description:
+      'A mesma leitura de Acumulação por Sinal da C/V do índice, calibrada para o Mini Dólar: ' +
+      'abre no C/V impresso a cada box fechado, acumula na mesma direção e zera tudo no sinal oposto. ' +
+      'Sem alvo e sem stop por padrão — a saída é a virada. Stop e breakeven por distância ficam ' +
+      'disponíveis na boleta (fonte única de verdade) se o operador quiser ligar. Box de 2,5 pts ' +
+      '(5 ticks de 0,5), a escala 10R do dólar, com R$ 10 por ponto.',
+    config: {
+      ...DEFAULT_EA_CONFIG,
+      profileName: 'C/V Acumulação — WDO',
+      strategyMode: 'SIGNAL_STACK',
+      // Ativo: o registro manda. WDOZ26 é o vigente do pregão; o box de 2,5 pts é o 10R do dólar
+      // (o WIN usa 50 pts) — sem isso o dia inteiro (~33 pts) levaria 13 boxes para fechar um
+      // único tijolo de 50 e o gráfico abriria vazio.
+      assetId: 'WDO',
+      symbol: chartSymbolFor(ASSETS.WDO),
+      boxPoints: 2.5,
+      contracts: 1,
+      // C/V puro: a saída é a virada. Stop 0 = desligado, alvo 0 = não fecha (decisão do operador).
+      stopLossPoints: 0,
+      takeProfitPoints: 0,
+      enablePartialExit: false,
+      trailingStop: false,
+      accountMode: 'HEDGE',
+      maxSimultaneousPositions: 15,
+      hedgeOppositeAction: 'CLOSE_OPPOSITE',
+      // Breakeven por distância: campos da boleta, aqui só o default em pontos DO DÓLAR
+      // (150/100 no WIN seriam 60 boxes de dólar — absurdo). Gatilho 5 pts ≈ 2 boxes,
+      // trava 3 pts ≈ 1 box: ~R$ 50 garantidos por contrato.
+      breakevenTriggerPoints: 5,
+      breakevenLockPoints: 3,
+      breakevenOffsetPoints: 0.5,
+      // Funil de fluxo: mesmas alavancas SEL-A do WIN (a régua é relativa ao próprio dia, então
+      // sobrevive à troca de mercado); só o Δ físico do aquecimento é menor no dólar.
+      minDeltaThreshold: 15,
+      adaptiveThresholdEnabled: true,
+      adaptiveThresholdPercentile: 0.7,
+      adaptiveFloorMultiple: 1.6,
+      flowDivergenceMin: 0.5,
+    },
+  },
+  {
     id: 'preset-institucional',
     name: '10R Padrão Institucional (Reteste)',
     badge: 'RETESTE',
