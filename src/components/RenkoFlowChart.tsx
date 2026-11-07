@@ -1736,6 +1736,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const centerX = xs[i];
       if (centerX < -30 || centerX > plotRight + 30) return;
 
+      const prevBox = i > 0 ? displayedBoxes[i - 1] : null;
       const left = centerX - boxWidth / 2;
       const haState = flowHaData[i]?.state;
       boxPositions.push({ x: centerX, box: b, index: startIdx + i, haState });
