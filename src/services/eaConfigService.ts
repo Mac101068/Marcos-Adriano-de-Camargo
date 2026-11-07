@@ -176,11 +176,12 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
       accountMode: 'HEDGE',
       maxSimultaneousPositions: 15,
       hedgeOppositeAction: 'CLOSE_OPPOSITE',
-      // Breakeven por distância: campos da boleta, aqui só o default em pontos DO DÓLAR
-      // (150/100 no WIN seriam 60 boxes de dólar — absurdo). Gatilho 5 pts ≈ 2 boxes,
-      // trava 3 pts ≈ 1 box: ~R$ 50 garantidos por contrato.
-      breakevenTriggerPoints: 5,
-      breakevenLockPoints: 3,
+      // Breakeven por distância DESLIGADO (0/0), igual ao DEFAULT_EA_CONFIG e ao que o 5d13cf4
+      // decidiu. Medido na base real WDOZ26 (13 pregões, com corretagem): com 5/3 o resultado é
+      // −R$ 2.918 (PF 0,74); desligado é +R$ 5.292 (PF 1,46). O breakeven apertado custa 183%
+      // no dólar — quem quiser ligar, liga na boleta e assume o número.
+      breakevenTriggerPoints: 0,
+      breakevenLockPoints: 0,
       breakevenOffsetPoints: 0.5,
       // Funil de fluxo: mesmas alavancas SEL-A do WIN (a régua é relativa ao próprio dia, então
       // sobrevive à troca de mercado); só o Δ físico do aquecimento é menor no dólar.
