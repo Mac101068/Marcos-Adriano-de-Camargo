@@ -875,9 +875,9 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
       {/* ========================================================================= */}
       {/* BLOCO DEDICADO: PARÂMETROS DA ESTRATÉGIA PIRÂMIDE ATIVA (tudo num só lugar) */}
       {/* ========================================================================= */}
-      {config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' && (
+      {(config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' || config.strategyMode === 'SIGNAL_STACK') && (
         <CollapsibleSection
-          title="Parâmetros da Pirâmide Ativa"
+          title={config.strategyMode === 'SIGNAL_STACK' ? 'Parâmetros da Acumulação C/V' : 'Parâmetros da Pirâmide Ativa'}
           icon={Layers}
           iconClass="text-emerald-400"
           trailing={<span className="text-[10px] font-mono text-slate-500 shrink-0">PIRÂMIDE</span>}
@@ -939,6 +939,13 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
                   className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-emerald-500 focus:outline-hidden"
                 />
               </div>
+              {config.strategyMode === 'SIGNAL_STACK' && (
+                <div className="col-span-full p-2.5 rounded-md border border-amber-700/50 bg-amber-950/30 text-[11px] text-amber-200/90">
+                  <strong className="text-amber-300">Acumulação C/V:</strong> o TP e o stop abaixo são IGNORADOS nesta
+                  gestão. Aqui a saída é uma só — o <strong>sinal oposto</strong> fecha todas as posições abertas.
+                  Se quiser alvo por contrato, use a gestão Pirâmide.
+                </div>
+              )}
               <div>
                 <label className="block text-slate-400 mb-1">Alvo TP da Pirâmide</label>
                 <div className="flex items-center gap-1.5">
@@ -1667,12 +1674,21 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
             ) : (
               <div className="p-3 bg-slate-950/70 rounded-lg border border-slate-800 text-[11px] text-slate-400 space-y-1">
                 <p>
-                  🧱 Na <strong className="text-emerald-300">Pirâmide &amp; Confluência</strong> não existem Stop Loss e Take
-                  Profit globais:
+                  🧱 Na{' '}
+                  <strong className="text-emerald-300">
+                    {config.strategyMode === 'SIGNAL_STACK' ? 'Acumulação C/V' : 'Pirâmide & Confluência'}
+                  </strong>{' '}
+                  não existem Stop Loss e Take Profit globais:
                 </p>
                 <p>
-                  · TP de cada pirâmide e stop opcional → bloco verde “Parâmetros da Pirâmide Ativa”.<br />
-                  · Ordem mãe e proteções → inversão do fluxo (zeragem automática) + breakeven opcional da mãe.
+                  {config.strategyMode === 'SIGNAL_STACK' ? (
+                    <>· A saída é o SINAL OPOSTO: C fecha tudo que é V e vice-versa. Sem alvo e sem stop por contrato.</>
+                  ) : (
+                    <>· TP de cada pirâmide e stop opcional → bloco verde “Parâmetros da Pirâmide Ativa”.</>
+                  )}
+                  <br />
+                  · Ordem mãe e proteções → inversão do fluxo (zeragem automática)
+                  {config.strategyMode === 'SIGNAL_STACK' ? '.' : ' + breakeven opcional da mãe.'}
                 </p>
                 <p className="text-slate-500">As metas e travas abaixo continuam valendo para as duas estratégias.</p>
               </div>
