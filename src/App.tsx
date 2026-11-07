@@ -264,6 +264,24 @@ const ALT_RENKO_SCALES: { key: 'renko15r' | 'renko20r' | 'renko25r'; pts: number
 
 const REPLAY_DAY_CHOICES = [1, 3, 5];
 
+function marketSessionKey(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function latestSessionTicks(ticks: Tick[]): Tick[] {
+  const grouped = new Map<string, Tick[]>();
+  for (const tick of ticks) {
+    const key = marketSessionKey(tick.timestamp);
+    const session = grouped.get(key) ?? [];
+    session.push(tick);
+    grouped.set(key, session);
+  }
+  const dates = [...grouped.keys()].sort();
+  const latestDate = dates[dates.length - 1];
+  return latestDate ? grouped.get(latestDate) ?? [] : [];
+}
+
 /** Identifica se o símbolo recebido pela rede corresponde ao ativo atualmente em foco na tela. */
 function getAssetIdForSymbol(symbolStr?: string): AssetId {
   if (!symbolStr) return 'WIN';
@@ -538,6 +556,10 @@ export default function App() {
   });
 
   const [isReplaying, setIsReplaying] = useState<boolean>(false);
+  const isReplayingRef = useRef(isReplaying);
+  useEffect(() => {
+    isReplayingRef.current = isReplaying;
+  }, [isReplaying]);
 
   // Backtest com Ticks Reais (MT5 XP)
 
@@ -3976,6 +3998,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
+
                 const partialEvt = OrderAuditService.createEvent(
 
                   'PARTIAL_FILLED',
@@ -4609,6 +4632,66 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               timestamp: Date.now(),
 
+            });
+
+            const historyReqId = `connect-backfill-${Date.now()}`;
+            void marketHistoryService.requestHistory({
+              reqId: historyReqId,
+              symbol: chartSymbolFor(asset),
+              days: 10,
+              asset,
+              timeoutMs: 120_000,
+              send: (message) => {
+                if (socket.readyState !== WebSocket.OPEN) {
+                  throw new Error('A conexão com a ponte foi encerrada antes do pedido de histórico.');
+                }
+                socket.send(message);
+              },
+            }).then(({ ticks }) => {
+              if (
+                wsRef.current !== socket ||
+                socket.readyState !== WebSocket.OPEN ||
+                isReplayingRef.current ||
+                activeAssetIdRef.current !== asset.id
+              ) return;
+              const sessionTicks = latestSessionTicks(ticks);
+              if (sessionTicks.length === 0) {
+                setLatestToast({
+                  id: `mt5-history-empty-${Date.now()}`,
+                  type: 'INFO',
+                  title: 'PONTE CONECTADA · SEM HISTÓRICO RECENTE',
+                  description: `A conexão e autenticação funcionam, mas o MT5 não retornou ticks recentes de ${chartSymbolFor(asset)}. Confira se esse contrato tem histórico carregado no terminal.`,
+                  timestamp: Date.now(),
+                });
+                return;
+              }
+              const lastHistoryTick = sessionTicks[sessionTicks.length - 1];
+              const liveTail = allTicksRef.current
+                .filter((tick) =>
+                  tick.timestamp > lastHistoryTick.timestamp &&
+                  marketSessionKey(tick.timestamp) === marketSessionKey(lastHistoryTick.timestamp) &&
+                  tick.price > 0
+                )
+                .sort((a, b) => a.timestamp - b.timestamp);
+              const chartTicks = [...sessionTicks, ...liveTail];
+              handleBackfillTicks(chartTicks);
+              const sessionDate = new Date(sessionTicks[0].timestamp).toLocaleDateString('pt-BR');
+              setLatestToast({
+                id: `mt5-history-loaded-${Date.now()}`,
+                type: 'INFO',
+                title: 'ÚLTIMO PREGÃO CARREGADO',
+                description: `${chartTicks.length.toLocaleString('pt-BR')} ticks de ${sessionDate} exibidos no gráfico. O histórico é somente visualização; não gera ordens.`,
+                timestamp: Date.now(),
+              });
+            }).catch((error: unknown) => {
+              if (wsRef.current !== socket || socket.readyState !== WebSocket.OPEN) return;
+              setLatestToast({
+                id: `mt5-history-error-${Date.now()}`,
+                type: 'INFO',
+                title: 'PONTE CONECTADA · HISTÓRICO INDISPONÍVEL',
+                description: error instanceof Error ? error.message : 'O MT5 não conseguiu entregar o histórico recente.',
+                timestamp: Date.now(),
+              });
             });
 
           } else if (payload.type === 'ACCOUNT_INFO') {
@@ -10059,4 +10142,3 @@ ${
   );
 
 }
-

@@ -1311,7 +1311,7 @@ def _history_tick_record(raw, seq):
         "id": f"mt5-h-{time_msc}-{seq}",
         "timestamp": time_msc,
         "timeStr": datetime.fromtimestamp(time_msc / 1000).strftime('%H:%M:%S.%f')[:-3],
-        "price": round(float(_field(raw, "price", 0) or 0), ASSET_DECIMALS),
+        "price": round(float(_field(raw, "last", 0) or 0), ASSET_DECIMALS),
         "volume": int(_field(raw, "volume", 0) or 0),
         "aggressor": aggressor,
         "bid": float(_field(raw, "bid", 0) or 0),
