@@ -8,8 +8,9 @@ Não edite a seção do outro. Regras completas em `canal/REGRAS.md` e `canal/20
 ```
 mac     · trading.ts (FEITO) → paperStrategyBot.ts + BoletaTicket.tsx · desde 17:45
           motor da C/V: 4 portas de saída (virada, stop, breakeven por distância, take não fecha)
-windows · App.tsx + AutomationPanel.tsx · desde 17:20
-          C/V lendo stopLossPoints da boleta
+windows · App.tsx + AutomationPanel.tsx · desde 18:05 (trava escrita)
+          C/V lendo stopLossPoints da boleta; take nao fecha na C/V
+          puxou 46a0e8f, campos no tipo, tsc exit 0
 ```
 
 ## ESPERANDO
