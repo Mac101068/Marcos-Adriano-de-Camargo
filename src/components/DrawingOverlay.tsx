@@ -34,14 +34,22 @@ interface DrawingOverlayProps {
   onDelete: (id: string) => void;
 }
 
+type HandleType = 'point_a' | 'point_b' | 'corner_a' | 'corner_b' | 'corner_c' | 'corner_d' | 'body';
+
 interface DragState {
-  mode: 'create' | 'move' | 'erase';
+  mode: 'create' | 'move' | 'resize' | 'erase';
   tool?: DrawingTool;
   drawingId?: string;
+  handle?: HandleType;
   start: { bar: number; price: number };
   last: { bar: number; price: number };
   moved: boolean;
-  grabOffset?: { dBar: number; dPrice: number };
+  initialDrawing?: {
+    barA: number;
+    priceA: number;
+    barB: number;
+    priceB: number;
+  };
 }
 
 const newDrawingId = () => `drw_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -99,6 +107,27 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
     const bx = layout.indexToX(d.barB);
     const by = layout.priceToY(d.priceB);
     return { ax, ay, bx, by };
+  };
+
+  /** Detecta se o clique foi em alguma alça/canto de um objeto selecionado */
+  const hitTestHandle = (x: number, y: number, d: Drawing): HandleType | null => {
+    const p = drawingToPoints(d);
+    if (!p) return null;
+    const R = 10; // Raio de captura da alça em pixels
+    if (d.kind === 'rect') {
+      if (dist(x, y, p.ax, p.ay) <= R) return 'corner_a';
+      if (dist(x, y, p.bx, p.by) <= R) return 'corner_b';
+      if (dist(x, y, p.ax, p.by) <= R) return 'corner_c';
+      if (dist(x, y, p.bx, p.ay) <= R) return 'corner_d';
+    } else if (d.kind === 'trendline' || d.kind === 'arrow') {
+      if (dist(x, y, p.ax, p.ay) <= R) return 'point_a';
+      if (dist(x, y, p.bx, p.by) <= R) return 'point_b';
+    } else if (d.kind === 'hline') {
+      if (Math.abs(y - p.ay) <= R) return 'point_a';
+    } else if (d.kind === 'vline') {
+      if (Math.abs(x - p.ax) <= R) return 'point_a';
+    }
+    return null;
   };
 
   // ------------------------------------------------------------------
@@ -204,7 +233,32 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
       return;
     }
 
-    // Modo seleção: captura desenhos para mover ou selecionar
+    // Modo seleção: verifica primeiro se clicou em uma alça do objeto atualmente selecionado
+    if (selectedId) {
+      const selDrawing = drawings.find((d) => d.id === selectedId);
+      if (selDrawing) {
+        const handle = hitTestHandle(pt.px.x, pt.px.y, selDrawing);
+        if (handle) {
+          setDrag({
+            mode: 'resize',
+            drawingId: selDrawing.id,
+            handle,
+            start: { bar: pt.bar, price: pt.price },
+            last: { bar: pt.bar, price: pt.price },
+            moved: false,
+            initialDrawing: {
+              barA: selDrawing.barA,
+              priceA: selDrawing.priceA,
+              barB: selDrawing.barB,
+              priceB: selDrawing.priceB,
+            },
+          });
+          return;
+        }
+      }
+    }
+
+    // Se não clicou em uma alça, verifica se clicou no corpo de algum desenho
     const hit = hitTest(pt.px.x, pt.px.y);
     if (hit) {
       onSelect(hit.id);
@@ -216,10 +270,16 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
       setDrag({
         mode: 'move',
         drawingId: hit.id,
+        handle: 'body',
         start: { bar: pt.bar, price: pt.price },
         last: { bar: pt.bar, price: pt.price },
         moved: false,
-        grabOffset: { dBar: hit.barA - pt.bar, dPrice: hit.priceA - pt.price },
+        initialDrawing: {
+          barA: hit.barA,
+          priceA: hit.priceA,
+          barB: hit.barB,
+          priceB: hit.priceB,
+        },
       });
     } else {
       onSelect(null);
@@ -247,27 +307,115 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
     if (drag.mode === 'create') {
       setPreview({ a: startPx, b: pt.px });
       setDrag({ ...drag, last: { bar: pt.bar, price: pt.price }, moved });
-    } else if (drag.drawingId) {
-      const off = drag.grabOffset!;
-      onUpdate(drag.drawingId, { barA: pt.bar + off.dBar, priceA: pt.price + off.dPrice });
+    } else if (drag.mode === 'move' && drag.drawingId && drag.initialDrawing) {
+      // Movimentação do objeto inteiro (translação suave e sem distorção)
+      const init = drag.initialDrawing;
+      const dBar = pt.bar - drag.start.bar;
+      const dPrice = pt.price - drag.start.price;
+      const target = drawings.find((d) => d.id === drag.drawingId);
+      if (target) {
+        if (target.kind === 'hline') {
+          onUpdate(drag.drawingId, { priceA: init.priceA + dPrice, priceB: init.priceA + dPrice });
+        } else if (target.kind === 'vline') {
+          onUpdate(drag.drawingId, { barA: init.barA + dBar, barB: init.barA + dBar });
+        } else {
+          onUpdate(drag.drawingId, {
+            barA: init.barA + dBar,
+            priceA: init.priceA + dPrice,
+            barB: init.barB + dBar,
+            priceB: init.priceB + dPrice,
+          });
+        }
+      }
+      setDrag({ ...drag, last: { bar: pt.bar, price: pt.price }, moved });
+    } else if (drag.mode === 'resize' && drag.drawingId && drag.initialDrawing && drag.handle) {
+      // Redimensionamento interativo pelos cantos ou pontas das linhas
+      const init = drag.initialDrawing;
+      const dBar = pt.bar - drag.start.bar;
+      const dPrice = pt.price - drag.start.price;
+
+      if (drag.handle === 'point_a') {
+        onUpdate(drag.drawingId, { barA: init.barA + dBar, priceA: init.priceA + dPrice });
+      } else if (drag.handle === 'point_b') {
+        onUpdate(drag.drawingId, { barB: init.barB + dBar, priceB: init.priceB + dPrice });
+      } else if (drag.handle === 'corner_a') {
+        onUpdate(drag.drawingId, { barA: init.barA + dBar, priceA: init.priceA + dPrice });
+      } else if (drag.handle === 'corner_b') {
+        onUpdate(drag.drawingId, { barB: init.barB + dBar, priceB: init.priceB + dPrice });
+      } else if (drag.handle === 'corner_c') {
+        onUpdate(drag.drawingId, { barA: init.barA + dBar, priceB: init.priceB + dPrice });
+      } else if (drag.handle === 'corner_d') {
+        onUpdate(drag.drawingId, { barB: init.barB + dBar, priceA: init.priceA + dPrice });
+      }
       setDrag({ ...drag, last: { bar: pt.bar, price: pt.price }, moved });
     }
   };
 
   const handleMouseUp = () => {
     if (!drag || !layout) return;
-    if (drag.mode === 'create' && drag.tool && drag.moved) {
+    if (drag.mode === 'create' && drag.tool) {
       const kind = drag.tool as Exclude<DrawingTool, 'select' | 'eraser'>;
-      const d: Drawing = {
-        id: newDrawingId(),
-        kind,
-        barA: drag.start.bar,
-        priceA: drag.start.price,
-        barB: kind === 'hline' || kind === 'vline' ? drag.start.bar : drag.last.bar,
-        priceB: kind === 'hline' || kind === 'vline' ? drag.start.price : drag.last.price,
-        color: activeColor,
-      };
+      let d: Drawing;
+      // Passo de preço baseado em ~30px na tela
+      const priceDelta = Math.max(5, Math.abs(layout.yToPrice(drag.start.price) - layout.yToPrice(drag.start.price - 30)) || 10);
+
+      if (!drag.moved) {
+        // CRIAÇÃO COM APENAS 1 CLIQUE (sem necessidade de arrastar)
+        if (kind === 'rect') {
+          d = {
+            id: newDrawingId(),
+            kind: 'rect',
+            barA: drag.start.bar - 2,
+            priceA: drag.start.price + priceDelta * 1.5,
+            barB: drag.start.bar + 10,
+            priceB: drag.start.price - priceDelta * 1.5,
+            color: activeColor,
+          };
+        } else if (kind === 'trendline') {
+          d = {
+            id: newDrawingId(),
+            kind: 'trendline',
+            barA: drag.start.bar,
+            priceA: drag.start.price,
+            barB: drag.start.bar + 12,
+            priceB: drag.start.price + priceDelta,
+            color: activeColor,
+          };
+        } else if (kind === 'arrow') {
+          d = {
+            id: newDrawingId(),
+            kind: 'arrow',
+            barA: drag.start.bar,
+            priceA: drag.start.price,
+            barB: drag.start.bar + 8,
+            priceB: drag.start.price + priceDelta,
+            color: activeColor,
+          };
+        } else {
+          d = {
+            id: newDrawingId(),
+            kind,
+            barA: drag.start.bar,
+            priceA: drag.start.price,
+            barB: drag.start.bar,
+            priceB: drag.start.price,
+            color: activeColor,
+          };
+        }
+      } else {
+        // Criado por arrasto manual
+        d = {
+          id: newDrawingId(),
+          kind,
+          barA: drag.start.bar,
+          priceA: drag.start.price,
+          barB: kind === 'hline' || kind === 'vline' ? drag.start.bar : drag.last.bar,
+          priceB: kind === 'hline' || kind === 'vline' ? drag.start.price : drag.last.price,
+          color: activeColor,
+        };
+      }
       onCreate(d);
+      onSelect(d.id);
     }
     setDrag(null);
     setPreview(null);
@@ -314,12 +462,12 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         return (
           <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
             {/* Hitbox transparente larga */}
-            <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke="transparent" strokeWidth={16} strokeLinecap="round" className="cursor-pointer" />
-            <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke={hex} strokeLinecap="round" {...selAttr} />
+            <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke="transparent" strokeWidth={16} strokeLinecap="round" style={{ cursor: selected ? 'move' : 'pointer' }} />
+            <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke={hex} strokeLinecap="round" {...selAttr} style={{ cursor: selected ? 'move' : 'pointer' }} />
             {selected && (
               <>
-                <circle cx={p.ax} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
-                <circle cx={p.bx} cy={p.by} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.ax} cy={p.ay} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'crosshair' }} />
+                <circle cx={p.bx} cy={p.by} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'crosshair' }} />
               </>
             )}
           </g>
@@ -330,13 +478,13 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         return (
           <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
             {/* Hitbox transparente larga */}
-            <line x1={0} y1={p.ay} x2={endX} y2={p.ay} stroke="transparent" strokeWidth={16} className="cursor-pointer" />
-            <line x1={0} y1={p.ay} x2={endX} y2={p.ay} stroke={hex} strokeDasharray={selected ? '5 3' : '2 4'} strokeWidth={selected ? 2.5 : 1.4} />
+            <line x1={0} y1={p.ay} x2={endX} y2={p.ay} stroke="transparent" strokeWidth={16} style={{ cursor: selected ? 'ns-resize' : 'pointer' }} />
+            <line x1={0} y1={p.ay} x2={endX} y2={p.ay} stroke={hex} strokeDasharray={selected ? '5 3' : '2 4'} strokeWidth={selected ? 2.5 : 1.4} style={{ cursor: selected ? 'ns-resize' : 'pointer' }} />
             <rect x={tagX} y={p.ay - 8} width={62} height={15} rx={3} fill="#171717" stroke={selected ? '#f59e0b' : '#404040'} strokeWidth={selected ? 1.5 : 0.8} />
             <text x={tagX + 31} y={p.ay + 3} textAnchor="middle" fontSize={9.5} fontFamily="'JetBrains Mono', monospace" fill={hex}>
               {d.priceA.toLocaleString('pt-BR')}
             </text>
-            {selected && <circle cx={tagX + 31} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />}
+            {selected && <circle cx={tagX + 31} cy={p.ay} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'ns-resize' }} />}
           </g>
         );
       }
@@ -345,55 +493,64 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         return (
           <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
             {/* Hitbox transparente larga */}
-            <line x1={p.ax} y1={0} x2={p.ax} y2={paneH} stroke="transparent" strokeWidth={16} className="cursor-pointer" />
-            <line x1={p.ax} y1={0} x2={p.ax} y2={paneH} stroke={hex} strokeDasharray={selected ? '5 3' : '3 3'} strokeWidth={selected ? 2.5 : 1.4} />
+            <line x1={p.ax} y1={0} x2={p.ax} y2={paneH} stroke="transparent" strokeWidth={16} style={{ cursor: selected ? 'ew-resize' : 'pointer' }} />
+            <line x1={p.ax} y1={0} x2={p.ax} y2={paneH} stroke={hex} strokeDasharray={selected ? '5 3' : '3 3'} strokeWidth={selected ? 2.5 : 1.4} style={{ cursor: selected ? 'ew-resize' : 'pointer' }} />
             <rect x={p.ax - 22} y={6} width={44} height={14} rx={3} fill="#171717" stroke={selected ? '#f59e0b' : '#404040'} strokeWidth={selected ? 1.5 : 0.8} />
             <text x={p.ax} y={16} textAnchor="middle" fontSize={8.5} fontFamily="'JetBrains Mono', monospace" fill={hex}>
               #{d.barA}
             </text>
             {selected && (
               <>
-                <circle cx={p.ax} cy={13} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
-                <circle cx={p.ax} cy={paneH - 12} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.ax} cy={13} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'ew-resize' }} />
+                <circle cx={p.ax} cy={paneH - 12} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'ew-resize' }} />
               </>
             )}
           </g>
         );
       }
-      case 'rect':
+      case 'rect': {
+        const xMin = Math.min(p.ax, p.bx);
+        const xMax = Math.max(p.ax, p.bx);
+        const yMin = Math.min(p.ay, p.by);
+        const yMax = Math.max(p.ay, p.by);
+        const rw = Math.max(2, xMax - xMin);
+        const rh = Math.max(2, yMax - yMin);
         return (
           <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
             {/* Hitbox transparente na borda e fundo */}
             <rect
-              x={Math.min(p.ax, p.bx) - 4}
-              y={Math.min(p.ay, p.by) - 4}
-              width={Math.abs(p.bx - p.ax) + 8}
-              height={Math.abs(p.by - p.ay) + 8}
+              x={xMin - 4}
+              y={yMin - 4}
+              width={rw + 8}
+              height={rh + 8}
               fill="transparent"
               stroke="transparent"
-              className="cursor-pointer"
+              style={{ cursor: selected ? 'move' : 'pointer' }}
             />
             <rect
-              x={Math.min(p.ax, p.bx)}
-              y={Math.min(p.ay, p.by)}
-              width={Math.abs(p.bx - p.ax)}
-              height={Math.abs(p.by - p.ay)}
+              x={xMin}
+              y={yMin}
+              width={rw}
+              height={rh}
               fill={hex}
-              fillOpacity={0.08}
+              fillOpacity={0.10}
               stroke={hex}
-              strokeOpacity={0.8}
+              strokeOpacity={0.85}
               {...selAttr}
+              style={{ cursor: selected ? 'move' : 'pointer' }}
             />
             {selected && (
               <>
-                <circle cx={p.ax} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
-                <circle cx={p.bx} cy={p.by} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
-                <circle cx={p.ax} cy={p.by} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
-                <circle cx={p.bx} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                {/* 4 cantos com alças e cursores interativos de redimensionamento */}
+                <circle cx={p.ax} cy={p.ay} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'nwse-resize' }} />
+                <circle cx={p.bx} cy={p.by} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'nwse-resize' }} />
+                <circle cx={p.ax} cy={p.by} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'nesw-resize' }} />
+                <circle cx={p.bx} cy={p.ay} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'nesw-resize' }} />
               </>
             )}
           </g>
         );
+      }
       case 'arrow': {
         const angle = Math.atan2(p.by - p.ay, p.bx - p.ax);
         const headLen = 9;
@@ -407,13 +564,13 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         return (
           <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
             {/* Hitbox transparente larga */}
-            <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke="transparent" strokeWidth={16} strokeLinecap="round" className="cursor-pointer" />
-            <line x1={p.ax} y1={p.ay} x2={x2} y2={y2} stroke={hex} strokeLinecap="round" {...selAttr} />
-            <polygon points={pts} fill={hex} stroke="none" />
+            <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke="transparent" strokeWidth={16} strokeLinecap="round" style={{ cursor: selected ? 'move' : 'pointer' }} />
+            <line x1={p.ax} y1={p.ay} x2={x2} y2={y2} stroke={hex} strokeLinecap="round" {...selAttr} style={{ cursor: selected ? 'move' : 'pointer' }} />
+            <polygon points={pts} fill={hex} stroke="none" style={{ cursor: selected ? 'move' : 'pointer' }} />
             {selected && (
               <>
-                <circle cx={p.ax} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
-                <circle cx={p.bx} cy={p.by} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.ax} cy={p.ay} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'crosshair' }} />
+                <circle cx={p.bx} cy={p.by} r={5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} style={{ cursor: 'crosshair' }} />
               </>
             )}
           </g>
