@@ -342,8 +342,7 @@ function synthesizeTicksFromBoxes(bxList: RenkoBox[]): Tick[] {
     if (!b || !(b.close > 0) || !(b.open > 0)) continue;
     const tsStart = b.timeStart || Date.now() - (len - i) * 3000;
     const tsEnd = b.timeEnd && b.timeEnd >= tsStart ? b.timeEnd : tsStart + 1500;
-    const midTs = Math.round((tsStart + tsEnd) / 2);
-    const vol = Math.max(1, Math.round((b.totalVolume || 8) / 4));
+    const vol = Math.max(1, Math.round((b.totalVolume || 8) / 2));
 
     const mk = (p: number, t: number, agg: 'BUY' | 'SELL', sub: number): Tick => ({
       id: 'synth-' + i + '-' + sub,
@@ -354,24 +353,17 @@ function synthesizeTicksFromBoxes(bxList: RenkoBox[]): Tick[] {
       aggressor: agg,
     });
 
+    // Emissão suave da trajetória direcional sem micro-oscilações artificiais
     if (b.direction === 'UP') {
-      result.push(mk(b.open, tsStart, 'BUY', 1));
-      if (Number.isFinite(b.low) && b.low < b.open) {
-        result.push(mk(b.low, tsStart + 200, 'SELL', 2));
-      }
-      if (Number.isFinite(b.high) && b.high > b.close) {
-        result.push(mk(b.high, midTs, 'BUY', 3));
-      }
-      result.push(mk(b.close, tsEnd, 'BUY', 4));
+      const pStart = Number.isFinite(b.low) && b.low < b.open ? b.low : b.open;
+      const pEnd = Number.isFinite(b.high) && b.high > b.close ? b.high : b.close;
+      result.push(mk(pStart, tsStart, 'BUY', 1));
+      result.push(mk(pEnd, tsEnd, 'BUY', 2));
     } else {
-      result.push(mk(b.open, tsStart, 'SELL', 1));
-      if (Number.isFinite(b.high) && b.high > b.open) {
-        result.push(mk(b.high, tsStart + 200, 'BUY', 2));
-      }
-      if (Number.isFinite(b.low) && b.low < b.close) {
-        result.push(mk(b.low, midTs, 'SELL', 3));
-      }
-      result.push(mk(b.close, tsEnd, 'SELL', 4));
+      const pStart = Number.isFinite(b.high) && b.high > b.open ? b.high : b.open;
+      const pEnd = Number.isFinite(b.low) && b.low < b.close ? b.low : b.close;
+      result.push(mk(pStart, tsStart, 'SELL', 1));
+      result.push(mk(pEnd, tsEnd, 'SELL', 2));
     }
   }
   return result;
@@ -797,7 +789,7 @@ export default function App() {
   });
 
 
-  const [rangePoints, setRangePoints] = useState<number>(() => Number(localStorage.getItem('fluxo_chart_range_pts_v1')) || 50);
+  const [rangePoints, setRangePoints] = useState<number>(() => Number(localStorage.getItem('fluxo_chart_range_pts_v1')) || 100);
 
   const [timeframeSec, setTimeframeSec] = useState<number>(() => Number(localStorage.getItem('fluxo_chart_time_sec_v1')) || 30);
 
@@ -809,7 +801,7 @@ export default function App() {
 
   const [timeCurrentBox, setTimeCurrentBox] = useState<Partial<RenkoBox> | null>(null);
 
-  const rangeEngineRef = useRef<RangeBarEngine>(new RangeBarEngine(50));
+  const rangeEngineRef = useRef<RangeBarEngine>(new RangeBarEngine(100));
 
   const timeEngineRef = useRef<TimeBarEngine>(new TimeBarEngine(30000));
 

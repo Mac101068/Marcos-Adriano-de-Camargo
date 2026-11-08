@@ -985,7 +985,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // VÃO MÍNIMO REAL: o tijolo nunca encosta no vizinho. O piso do vão (0,2) somado ao piso da
     // largura (1px) deixava os dois maiores que o passo em zoom baixo — os tijolos se sobrepunham
     // e o gráfico virava um bloco. Aqui a largura é sempre menor que o passo.
-    boxWidth = Math.max(0.5, Math.min(boxWidth, stepX - Math.max(0.3, stepX * 0.12)));
+    // No modo Range garantimos vão mínimo respirável para os blocos não ficarem comprimidos
+    const isRangeSeries = chartSeries === 'range';
+    const minGap = isRangeSeries ? Math.max(1.5, stepX * 0.20) : Math.max(0.3, stepX * 0.12);
+    boxWidth = Math.max(0.5, Math.min(boxWidth, stepX - minGap));
 
     // Âncora à direita COM PAN CONTÍNUO: a série desliza effectiveScroll * stepX PIXELS, e não
     // "N tijolos inteiros." É isso que faz o arrasto horizontal seguir a mão 1:1 em vez de grudar
@@ -1760,16 +1763,26 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.rect(0, 0, Math.max(0, lineRight), Math.max(1, pricePaneHeight - 1));
       ctx.clip();
 
-      // Pavio apenas no Range: ali o box guarda a máxima/mínima REAIS do período. No Renko
-      // o corpo é fechado (open→close = 1 box) e o "pavio" vinha da janela de acumulação —
-      // era ele que dava ao tijolo o aspecto de candle sujo e borrava a emenda dos pregões.
+      // Pavio limpo apenas no Range: desenhado externamente ao corpo (nunca atravessa o bloco)
       if (chartSeries === 'range') {
-        ctx.strokeStyle = isUp ? '#059669' : '#dc2626';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(centerX, highY);
-        ctx.lineTo(centerX, lowY);
-        ctx.stroke();
+        const topBodyY = Math.min(openY, closeY);
+        const bottomBodyY = Math.max(openY, closeY);
+        ctx.strokeStyle = isUp ? 'rgba(52, 211, 153, 0.85)' : 'rgba(248, 113, 113, 0.85)';
+        ctx.lineWidth = 1;
+        // Pavio superior (da máxima ao topo do corpo)
+        if (highY < topBodyY - 0.5) {
+          ctx.beginPath();
+          ctx.moveTo(centerX, highY);
+          ctx.lineTo(centerX, topBodyY);
+          ctx.stroke();
+        }
+        // Pavio inferior (do fundo do corpo à mínima)
+        if (lowY > bottomBodyY + 0.5) {
+          ctx.beginPath();
+          ctx.moveTo(centerX, bottomBodyY);
+          ctx.lineTo(centerX, lowY);
+          ctx.stroke();
+        }
       }
 
       if (showRenkoGhost) {
@@ -1802,8 +1815,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
         if (!isMobile) {
           const ptsRemaining = isUp ? targetClosePrice - currentPrice : currentPrice - targetClosePrice;
-          // Etiqueta acima do ALVO do box (ghost), nunca do pavio: o número acompanha o tijolo
-          // em formação em vez de flutuar longe dele.
           const ghostLabelY = Math.min(topY, ghostTopY);
           ctx.fillStyle = '#38bdf8';
           ctx.font = '9px "JetBrains Mono", monospace';
@@ -1816,10 +1827,39 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             ghostLabelY - 3
           );
         }
-      } else if (chartSeries === 'renko') {
-        // TIJOLO RENKO LIMPO: bloco sólido de 1 box, canto discreto, borda fina da mesma
-        // família da cor (escurecer demais engorda o desenho) e realce de 1px no topo para
-        // dar relevo sem virar candle.
+      } else if (isForming && chartSeries === 'range') {
+        // BARRA DE RANGE EM FORMAÇÃO (GHOST ATIVO COM CONTAGEM DO RANGE)
+        const rangeCovered = Math.max(0, (b.high ?? currentPrice) - (b.low ?? currentPrice));
+        const ptsRemaining = Math.max(0, rangePoints - rangeCovered);
+        const radius = boxWidth >= 6 ? 2 : 1;
+
+        ctx.fillStyle = isUp ? 'rgba(16, 185, 129, 0.55)' : 'rgba(239, 68, 68, 0.55)';
+        ctx.strokeStyle = isUp ? '#34d399' : '#f87171';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(left, topY, boxWidth, boxH, radius);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = isUp ? '#34d399' : '#f87171';
+        ctx.beginPath();
+        ctx.arc(centerX, closeY, isMobile ? 2.5 : 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (!isMobile) {
+          ctx.fillStyle = '#38bdf8';
+          ctx.font = '9px "JetBrains Mono", monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`+${b.ticksCount || 0}t`, centerX, highY - 12);
+          ctx.fillStyle = isUp ? '#34d399' : '#f87171';
+          ctx.fillText(
+            `${ptsRemaining > 0 ? `faltam ${formatPrice(ptsRemaining, asset)}p` : 'fechando'}`,
+            centerX,
+            highY - 3
+          );
+        }
+      } else if (chartSeries === 'renko' || chartSeries === 'range') {
+        // TIJOLO RENKO E RANGE LIMPOS: bloco sólido, cantos discretos, borda fina e realce de 1px
         const radius = boxWidth >= 6 ? 2 : 1;
         ctx.fillStyle = isUp ? '#10b981' : '#ef4444';
         ctx.beginPath();
@@ -1864,13 +1904,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         !hideSignals &&
         (b.orderDispatched === 'BUY' ||
           isFirstBuyConvergence ||
-          (b.convergenceType === 'BUY_CONVERGENCE' && centerX - lastBuySignalX >= 65));
+          (b.convergenceType === 'BUY_CONVERGENCE' && centerX - lastBuySignalX >= (chartSeries === 'range' ? 95 : 65)));
 
       const shouldDrawSell =
         !hideSignals &&
         (b.orderDispatched === 'SELL' ||
           isFirstSellConvergence ||
-          (b.convergenceType === 'SELL_CONVERGENCE' && centerX - lastSellSignalX >= 65));
+          (b.convergenceType === 'SELL_CONVERGENCE' && centerX - lastSellSignalX >= (chartSeries === 'range' ? 95 : 65)));
 
       if (shouldDrawBuy) {
         ctx.fillStyle = '#10b981';
@@ -3409,10 +3449,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 title="Escala do Range em pontos (variação High-Low por barra)"
               >
                 {(asset.id === 'WDO'
-                  ? [2.5, 5, 10, 15, 20]
+                  ? [2.5, 5, 7.5, 10, 15, 20]
                   : asset.id === 'BTCBR'
-                  ? [100, 200, 400, 500, 1000]
-                  : [10, 25, 50, 75, 100, 150]
+                  ? [200, 400, 500, 1000, 2000]
+                  : [50, 75, 100, 150, 200, 250, 300, 400, 500]
                 ).map((p) => (
                   <option key={p} value={p}>
                     {formatPrice(p, asset)} pts
