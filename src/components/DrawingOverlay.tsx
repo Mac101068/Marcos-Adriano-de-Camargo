@@ -305,16 +305,17 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         );
       case 'hline': {
         const endX = Math.max(0, width - 80);
+        const tagX = 53; // 38px (barra de desenho) + 15px (respiro)
         return (
           <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
             {/* Hitbox transparente larga */}
             <line x1={0} y1={p.ay} x2={endX} y2={p.ay} stroke="transparent" strokeWidth={16} className="cursor-pointer" />
             <line x1={0} y1={p.ay} x2={endX} y2={p.ay} stroke={hex} strokeDasharray={selected ? '5 3' : '2 4'} strokeWidth={selected ? 2.5 : 1.4} />
-            <rect x={4} y={p.ay - 8} width={62} height={15} rx={3} fill="#171717" stroke={selected ? '#f59e0b' : '#404040'} strokeWidth={selected ? 1.5 : 0.8} />
-            <text x={35} y={p.ay + 3} textAnchor="middle" fontSize={9.5} fontFamily="'JetBrains Mono', monospace" fill={hex}>
+            <rect x={tagX} y={p.ay - 8} width={62} height={15} rx={3} fill="#171717" stroke={selected ? '#f59e0b' : '#404040'} strokeWidth={selected ? 1.5 : 0.8} />
+            <text x={tagX + 31} y={p.ay + 3} textAnchor="middle" fontSize={9.5} fontFamily="'JetBrains Mono', monospace" fill={hex}>
               {d.priceA.toLocaleString('pt-BR')}
             </text>
-            {selected && <circle cx={35} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />}
+            {selected && <circle cx={tagX + 31} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />}
           </g>
         );
       }

@@ -880,14 +880,14 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.fillStyle = '#52525b';
       const pricePaneLabel =
         chartSeries === 'range' ? 'PREÇO · RANGE' : chartSeries === 'tempo' ? 'PREÇO · TEMPO' : 'PREÇO · RENKO';
-      ctx.fillText(pricePaneLabel, 4, pricePaneHeight - TIME_AXIS_BAND_H - 4);
+      ctx.fillText(pricePaneLabel, 53, pricePaneHeight - TIME_AXIS_BAND_H - 4);
       // No Heikin-Ashi a própria subfaixa já vem rotulada logo abaixo, então só rotula o
       // painel de fluxo nos modos onde ele ocupa a janela inteira. A etiqueta senta na folga do
       // topo: a régua de tempo não mora mais aí, o indicador é dono da janela.
       if (flowViewMode !== 'heikin_ashi') {
         ctx.fillText(
           flowViewMode === 'histogram' ? 'FLUXO · DELTA' : 'FLUXO · HÍBRIDO',
-          4,
+          53,
           pricePaneHeight + FLOW_TOP_PAD - 4
         );
       }
@@ -1588,12 +1588,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.fill();
       }
 
-      // Etiqueta das subfaixas com status da JANELA DE FLUXO do robô
+      // Etiqueta das subfaixas com status da JANELA DE FLUXO do robô (deslocada respeitando barra de desenho)
       if (!isMobile) {
         ctx.font = '8.5px "Plus Jakarta Sans", sans-serif';
         ctx.textAlign = 'left';
         ctx.fillStyle = '#71717a';
-        ctx.fillText('FLUXO · HEIKIN-ASHI', 4, haBandTop + 9);
+        ctx.fillText('FLUXO · HEIKIN-ASHI', 53, haBandTop + 9);
 
         const lastHa = flowHaData.length > 0 ? flowHaData[flowHaData.length - 1] : null;
         if (lastHa) {
@@ -1610,12 +1610,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           const tagColor = isUp ? '#34d399' : isDn ? '#f87171' : isAbs ? '#facc15' : '#71717a';
           ctx.font = 'bold 8.5px "Plus Jakarta Sans", sans-serif';
           ctx.fillStyle = tagColor;
-          ctx.fillText(`• ${tagTxt}`, 118, haBandTop + 9);
+          ctx.fillText(`• ${tagTxt}`, 53 + 114, haBandTop + 9);
         }
 
         ctx.font = '8.5px "Plus Jakarta Sans", sans-serif';
         ctx.fillStyle = '#52525b';
-        ctx.fillText('HISTOGRAMA · DELTA', 4, histBandTop + 9);
+        ctx.fillText('HISTOGRAMA · DELTA', 53, histBandTop + 9);
       }
 
       // Linha de zero do Delta
@@ -2216,7 +2216,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       const placed = freeBand(priceY, 8.5, tagBands);
       if (placed === null) return;
       // Mesma proteção de sempre: encostado no topo, a placa cede lugar ao selo do dia.
-      const x = placed <= 56 ? 245 : 8;
+      // Deslocado para respeitar a barra de desenho (38px) + folga de 15px = 53px.
+      const x = placed <= 56 ? 245 : 53;
       ctx.fillStyle = 'rgba(9, 9, 11, 0.88)';
       ctx.beginPath();
       ctx.roundRect(x, placed - 8.5, w, 17, 3);
@@ -2297,13 +2298,14 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         lastLabelY = y;
         const tag = `${lv.label} ${formatPrice(lv.price, asset)}`;
         const tw = ctx.measureText(tag).width + 8;
+        const tagLeft = 53; // 38px (barra de desenho) + 15px (folga/respiro)
         ctx.fillStyle = 'rgba(9, 9, 11, 0.74)';
         ctx.beginPath();
-        ctx.roundRect(4, y - 8, tw, 12, 2);
+        ctx.roundRect(tagLeft, y - 8, tw, 12, 2);
         ctx.fill();
         // A etiqueta usa a cor do nível, mas um tom acima do traço para continuar legível.
         ctx.fillStyle = levelRgba(lv.color, 0.85);
-        ctx.fillText(tag, 8, y + 1.5);
+        ctx.fillText(tag, tagLeft + 4, y + 1.5);
         // Reserva a faixa: etiqueta de nível e etiqueta de ordem no mesmo y virariam ruído.
         tagBands.push({ y0: y - 8, y1: y + 4 });
       });

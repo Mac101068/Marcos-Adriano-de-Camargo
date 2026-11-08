@@ -167,17 +167,19 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   }
 
   return (
-    <div className="absolute top-1 left-0 z-30 select-none pointer-events-auto flex flex-col items-center gap-1 p-1 rounded-r-xl bg-zinc-950/92 backdrop-blur-md border border-l-0 border-zinc-800/90 shadow-2xl transition-all">
-      {/* Botão de minimizar/recolher */}
-      <button
-        onClick={toggleCollapsed}
-        title="Recolher barra de desenho"
-        className="w-7 h-5 flex items-center justify-center rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 transition-colors cursor-pointer"
-      >
-        <ChevronLeft className="w-3 h-3" />
-      </button>
+    <div className="absolute top-0 bottom-0 left-0 w-[38px] h-full z-30 select-none pointer-events-auto flex flex-col items-center justify-between py-2 border-r border-zinc-800/80 bg-zinc-950/95 backdrop-blur-md shadow-2xl transition-all">
+      {/* Grupo Superior: Recolher + Ferramentas + Cores + Desfazer / Limpar */}
+      <div className="flex flex-col items-center gap-1 w-full overflow-y-auto no-scrollbar">
+        {/* Botão de minimizar/recolher */}
+        <button
+          onClick={toggleCollapsed}
+          title="Recolher barra de desenho"
+          className="w-7 h-6 flex items-center justify-center rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 transition-colors cursor-pointer"
+        >
+          <ChevronLeft className="w-3.5 h-3.5" />
+        </button>
 
-      <div className="w-5 h-[1px] bg-zinc-800/80 my-0.5" />
+        <div className="w-5 h-[1px] bg-zinc-800/80 my-0.5" />
 
       {/* Ferramentas de Desenho */}
       {TOOL_ITEMS.map(({ tool, icon: Icon, label, shortcut }) => {
@@ -277,11 +279,12 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
           Limpar desenhos
         </span>
       </button>
+      </div>
 
-      <div className="w-5 h-[1px] bg-zinc-800/80 my-0.5" />
-
-      {/* Botão de Estudos Criados (Camadas / Seleção) */}
-      <div className="relative">
+      {/* Grupo Inferior: Estudos Criados / Camadas ancorado na base da barra */}
+      <div className="flex flex-col items-center gap-1 w-full pt-1.5 border-t border-zinc-800/80">
+        {/* Botão de Estudos Criados (Camadas / Seleção) */}
+        <div className="relative">
         <button
           onClick={() => setObjectsPanelOpen((v) => !v)}
           title={`Estudos no gráfico (${drawings.length} criados) — clique para gerenciar o que deixar`}
@@ -391,6 +394,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
             )}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
