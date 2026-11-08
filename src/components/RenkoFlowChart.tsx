@@ -26,7 +26,7 @@ import type { FunnelMetricsSnapshot } from '../utils/funnelMetrics';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
-import { Sliders, ArrowUp, ArrowDown } from 'lucide-react';
+import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff } from 'lucide-react';
 
 const getStorageKeyScales = (assetId?: string) => `fluxo_renko_chart_scales_${assetId || 'WIN'}_v3`;
 const STORAGE_KEY_FLOW_MODE = 'fluxo_renko_flow_mode_v1';
@@ -172,6 +172,9 @@ interface RenkoFlowChartProps {
    * a faixa fica em só leitura.
    */
   onFunnelPatch?: (patch: Partial<AutomationConfig>) => void;
+  /** Trava de silenciamento das notificações de ordens (toasts flutuantes na tela). */
+  orderNotifsMuted?: boolean;
+  onToggleOrderNotifs?: () => void;
 }
 
 interface FlowHeikinAshi {
@@ -257,6 +260,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   asset = ASSETS[DEFAULT_ASSET_ID],
   funnelMetrics,
   onFunnelPatch,
+  orderNotifsMuted = false,
+  onToggleOrderNotifs,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -3625,11 +3630,27 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         {/* ========================================================================= */}
 
         {/* ========================================================================= */}
-        {/* Engrenagem DE AJUSTES: o interruptor vive na linha da boleta; o painel abre aqui.   */}
-        {/* Painel de exibição (tijolos/zoom/modo/escala do fluxo + legenda). Limpa a tela.  */}
+        {/* PAINEL DE VISUALIZAÇÃO: aberto pelo ícone de olho na boleta.             */}
+        {/* Painel de exibição (tijolos/zoom/modo/notificações + legenda).            */}
         {/* ========================================================================= */}
         {chartToolsOpen && (
-          <div className="absolute bottom-11 right-2 z-30 w-[252px] rounded-lg bg-zinc-900/96 backdrop-blur-md border border-zinc-700/80 p-2.5 shadow-2xl pointer-events-auto select-none space-y-2.5">
+          <div className="absolute bottom-11 right-2 z-30 w-[260px] rounded-lg bg-zinc-900/96 backdrop-blur-md border border-zinc-700/80 p-2.5 shadow-2xl pointer-events-auto select-none space-y-2.5">
+            {/* Cabeçalho do painel de Visualização */}
+            <div className="flex items-center justify-between pb-1.5 border-b border-zinc-800">
+              <span className="text-xs font-bold text-slate-100 flex items-center gap-1.5">
+                <Eye className="w-3.5 h-3.5 text-amber-400" />
+                Visualização
+              </span>
+              <button
+                onClick={() => setChartToolsOpen(false)}
+                className="p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+                title="Fechar visualização"
+                aria-label="Fechar"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
             {/* ESCALA DO BOX (R) — a definição mora aqui. Trocar o R redesenha a história inteira
                 na escala nova (o App reprocessa os ticks guardados), então o teste é imediato. */}
             {chartSeries === 'renko' && onRenkoBoxPointsChange && (
@@ -3814,6 +3835,54 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               Marca d'água: {assetWatermark ? `${asset.id} anexada` : 'desanexada'}
             </button>
 
+            {/* Trava das Notificações das Ordens */}
+            <div className="pt-2 border-t border-zinc-800 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-semibold text-zinc-200 flex items-center gap-1.5">
+                    {orderNotifsMuted ? (
+                      <BellOff className="w-3.5 h-3.5 text-rose-400" />
+                    ) : (
+                      <Bell className="w-3.5 h-3.5 text-emerald-400" />
+                    )}
+                    Notificações de Ordens
+                  </span>
+                  <span className="text-[9px] text-zinc-400 leading-tight">
+                    {orderNotifsMuted ? 'Toasts silenciados (trava ON)' : 'Avisos de ordens ativos'}
+                  </span>
+                </div>
+                {onToggleOrderNotifs && (
+                  <button
+                    onClick={onToggleOrderNotifs}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors cursor-pointer ${
+                      orderNotifsMuted
+                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                        : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    }`}
+                    title="Trava das notificações: quando travada, bloqueia os balões/toasts de ordens no gráfico"
+                  >
+                    {orderNotifsMuted ? 'TRAVADA' : 'LIBERADA'}
+                  </button>
+                )}
+              </div>
+
+              {/* Linhas de Ordens (SL/TP) no Gráfico */}
+              <div className="flex items-center justify-between pt-1 border-t border-zinc-800/60">
+                <span className="text-[10px] font-semibold text-zinc-400">Linhas de Posições (SL/TP)</span>
+                <button
+                  onClick={() => setShowOrderLines((v) => !v)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
+                    showOrderLines
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                  }`}
+                  title="Exibir ou ocultar linhas de posições abertas no gráfico"
+                >
+                  {showOrderLines ? 'VISÍVEIS' : 'OCULTAS'}
+                </button>
+              </div>
+            </div>
+
             {/* Legenda (antes no rodapé, agora dentro do painel) */}
             <div className="border-t border-zinc-800 pt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[9.5px] text-zinc-400">
               <div className="flex items-center gap-1">
@@ -3883,7 +3952,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* ========================================================================= */}
       <div className="flex items-center justify-end px-3 sm:px-4 py-0.5 bg-zinc-950 border-t border-zinc-900 text-[9px] sm:text-[10px] text-zinc-600 font-mono shrink-0">
         <span className="truncate">
-          Ajustes no ⚙ da linha da Boleta (o painel abre no canto inferior direito) · arraste o gráfico para mover · réguas dão zoom Y/Fluxo · duplo clique auto-escala
+          Ajustes no 👁 da linha da Boleta (painel Visualização) · arraste o gráfico para mover · réguas dão zoom Y/Fluxo · duplo clique auto-escala
         </span>
       </div>
     </div>

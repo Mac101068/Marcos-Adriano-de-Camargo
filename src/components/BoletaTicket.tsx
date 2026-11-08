@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronUp, Pin, PinOff, Settings } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronUp, Pin, PinOff, Eye } from 'lucide-react';
 import { TradeOrder } from '../types/trading';
 import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, pointsToBRL, snapToTick } from '../assets/assetRegistry';
 
@@ -362,20 +362,20 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
     !!hedgeBook &&
     hedgeBook.buy.filled + hedgeBook.sell.filled + hedgeBook.buy.pending + hedgeBook.sell.pending > 0;
 
-  // Recolhida, a engrenagem acompanha o chip: sem ela o atalho dos ajustes do gráfico ficaria
+  // Recolhida, o ícone de olho (visualização) acompanha o chip: sem ele o atalho dos ajustes do gráfico ficaria
   // preso atrás do recolhimento automático (controle primário tem que estar sempre ao alcance).
   const gearBtn = (
     <button
       onClick={onToggleChartTools}
       className={`flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md border backdrop-blur-md shadow-xl pointer-events-auto cursor-pointer transition-colors ${
         chartToolsOpen
-          ? 'bg-sky-500/25 text-sky-200 border-sky-500/50'
+          ? 'bg-amber-500/25 text-amber-200 border-amber-500/50'
           : 'bg-zinc-950/92 border-zinc-700/80 text-zinc-400 hover:text-white hover:border-zinc-600'
       }`}
-      title="Ajustes do gráfico: tijolos, zoom, modo de tela, escala do fluxo e legenda"
-      aria-label="Abrir ou fechar os ajustes do gráfico"
+      title="Ajustes de visualização do gráfico: tijolos, zoom, escala do fluxo e notificações"
+      aria-label="Abrir ou fechar os ajustes de visualização do gráfico"
     >
-      <Settings className="w-3.5 h-3.5" />
+      <Eye className="w-3.5 h-3.5" />
     </button>
   );
 
@@ -433,17 +433,17 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           conexão do cabeçalho e nos títulos dos botões COMPRA/VENDA desta caixa. */}
       <div className="flex items-center gap-1.5 px-2 h-7 border-b border-zinc-800/80">
         <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">Boleta</span>
-        {/* Engrenagem dos ajustes do gráfico: colada na linha da boleta, à esquerda do sininho. */}
+        {/* Ícone de olho dos ajustes de visualização: colado na linha da boleta, à esquerda do sininho. */}
         {onToggleChartTools && (
           <button
             onClick={onToggleChartTools}
             className={`ml-auto p-0.5 cursor-pointer transition-colors ${
-              chartToolsOpen ? 'text-sky-300' : 'text-zinc-500 hover:text-zinc-200'
+              chartToolsOpen ? 'text-amber-300' : 'text-zinc-500 hover:text-zinc-200'
             }`}
-            title="Ajustes do gráfico: tijolos, zoom, modo de tela, escala do fluxo e legenda"
-            aria-label="Abrir ou fechar os ajustes do gráfico"
+            title="Ajustes de visualização do gráfico: tijolos, zoom, escala do fluxo e notificações"
+            aria-label="Abrir ou fechar os ajustes de visualização do gráfico"
           >
-            <Settings className="w-3 h-3" />
+            <Eye className="w-3 h-3" />
           </button>
         )}
         <button

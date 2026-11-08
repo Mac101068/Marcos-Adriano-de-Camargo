@@ -1436,7 +1436,24 @@ export default function App() {
 
   } | null>(null);
 
+  // Trava das notificações de ordens (silencia toasts de compra/venda na tela)
+  const [orderNotifsMuted, setOrderNotifsMuted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('fluxo_order_notifs_muted_v1') === '1';
+    } catch {
+      return false;
+    }
+  });
 
+  const handleToggleOrderNotifs = useCallback(() => {
+    setOrderNotifsMuted((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('fluxo_order_notifs_muted_v1', next ? '1' : '0');
+      } catch {}
+      return next;
+    });
+  }, []);
 
   // Estado da Conexão MT5 Live Bridge
 
@@ -8591,6 +8608,10 @@ ${
 
                   onFunnelPatch={handleBoletaConfigPatch}
 
+                  orderNotifsMuted={orderNotifsMuted}
+
+                  onToggleOrderNotifs={handleToggleOrderNotifs}
+
                 />
 
               </div>
@@ -9503,7 +9524,7 @@ ${
         </div>
       )}
 
-      {latestToast && (activeTab === 'chart' || !latestToast.chartOnly) && (
+      {latestToast && (activeTab === 'chart' || !latestToast.chartOnly) && (!orderNotifsMuted || latestToast.type === 'INFO') && (
 
         <div
 
