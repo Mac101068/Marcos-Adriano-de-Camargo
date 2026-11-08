@@ -5769,8 +5769,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     }> => {
 
-      // Pede targetDays + 1 para ter sempre o dia anterior estático como contexto de suporte/resistência no gráfico
-      const daysToRequest = Math.max(2, Math.min(10, targetDays + 1));
+      // Pede targetDays para carregar exatamente os dias solicitados sem mascarar o ensaio
+      const daysToRequest = Math.max(1, Math.min(10, targetDays));
 
       const synthetic = () =>
         generateHistoricalTicks(daysToRequest, referencePrice(asset), seed, asset);
@@ -6087,24 +6087,21 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       let label = '';
       let calculatedContextEnd = 0;
 
-      if (sortedDays.length >= 2 && replayTargetDays <= 2) {
-        // Modo com DIA ANTERIOR ESTÁTICO:
-        // O pregão anterior entra como contexto de fundo no gráfico (níveis de preço e fluxo).
-        // A animação reproduz o pregão-alvo a partir da sua abertura!
-        const targetDayKey = replayTargetDays === 2 && sortedDays.length >= 3
-          ? sortedDays[sortedDays.length - 2]
-          : sortedDays[sortedDays.length - 1];
-        const targetIdx = sortedDays.indexOf(targetDayKey);
-        const prevDayKey = targetIdx > 0 ? sortedDays[targetIdx - 1] : sortedDays[0];
-
-        const prevTicks = daysMap.get(prevDayKey) || [];
-        const targetTicks = daysMap.get(targetDayKey) || [];
-        ticks = [...prevTicks, ...targetTicks];
-        calculatedContextEnd = prevTicks.length;
-
+      if (sortedDays.length >= 1 && replayTargetDays === 1) {
+        // Replay do pregão de Hoje (mais recente): inicia 100% limpo a partir da abertura
+        const targetDayKey = sortedDays[sortedDays.length - 1];
+        ticks = daysMap.get(targetDayKey) || rawTicks;
+        calculatedContextEnd = 0;
         const [y, m, d] = (targetDayKey || '').split('-');
         const isToday = !targetDayKey || new Date().toISOString().startsWith(targetDayKey) || (d === '04' && m === '11');
-        label = `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''} [com contexto anterior]`;
+        label = `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''}`;
+      } else if (sortedDays.length >= 2 && replayTargetDays === 2) {
+        // Replay do pregão de Ontem: inicia 100% limpo a partir da abertura daquele pregão
+        const targetDayKey = sortedDays[sortedDays.length - 2];
+        ticks = daysMap.get(targetDayKey) || rawTicks;
+        calculatedContextEnd = 0;
+        const [y, m, d] = (targetDayKey || '').split('-');
+        label = `${d}/${m}/${y} (Ontem)`;
       } else {
         ticks = rawTicks;
         calculatedContextEnd = 0;
@@ -6188,8 +6185,18 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       // nos segundos entre o clique e o começo da reprodução.
 
       shadowRobotService.beginBatch();
-
       allTicksRef.current = [];
+
+      // Garante que a tela e os acumuladores iniciem 100% zerados
+      setBoxes([]);
+      setSessionGaps([]);
+      setCurrentBox(null);
+      setCvd(0);
+      setRangeBoxes([]);
+      setRangeCurrentBox(null);
+      setTimeBoxes([]);
+      setTimeCurrentBox(null);
+      setCurrentPrice(ticks[0].price);
 
 
 
