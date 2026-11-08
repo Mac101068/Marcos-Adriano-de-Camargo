@@ -964,9 +964,10 @@ export default function App() {
     activeStrategyNameRef.current = activeStrategyName;
   }, [activeStrategyName]);
 
-  // Referências para controle remoto do replay
-  const handleReplayHistoryRef = useRef<((days: number, isRemoteSync?: boolean) => void) | null>(null);
+  // Referências para controle remoto do replay e conexão
+  const handleReplayHistoryRef = useRef<((days: number, seedOverride?: number, isRemoteSync?: boolean) => void) | null>(null);
   const handleStopReplayRef = useRef<((isRemoteSync?: boolean) => void) | null>(null);
+  const toggleMT5ConnectRef = useRef<((manualAction?: 'CONNECT' | 'DISCONNECT', isRemoteSync?: boolean) => void) | null>(null);
 
   // Canal de sincronização entre abas e dispositivos (SaaS Multi-Tela em tempo real)
   const saasChannelRef = useRef<BroadcastChannel | null>(null);
@@ -996,13 +997,20 @@ export default function App() {
               handleApplyConfigBundle(data.config, profileName, true);
             }
           }
+        } else if (data.type === 'MT5_CONNECT_SYNC') {
+          if (data.action === 'CONNECT') {
+            toggleMT5ConnectRef.current?.('CONNECT', true);
+          } else if (data.action === 'DISCONNECT') {
+            toggleMT5ConnectRef.current?.('DISCONNECT', true);
+          }
         } else if (data.type === 'REPLAY_START_SYNC') {
           const rDays = data.days ?? 1;
           const rSpd = data.speed;
+          const rSeed = data.seed;
           if (rSpd) setSimulationSpeed(rSpd);
           setReplayDays(rDays);
           if (!isReplayingRef.current) {
-            handleReplayHistoryRef.current?.(rDays, true);
+            handleReplayHistoryRef.current?.(rDays, rSeed, true);
           }
         } else if (data.type === 'REPLAY_STOP_SYNC') {
           if (isReplayingRef.current) {
@@ -1509,9 +1517,9 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
 
   // Começa em `true`: sem pedido do operador, a ponte NÃO é tocada (regra do Ciclo 12 — o
-  // terminal acorda parado). Só vira `false` quando ele clica em Conectar; a partir daí a
-  // reconexão automática cuida de quedas, e clicar em Desconectar fecha a porta de novo.
-  const userDisconnectedRef = useRef(true);
+  // Por padrão nasce falso para auto-conectar à ponte se ela estiver ativa na rede/local.
+  // Só vira `true` se o usuário clicar explicitamente em Desconectar.
+  const userDisconnectedRef = useRef(false);
 
 
 
@@ -4025,40 +4033,30 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
   // Conexão WebSocket com o MetaTrader 5 (Local Bridge)
-
-  const toggleMT5Connect = useCallback((manualAction?: 'CONNECT' | 'DISCONNECT') => {
-
+  const toggleMT5Connect = useCallback((manualAction?: 'CONNECT' | 'DISCONNECT', isRemoteSync?: boolean) => {
     // Quem ligar esta função direto em onClick (sem arrow) recebe o MouseEvent como primeiro
-
     // argumento. Um objeto de evento não é pedido de conexão: ele tem que ser tratado como
-
     // "toggle", senão o botão de desconectar passa reto no ramo de CONNECT e abre outra ponte.
-
     const pedido = manualAction === 'CONNECT' || manualAction === 'DISCONNECT' ? manualAction : undefined;
 
-
-
-    if (pedido === 'DISCONNECT' || (pedido === undefined && (mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING'))) {
-
-      userDisconnectedRef.current = true;
-
-      if (wsRef.current) {
-
-        wsRef.current.close();
-
-      }
-
-      setMt5State({ status: 'DISCONNECTED' });
-
-      // Ciclo 12: desconectar NÃO religa o SIM sozinho — o feed é comando do operador (▶ no
-
-      // cabeçalho). A tela fica parada no último preço, sem mercado fantasma por trás.
-
-      return;
-
+    if (!isRemoteSync) {
+      const actionToBroadcast = pedido ?? ((mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING') ? 'DISCONNECT' : 'CONNECT');
+      try {
+        saasChannelRef.current?.postMessage({
+          type: 'MT5_CONNECT_SYNC',
+          action: actionToBroadcast
+        });
+      } catch {}
     }
 
-
+    if (pedido === 'DISCONNECT' || (pedido === undefined && (mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING'))) {
+      userDisconnectedRef.current = true;
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+      setMt5State({ status: 'DISCONNECTED' });
+      return;
+    }
 
     userDisconnectedRef.current = false;
     setMt5State({ status: 'CONNECTING' });
@@ -4339,10 +4337,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             const rDays = payload.data?.days ?? 1;
             const rSpd = payload.data?.speed;
+            const rSeed = payload.data?.seed;
             if (rSpd) setSimulationSpeed(rSpd);
             setReplayDays(rDays);
             if (!isReplayingRef.current) {
-              handleReplayHistoryRef.current?.(rDays, true);
+              handleReplayHistoryRef.current?.(rDays, rSeed, true);
             }
 
           } else if (payload.type === 'GLOBAL_REPLAY_STOP') {
@@ -6130,7 +6129,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     }
   };
 
-  const handleReplayHistory = (days: number, isRemoteSync?: boolean) => {
+  const handleReplayHistory = (days: number, seedOverride?: number, isRemoteSync?: boolean) => {
 
     if (isReplayingRef.current) return;
 
@@ -6142,6 +6141,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // Tempo mínimo de uma corrida: 1 dia inteiro (nunca "só alguns minutos")
     const replayTargetDays = Math.max(1, Math.min(10, Math.round(days)));
     setReplayDays(replayTargetDays);
+
+    const seedForRun = seedOverride ?? replaySeed ?? randomReplaySeed();
 
     // O replay derruba os gráficos e o coletor e começa um pregão DO ZERO: as ordens antigas
     // e o resultado financeiro da sessão são integralmente zerados em cada nova rodada.
@@ -6183,7 +6184,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           wsRef.current.send(JSON.stringify({
             action: 'REPLAY_START_SYNC',
             days: replayTargetDays,
-            speed: simulationSpeed
+            speed: simulationSpeed,
+            seed: seedForRun
           }));
         }
       } catch {}
@@ -6191,7 +6193,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         saasChannelRef.current?.postMessage({
           type: 'REPLAY_START_SYNC',
           days: replayTargetDays,
-          speed: simulationSpeed
+          speed: simulationSpeed,
+          seed: seedForRun
         });
       } catch {}
     }
@@ -6205,7 +6208,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       const rangeEng = rangeEngineRef.current;
       const timeEng = timeEngineRef.current;
 
-      const seedForRun = replaySeed ?? randomReplaySeed();
       const run = await resolveReplayTicks(replayTargetDays, seedForRun);
       const rawTicks = run.ticks;
 
@@ -6704,6 +6706,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   useEffect(() => {
     handleReplayHistoryRef.current = handleReplayHistory;
     handleStopReplayRef.current = handleStopReplay;
+    toggleMT5ConnectRef.current = toggleMT5Connect;
   });
 
 

@@ -565,10 +565,8 @@ export const Header: React.FC<HeaderProps> = ({
               <Wifi className="w-3.5 h-3.5 text-emerald-400" />
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
-                  mt5State.bridgeOrdersBlocked
-                    ? 'bg-amber-400'
-                    : mt5State.bridgeArmed
-                    ? 'bg-emerald-400'
+                  mt5State.bridgeArmed || robotActive
+                    ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
                     : 'bg-amber-400'
                 }`}
               />
@@ -589,15 +587,15 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Toggle do Robô Automático — clean: chrome neutro, cor só no ponto de status */}
         <button
           onClick={() => setRobotActive(!robotActive)}
-          className="flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-all whitespace-nowrap cursor-pointer"
-          title={
-            mt5State.bridgeOrdersBlocked
-              ? 'Envio automático de ordens: a ponte está com a TRAVA de execução ligada (modo replay/validação), então ligar/desligar este robô não muda o envio de entradas agora.'
-              : 'Ativar/Pausar Envio Automático de Ordens'
-          }
+          className={`flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
+            robotActive
+              ? 'border-emerald-600/70 bg-emerald-950/40 text-emerald-200'
+              : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600'
+          }`}
+          title="Ativar/Pausar Envio Automático de Ordens (sincronizado em todos os dispositivos)"
         >
-          <span className={`w-2 h-2 rounded-full ${mt5State.bridgeOrdersBlocked ? 'bg-amber-400' : robotActive ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-          <span className="hidden md:inline">{mt5State.bridgeOrdersBlocked ? 'Trava' : robotActive ? 'On' : 'Off'}</span>
+          <span className={`w-2 h-2 rounded-full ${robotActive ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-rose-400'}`} />
+          <span className="hidden md:inline">{robotActive ? 'On' : 'Off'}</span>
         </button>
 
         {/* Toggle do Feed de Mercado — clean: chrome neutro, cor só no ícone de ação */}
