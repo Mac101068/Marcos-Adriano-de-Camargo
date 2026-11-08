@@ -211,29 +211,78 @@ const StepperRow: React.FC<{
     const nextVal = clamp(current + dir * step);
     onChange?.(Number(nextVal.toFixed(decimals)));
   };
+
+  const [text, setText] = useState<string>(() => (decimals > 0 ? value.toFixed(decimals) : String(value)));
+  const [isFocused, setIsFocused] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isFocused) {
+      setText(decimals > 0 ? value.toFixed(decimals) : String(value));
+    }
+  }, [value, decimals, isFocused]);
+
+  const commit = (raw: string) => {
+    const sanitized = raw.replace(',', '.').trim();
+    const num = parseFloat(sanitized);
+    if (!isNaN(num)) {
+      const clamped = clamp(num);
+      const finalVal = Number(clamped.toFixed(decimals));
+      onChange?.(finalVal);
+      setText(decimals > 0 ? finalVal.toFixed(decimals) : String(finalVal));
+    } else {
+      setText(decimals > 0 ? value.toFixed(decimals) : String(value));
+    }
+  };
+
   const btn =
     'w-[18px] h-[18px] shrink-0 rounded bg-zinc-900 border border-zinc-700 text-zinc-300 hover:text-white hover:border-zinc-500 active:scale-90 disabled:opacity-40 disabled:cursor-default text-[12px] font-bold leading-none flex items-center justify-center cursor-pointer transition-colors select-none';
+
   return (
     <div className="flex items-center justify-between gap-1.5 leading-tight" title={hint}>
-      <span className="text-[9px] uppercase tracking-wide text-zinc-500 shrink-0">{label}</span>
+      <span className="text-[9px] uppercase tracking-wide text-zinc-500 shrink-0 select-none">{label}</span>
       <span className="flex items-center gap-1">
         <button type="button" className={btn} disabled={!onChange} onClick={() => bump(-1)} aria-label={`Diminuir ${label}`}>
           −
         </button>
         <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={decimals > 0 ? Number(value.toFixed(decimals)) : value}
+          type="text"
+          inputMode={decimals > 0 ? 'decimal' : 'numeric'}
+          value={text}
           disabled={!onChange}
-          onChange={(e) => onChange?.(clamp(Number(e.target.value) || 0))}
-          className="w-[44px] h-[18px] rounded bg-zinc-900 border border-zinc-700 px-0.5 text-center text-[10.5px] font-semibold font-mono tabular-nums text-zinc-100 focus:border-emerald-500 focus:outline-hidden disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          onFocus={(e) => {
+            setIsFocused(true);
+            e.target.select();
+          }}
+          onBlur={(e) => {
+            setIsFocused(false);
+            commit(e.target.value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              commit((e.target as HTMLInputElement).value);
+              (e.target as HTMLInputElement).blur();
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              bump(1);
+            } else if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              bump(-1);
+            }
+          }}
+          onChange={(e) => {
+            const raw = e.target.value;
+            setText(raw);
+            const num = parseFloat(raw.replace(',', '.'));
+            if (!isNaN(num) && num >= min && num <= max) {
+              onChange?.(Number(num.toFixed(decimals)));
+            }
+          }}
+          className="w-[50px] h-[18px] rounded bg-zinc-900 border border-zinc-700 hover:border-zinc-500 px-1 text-center text-[10.5px] font-semibold font-mono tabular-nums text-zinc-100 focus:border-emerald-500 focus:outline-hidden disabled:opacity-50 transition-colors"
         />
         <button type="button" className={btn} disabled={!onChange} onClick={() => bump(1)} aria-label={`Aumentar ${label}`}>
           +
         </button>
-        <span className="text-[8.5px] text-zinc-600 w-[16px] shrink-0">{unit}</span>
+        <span className="text-[8.5px] text-zinc-600 w-[16px] shrink-0 select-none">{unit}</span>
       </span>
     </div>
   );
@@ -475,7 +524,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
                     hint={`Stop Loss fixo: ${stopLossPoints} pts atrás da entrada ≈ ${pointsToBRL(stopLossPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de risco por ${contracts} contrato(s). Base das estratégias.`}
                   />
                   <StepperRow
-                    label="Risco"
+                    label="Risco SL"
                     value={Number(pointsToBRL(stopLossPoints, contracts, asset).toFixed(2))}
                     min={0}
                     max={Math.round(pointsToBRL(maxSL, contracts, asset))}
@@ -488,7 +537,11 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
                       onStopLossPointsChange?.(pts);
                       onRiskBRLChange?.(val);
                     }}
-                    hint={`Risco financeiro da operação: R$ ${pointsToBRL(stopLossPoints, contracts, asset).toFixed(2)} (${stopLossPoints} pts no ${asset.label} com ${contracts} ctro(s)). Ao alterar aqui, o Stop Loss em pontos é recalculado automaticamente.`}
+                    hint={
+                      stopLossPoints <= 0
+                        ? 'Risco financeiro: R$ 0,00 (sem Stop fixo — saída na virada de fluxo). Para definir um Stop Loss em R$, digite ou aumente o valor aqui.'
+                        : `Risco financeiro da operação: perda máxima estimada se atingir o Stop Loss (${stopLossPoints} pts × ${contracts} ctro(s) × R$ ${asset.pointValue} = R$ ${pointsToBRL(stopLossPoints, contracts, asset).toFixed(2)}). Ao editar o valor em R$, o Stop Loss em pontos é recalculado automaticamente.`
+                    }
                   />
                   <StepperRow
                     label="Alvo"

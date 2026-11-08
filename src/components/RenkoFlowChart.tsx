@@ -102,6 +102,11 @@ interface RenkoFlowChartProps {
   onBreakevenChange?: (v: number) => void;
   onTrailingChange?: (v: number) => void;
   onContractsChange?: (v: number) => void;
+  breakevenTriggerPoints?: number;
+  breakevenLockPoints?: number;
+  onBreakevenTriggerChange?: (v: number) => void;
+  onBreakevenLockChange?: (v: number) => void;
+  onRiskBRLChange?: (v: number) => void;
   isRealMT5Connected?: boolean;
   /** Modo da estratégia exibido na boleta (Pirâmide não tem SL/TP fixo). */
   strategyMode?: 'PULLBACK_RETEST' | 'PYRAMID_FLOW_CONFLUENCE' | 'SIGNAL_STACK';
@@ -214,6 +219,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   onBreakevenChange,
   onTrailingChange,
   onContractsChange,
+  breakevenTriggerPoints = 0,
+  breakevenLockPoints = 0,
+  onBreakevenTriggerChange,
+  onBreakevenLockChange,
+  onRiskBRLChange,
   isRealMT5Connected = false,
   strategyMode = 'PULLBACK_RETEST',
   enablePartialExit = true,
@@ -3554,6 +3564,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             onBreakevenChange={onBreakevenChange}
             onTrailingChange={onTrailingChange}
             onContractsChange={onContractsChange}
+            breakevenTriggerPoints={breakevenTriggerPoints}
+            breakevenLockPoints={breakevenLockPoints}
+            onBreakevenTriggerChange={onBreakevenTriggerChange}
+            onBreakevenLockChange={onBreakevenLockChange}
+            onRiskBRLChange={onRiskBRLChange}
             strategyMode={strategyMode}
             openOrders={openOrders}
             hedgeBook={hedgeBook}

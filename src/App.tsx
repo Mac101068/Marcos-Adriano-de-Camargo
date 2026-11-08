@@ -8553,6 +8553,14 @@ ${
 
                   onBreakevenChange={(v) => handleBoletaConfigPatch({ breakevenOffsetPoints: v })}
 
+                  breakevenTriggerPoints={config.breakevenTriggerPoints}
+
+                  breakevenLockPoints={config.breakevenLockPoints}
+
+                  onBreakevenTriggerChange={(v) => handleBoletaConfigPatch({ breakevenTriggerPoints: v })}
+
+                  onBreakevenLockChange={(v) => handleBoletaConfigPatch({ breakevenLockPoints: v })}
+
                   onTrailingChange={(v) => handleBoletaConfigPatch({ trailingDistancePoints: v })}
 
                   onContractsChange={(v) => handleBoletaConfigPatch({ contracts: v })}
