@@ -26,7 +26,7 @@ const TAB_CONFIGS: Array<{
   id: AssetId;
   icon: React.ComponentType<{ className?: string }>;
   accentColor: string;
-  activeBorder: string;
+  activeBg: string;
   badgeBg: string;
   badgeText: string;
 }> = [
@@ -34,7 +34,7 @@ const TAB_CONFIGS: Array<{
     id: 'WIN',
     icon: Activity,
     accentColor: 'text-emerald-400',
-    activeBorder: 'border-b-2 border-emerald-500 bg-zinc-900/90 text-zinc-100 shadow-[inset_0_-2px_0_0_#10b981]',
+    activeBg: 'bg-zinc-800/90 text-zinc-100 font-bold',
     badgeBg: 'bg-emerald-950/80 border-emerald-700/60 text-emerald-300',
     badgeText: 'WIN',
   },
@@ -42,7 +42,7 @@ const TAB_CONFIGS: Array<{
     id: 'WDO',
     icon: DollarSign,
     accentColor: 'text-amber-400',
-    activeBorder: 'border-b-2 border-amber-500 bg-zinc-900/90 text-zinc-100 shadow-[inset_0_-2px_0_0_#f59e0b]',
+    activeBg: 'bg-zinc-800/90 text-zinc-100 font-bold',
     badgeBg: 'bg-amber-950/80 border-amber-700/60 text-amber-300',
     badgeText: 'WDO',
   },
@@ -50,7 +50,7 @@ const TAB_CONFIGS: Array<{
     id: 'BTCBR',
     icon: Bitcoin,
     accentColor: 'text-orange-400',
-    activeBorder: 'border-b-2 border-orange-500 bg-zinc-900/90 text-zinc-100 shadow-[inset_0_-2px_0_0_#f97316]',
+    activeBg: 'bg-zinc-800/90 text-zinc-100 font-bold',
     badgeBg: 'bg-orange-950/80 border-orange-700/60 text-orange-300',
     badgeText: 'BIT',
   },
@@ -63,7 +63,7 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
   isMt5Connected = false,
 }) => {
   return (
-    <div className="flex items-center justify-between px-2 bg-zinc-950 border-b border-zinc-800/90 select-none shrink-0 h-9 font-mono overflow-x-auto no-scrollbar">
+    <div className="flex items-center justify-between px-2 bg-zinc-950 select-none shrink-0 h-9 font-mono overflow-x-auto no-scrollbar">
       {/* Abas dos Ativos */}
       <div className="flex items-center gap-1 min-w-0">
         {TAB_CONFIGS.map((tab) => {
@@ -80,10 +80,10 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
             <button
               key={tab.id}
               onClick={() => onSelectAsset(tab.id)}
-              className={`group relative flex items-center gap-2 px-3.5 h-8 rounded-t-md text-xs transition-all cursor-pointer ${
+              className={`group relative flex items-center gap-2 px-3 h-7 rounded-md text-xs transition-all cursor-pointer ${
                 isActive
-                  ? `${tab.activeBorder} font-bold z-10`
-                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 border-b border-transparent'
+                  ? `${tab.activeBg} z-10 shadow-sm`
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
               }`}
               title={`Alternar gráfico para ${spec.label} (${liveContract})`}
             >
@@ -97,11 +97,6 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
               {/* Símbolo do Contrato Vigente */}
               <span className={`font-semibold tracking-tight ${isActive ? 'text-zinc-100' : 'text-zinc-300'}`}>
                 {liveContract}
-              </span>
-
-              {/* Nome amigável do contrato */}
-              <span className="text-[10px] text-zinc-500 group-hover:text-zinc-400 hidden md:inline">
-                {spec.label.split('(')[0].trim()}
               </span>
 
               {/* Ponto indicador de feed ativo se conectado */}
