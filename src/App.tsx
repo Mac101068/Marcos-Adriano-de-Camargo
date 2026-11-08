@@ -1395,21 +1395,17 @@ export default function App() {
 
 
   const [orders, setOrders] = useState<TradeOrder[]>(() => {
+    // Purga ordens fantasmas e ordens abertas órfãs de TODOS os ativos no storage
+    OrderAuditService.purgeOrphanOpenOrders();
 
     // Troca do preço de referência do ativo: o pregão salvo no preço antigo é saneado UMA vez,
-
     // antes de qualquer leitura. O aviso ao operador sai no efeito de montagem.
-
     assetMigrationRef.current = migrateAssetBaseline(asset);
 
     const saved = OrderAuditService.loadIntradayOrders(asset);
     if (saved && saved.length > 0) {
-      // Purga ordens mock antigas de demonstração
-      const clean = saved.filter(
-        (o) => !o.id?.startsWith('ord-mother-') && !o.id?.startsWith('ord-pyramid-') && !o.id?.startsWith('init-ord-')
-      );
-      // Descarta se houver ordens abertas presas em preços de outro nível de mercado
-      return clean.filter((o) => !(o.status === 'OPEN' && isStaleOrderPrice(o.entryPrice, asset)));
+      // No boot do app (sem MT5 conectado), NUNCA restauramos ordens com status OPEN ou PENDING_LIMIT
+      return saved.filter((o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT');
     }
 
     return [];
@@ -7264,7 +7260,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       setRangeCurrentBox(null);
     }
 
-    setOrders(OrderAuditService.loadIntradayOrders(next) ?? []);
+    const nextSaved = OrderAuditService.loadIntradayOrders(next) ?? [];
+    const filteredNext = mt5State.status === 'CONNECTED'
+      ? nextSaved
+      : nextSaved.filter((o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT');
+    setOrders(filteredNext);
 
     if (config.strategyId) {
       StrategyLibraryService.updateStrategyConfig(config.strategyId, {
@@ -8484,7 +8484,7 @@ ${
                         : (Number.isFinite(assetStateRef.current.WIN?.currentPrice) && assetStateRef.current.WIN.currentPrice > 0 && Math.abs(assetStateRef.current.WIN.currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4
                           ? assetStateRef.current.WIN.currentPrice
                           : ASSETS.WIN.basePrice),
-                      openOrdersCount: asset.id === 'WIN' ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.WIN) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
+                      openOrdersCount: asset.id === 'WIN' ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.WIN) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
                     },
                     WDO: {
                       currentPrice: (asset.id === 'WDO' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4)
@@ -8492,7 +8492,7 @@ ${
                         : (Number.isFinite(assetStateRef.current.WDO?.currentPrice) && assetStateRef.current.WDO.currentPrice > 0 && Math.abs(assetStateRef.current.WDO.currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4
                           ? assetStateRef.current.WDO.currentPrice
                           : ASSETS.WDO.basePrice),
-                      openOrdersCount: asset.id === 'WDO' ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.WDO) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
+                      openOrdersCount: asset.id === 'WDO' ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.WDO) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
                     },
                     BTCBR: {
                       currentPrice: ((asset.id === 'BTCBR' || asset.id === 'BTC') && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4)
@@ -8500,7 +8500,7 @@ ${
                         : (Number.isFinite(assetStateRef.current.BTCBR?.currentPrice) && assetStateRef.current.BTCBR.currentPrice > 0 && Math.abs(assetStateRef.current.BTCBR.currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4
                           ? assetStateRef.current.BTCBR.currentPrice
                           : ASSETS.BTCBR.basePrice),
-                      openOrdersCount: (asset.id === 'BTCBR' || asset.id === 'BTC') ? openOrders.length : (OrderAuditService.loadIntradayOrders(ASSETS.BTCBR) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length,
+                      openOrdersCount: (asset.id === 'BTCBR' || asset.id === 'BTC') ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.BTCBR) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
                     },
                   }}
                 />

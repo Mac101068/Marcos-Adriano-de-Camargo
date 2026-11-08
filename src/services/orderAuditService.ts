@@ -59,16 +59,24 @@ export class OrderAuditService {
    */
   static loadIntradayOrders(asset: AssetSpec = ASSETS[DEFAULT_ASSET_ID]): TradeOrder[] | null {
     try {
-      const raw = localStorage.getItem(auditKeyForAsset(asset.id));
+      const key = auditKeyForAsset(asset.id);
+      const raw = localStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw) as TradeOrder[];
         if (Array.isArray(parsed)) {
           // Purga ordens mock hardcoded antigas de demonstração
-          const clean = parsed.filter(
-            (o) => !o.id?.startsWith('ord-mother-') && !o.id?.startsWith('ord-pyramid-') && !o.id?.startsWith('init-ord-')
-          );
+          const clean = parsed.filter((o) => {
+            const id = o.id || '';
+            return (
+              !id.startsWith('ord-mother-') &&
+              !id.startsWith('ord-pyramid-') &&
+              !id.startsWith('ord-pyr-') &&
+              !id.startsWith('init-ord-') &&
+              !id.startsWith('demo-')
+            );
+          });
           // Sanitiza ordens abertas longe demais do preço de referência do ativo
-          return clean.map((o) => {
+          const sanitized = clean.map((o) => {
             if (o.status === 'OPEN' && isStaleOrderPrice(o.entryPrice, asset)) {
               return {
                 ...o,
@@ -79,12 +87,59 @@ export class OrderAuditService {
             }
             return o;
           });
+
+          // Se a lista foi limpa ou higienizada, regrava no storage para não manter lixo em disco
+          if (clean.length !== parsed.length) {
+            localStorage.setItem(key, JSON.stringify(sanitized));
+          }
+
+          return sanitized;
         }
       }
     } catch {
       // Fallback
     }
     return null;
+  }
+
+  /**
+   * Purgar ordens fantasmas e ordens abertas órfãs salvas em qualquer ativo do storage.
+   * Chamado no boot do sistema para garantir que a tela comece 100% zerada de posições zumbis.
+   */
+  static purgeOrphanOpenOrders(): void {
+    const assets: AssetId[] = ['WIN', 'WDO', 'BTCBR'];
+    for (const assetId of assets) {
+      try {
+        const key = auditKeyForAsset(assetId);
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const parsed = JSON.parse(raw) as TradeOrder[];
+          if (Array.isArray(parsed)) {
+            // Remove completamente ordens mock e posições que ficaram presas como OPEN / PENDING_LIMIT
+            const clean = parsed.filter((o) => {
+              const id = o.id || '';
+              const isMock =
+                id.startsWith('ord-mother-') ||
+                id.startsWith('ord-pyramid-') ||
+                id.startsWith('ord-pyr-') ||
+                id.startsWith('init-ord-') ||
+                id.startsWith('demo-');
+              const isOrphanOpen = o.status === 'OPEN' || o.status === 'PENDING_LIMIT';
+              return !isMock && !isOrphanOpen;
+            });
+
+            localStorage.setItem(key, JSON.stringify(clean));
+          }
+        }
+      } catch {
+        // Ignora falhas em navegadores restritos
+      }
+    }
+
+    // Purgar chave legada global
+    try {
+      localStorage.removeItem(AUDIT_STORAGE_KEY);
+    } catch {}
   }
 
   /**
@@ -97,6 +152,19 @@ export class OrderAuditService {
     } catch {
       // Fallback
     }
+  }
+
+  /**
+   * Limpa o histórico de auditoria de TODOS os ativos (usado para reset geral de testes).
+   */
+  static clearAllIntradayAudits(): void {
+    const assets: AssetId[] = ['WIN', 'WDO', 'BTCBR'];
+    for (const assetId of assets) {
+      this.clearIntradayAudit(assetId);
+    }
+    try {
+      localStorage.removeItem(AUDIT_STORAGE_KEY);
+    } catch {}
   }
 
   /**
