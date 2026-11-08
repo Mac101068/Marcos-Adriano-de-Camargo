@@ -20,6 +20,7 @@ interface AssetChartTabsProps {
     openOrdersCount?: number;
   }>>;
   isMt5Connected?: boolean;
+  rightContent?: React.ReactNode;
 }
 
 const TAB_CONFIGS: Array<{
@@ -61,9 +62,10 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
   onSelectAsset,
   assetStates = {},
   isMt5Connected = false,
+  rightContent,
 }) => {
   return (
-    <div className="flex items-center justify-between px-2 bg-zinc-950 select-none shrink-0 h-9 font-mono overflow-x-auto no-scrollbar">
+    <div className="flex items-center justify-between px-2.5 sm:px-4 md:px-6 bg-zinc-950 select-none shrink-0 h-9 font-mono overflow-x-auto no-scrollbar">
       {/* Abas dos Ativos */}
       <div className="flex items-center gap-1 min-w-0">
         {TAB_CONFIGS.map((tab) => {
@@ -123,12 +125,16 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
         })}
       </div>
 
-      {/* Rótulo de Status das Abas */}
-      <div className="hidden lg:flex items-center gap-2 text-[10px] text-zinc-500 pr-2">
-        <span className="flex items-center gap-1">
-          <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-          <span>Multi-Ativos Sincronizados</span>
-        </span>
+      {/* Lado Direito: Ações / Seletor de Estratégia ou Status */}
+      <div className="flex items-center gap-2 shrink-0">
+        {rightContent || (
+          <div className="hidden lg:flex items-center gap-2 text-[10px] text-zinc-500 pr-1">
+            <span className="flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+              <span>Multi-Ativos Sincronizados</span>
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

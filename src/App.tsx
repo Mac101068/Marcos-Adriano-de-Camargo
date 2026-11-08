@@ -7877,7 +7877,91 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     : 'Robô 2 (sombra) desligado — clique para abrir e escolher a estratégia';
 
+  const strategySelectorNode = (
+    <div
+      className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-700/80 text-[11px] shrink-0 shadow-sm"
+      title="Selecione uma estratégia oficial ou criada no Estúdio (o Robô é pausado por segurança). Para programar ou editar, clique no ícone do Estúdio ao lado."
+    >
+      <span className="hidden sm:inline text-amber-400 font-semibold">Trocar:</span>
+      <select
+        value={currentStratSelectValue}
+        onChange={(e) => {
+          const val = e.target.value;
+          if (!val || val === '__CUSTOM__') return;
 
+          if (val.startsWith('preset:')) {
+            const pid = val.replace('preset:', '');
+            const p = builtInPresets.find((x) => x.id === pid);
+            if (p) {
+              handleApplyConfigBundle(p.config, p.name);
+              setLatestToast({
+                id: `preset-applied-${Date.now()}`,
+                type: 'BUY',
+                title: 'PRESET OFICIAL APLICADO',
+                description: `Estratégia "${p.name}" ativada no terminal (Robô pausado por segurança).`,
+                timestamp: Date.now(),
+              });
+            }
+          } else if (val.startsWith('strat:')) {
+            const sid = val.replace('strat:', '');
+            const list = StrategyLibraryService.list();
+            setStrategyLibrary(list);
+            const s = list.find((x) => x.id === sid);
+            if (s) {
+              handleActivateStrategy(s);
+              setLatestToast({
+                id: `strat-applied-${Date.now()}`,
+                type: 'BUY',
+                title: 'ESTRATÉGIA DO ESTÚDIO ATIVADA',
+                description: `Estratégia "${s.name}" aplicada no terminal (Robô pausado por segurança).`,
+                timestamp: Date.now(),
+              });
+            }
+          }
+        }}
+        className="bg-transparent font-mono text-slate-100 font-medium focus:outline-none cursor-pointer max-w-[170px] sm:max-w-[240px] truncate"
+      >
+        {currentStratSelectValue === '__CUSTOM__' && (
+          <option value="__CUSTOM__" className="bg-slate-900 text-amber-300 font-semibold">
+            ★ {activeStrategyName || 'Configuração Atual (Manual)'}
+          </option>
+        )}
+        <optgroup label="── 🏛️ PRESETS OFICIAIS B3 ──" className="bg-slate-950 font-bold text-emerald-400">
+          {builtInPresets.map((p) => (
+            <option key={p.id} value={`preset:${p.id}`} className="bg-slate-900 text-slate-100 font-normal">
+              {p.name}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="── 🎨 MINHAS ESTRATÉGIAS (ESTÚDIO) ──" className="bg-slate-950 font-bold text-sky-400">
+          {strategyLibrary.length === 0 ? (
+            <option value="" disabled className="bg-slate-900 text-slate-500 italic">
+              (Nenhuma personalizada — use o Estúdio)
+            </option>
+          ) : (
+            strategyLibrary.map((s) => (
+              <option key={s.id} value={`strat:${s.id}`} className="bg-slate-900 text-slate-100 font-normal">
+                {s.name}
+              </option>
+            ))
+          )}
+        </optgroup>
+      </select>
+
+      <button
+        onClick={() => setActiveTab('studio')}
+        className="text-amber-400/80 hover:text-amber-300 transition-colors cursor-pointer p-0.5"
+        title="Abrir o Estúdio de Estratégias (programar, salvar, importar/exportar)"
+      >
+        <Sparkles className="w-3.5 h-3.5" />
+      </button>
+
+      <span
+        className={`w-1.5 h-1.5 rounded-full ${config.active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`}
+        title={config.active ? 'Robô ligado' : 'Robô pausado'}
+      />
+    </div>
+  );
 
   return (
 
@@ -8169,97 +8253,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
         </div>
 
-        {/* ZONA FIXA DIREITA: Estratégia Ativa (Seta Amarela) + Resumo da Corrida + Alertas.
+        {/* ZONA FIXA DIREITA: Resumo da Corrida + Alertas (alinhados com a caixa Adm do topo).
             Possui shrink-0 para NUNCA sumir em telas estreitas como o navegador interno! */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-
-          {/* Estratégia ativa — caixinha de seleção unificada (Presets Oficiais B3 + Estúdio).
-              SEMPRE visível: acesso do operador a TODAS as estratégias configuradas. */}
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-700/80 text-[11px] shrink-0 shadow-sm"
-            title="Selecione uma estratégia oficial ou criada no Estúdio (o Robô é pausado por segurança). Para programar ou editar, clique no ícone do Estúdio ao lado."
-          >
-            <span className="hidden sm:inline text-amber-400 font-semibold">Trocar:</span>
-            <select
-              value={currentStratSelectValue}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (!val || val === '__CUSTOM__') return;
-
-                if (val.startsWith('preset:')) {
-                  const pid = val.replace('preset:', '');
-                  const p = builtInPresets.find((x) => x.id === pid);
-                  if (p) {
-                    handleApplyConfigBundle(p.config, p.name);
-                    setLatestToast({
-                      id: `preset-applied-${Date.now()}`,
-                      type: 'BUY',
-                      title: 'PRESET OFICIAL APLICADO',
-                      description: `Estratégia "${p.name}" ativada no terminal (Robô pausado por segurança).`,
-                      timestamp: Date.now(),
-                    });
-                  }
-                } else if (val.startsWith('strat:')) {
-                  const sid = val.replace('strat:', '');
-                  const list = StrategyLibraryService.list();
-                  setStrategyLibrary(list);
-                  const s = list.find((x) => x.id === sid);
-                  if (s) {
-                    handleActivateStrategy(s);
-                    setLatestToast({
-                      id: `strat-applied-${Date.now()}`,
-                      type: 'BUY',
-                      title: 'ESTRATÉGIA DO ESTÚDIO ATIVADA',
-                      description: `Estratégia "${s.name}" aplicada no terminal (Robô pausado por segurança).`,
-                      timestamp: Date.now(),
-                    });
-                  }
-                }
-              }}
-              className="bg-transparent font-mono text-slate-100 font-medium focus:outline-none cursor-pointer max-w-[170px] sm:max-w-[240px] truncate"
-            >
-              {currentStratSelectValue === '__CUSTOM__' && (
-                <option value="__CUSTOM__" className="bg-slate-900 text-amber-300 font-semibold">
-                  ★ {activeStrategyName || 'Configuração Atual (Manual)'}
-                </option>
-              )}
-              <optgroup label="── 🏛️ PRESETS OFICIAIS B3 ──" className="bg-slate-950 font-bold text-emerald-400">
-                {builtInPresets.map((p) => (
-                  <option key={p.id} value={`preset:${p.id}`} className="bg-slate-900 text-slate-100 font-normal">
-                    {p.name}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="── 🎨 MINHAS ESTRATÉGIAS (ESTÚDIO) ──" className="bg-slate-950 font-bold text-sky-400">
-                {strategyLibrary.length === 0 ? (
-                  <option value="" disabled className="bg-slate-900 text-slate-500 italic">
-                    (Nenhuma personalizada — use o Estúdio)
-                  </option>
-                ) : (
-                  strategyLibrary.map((s) => (
-                    <option key={s.id} value={`strat:${s.id}`} className="bg-slate-900 text-slate-100 font-normal">
-                      {s.name}
-                    </option>
-                  ))
-                )}
-              </optgroup>
-            </select>
-
-            <button
-              onClick={() => setActiveTab('studio')}
-              className="text-amber-400/80 hover:text-amber-300 transition-colors cursor-pointer p-0.5"
-              title="Abrir o Estúdio de Estratégias (programar, salvar, importar/exportar)"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-            </button>
-
-            <span className={`w-1.5 h-1.5 rounded-full ${config.active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} title={config.active ? 'Robô ligado' : 'Robô pausado'} />
-
-          </div>
-
           {/* A medida da corrida fica na zona fixa (a direita nunca some). O eco de velocidade/seed
-
               que existia aqui saiu: os dois valores agora só têm um lugar na tela — o grupo do replay. */}
-
           {lastReplay && !isReplaying && (
 
             <div
@@ -8446,6 +8444,7 @@ ${
                   currentAssetId={asset.id}
                   onSelectAsset={handleSelectAsset}
                   isMt5Connected={mt5State.status === 'CONNECTED'}
+                  rightContent={strategySelectorNode}
                   assetStates={{
                     WIN: {
                       currentPrice: asset.id === 'WIN' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4

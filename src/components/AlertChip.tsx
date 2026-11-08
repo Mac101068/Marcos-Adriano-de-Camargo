@@ -16,15 +16,15 @@ export const AlertChip: React.FC<{
   align?: 'left' | 'right';
 }> = ({ tone, message, icon, align = 'left' }) => {
   const [open, setOpen] = useState(false);
-  const toneBox =
+  const toneIcon =
     tone === 'rose'
-      ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
-      : 'border-amber-500/40 bg-amber-500/10 text-amber-300';
+      ? 'text-rose-400 hover:text-rose-300'
+      : 'text-amber-400 hover:text-amber-300';
   const toneBubble =
     tone === 'rose' ? 'border-rose-500/40 text-rose-200' : 'border-amber-500/40 text-amber-200';
   return (
     <span
-      className="relative flex shrink-0"
+      className="relative flex items-center shrink-0"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onClick={(e) => {
@@ -32,7 +32,7 @@ export const AlertChip: React.FC<{
         setOpen((v) => !v);
       }}
     >
-      <span className={`flex items-center justify-center w-6 h-5 rounded border cursor-help ${toneBox}`}>
+      <span className={`flex items-center justify-center p-0.5 cursor-help transition-transform hover:scale-110 ${toneIcon}`}>
         {icon}
       </span>
       {open && (
