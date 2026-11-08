@@ -2719,7 +2719,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         return;
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const map: Record<string, DrawingTool> = { v: 'select', h: 'hline', r: 'rect', a: 'arrow', t: 'text', l: 'trendline' };
+      const map: Record<string, DrawingTool> = { v: 'select', e: 'eraser', h: 'hline', r: 'rect', a: 'arrow', t: 'text', l: 'trendline' };
       const tool = map[e.key.toLowerCase()];
       if (tool) setActiveDrawingTool(tool);
     };
@@ -3592,6 +3592,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             setSelectedDrawingId(null);
           }}
           hasDrawings={drawings.length > 0}
+          drawings={drawings}
+          selectedId={selectedDrawingId}
+          onSelectDrawing={handleDrawingSelect}
+          onDeleteDrawing={handleDrawingDelete}
           layout="vertical"
         />
 

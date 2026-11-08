@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Drawing, DrawingColor, DrawingTool, DRAWING_COLOR_HEX } from '../types/drawing';
+import { Trash2, X } from 'lucide-react';
 
 // =========================================================================
 // LAYOUT DO PAINEL DE PREÇO: publicado pelo canvas do RenkoFlowChart a cada
@@ -34,7 +35,7 @@ interface DrawingOverlayProps {
 }
 
 interface DragState {
-  mode: 'create' | 'move';
+  mode: 'create' | 'move' | 'erase';
   tool?: DrawingTool;
   drawingId?: string;
   start: { bar: number; price: number };
@@ -101,21 +102,26 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
   };
 
   // ------------------------------------------------------------------
-  // HIT-TESTING (modo seleção): qual desenho está sob o cursor
+  // HIT-TESTING (modo seleção ou borracha): qual desenho está sob o cursor
   // ------------------------------------------------------------------
   const hitTest = (x: number, y: number): Drawing | null => {
     if (!layout) return null;
     let best: Drawing | null = null;
-    let bestDist = 8;
+    let bestDist = 14;
     for (const d of drawings) {
       const p = drawingToPoints(d);
       if (!p) continue;
       let dd = Infinity;
       if (d.kind === 'text') {
-        const w = Math.max(40, (d.text || 'Texto').length * 7.5 + 16);
-        dd = x >= p.ax - w / 2 && x <= p.ax + w / 2 && y >= p.ay - 12 && y <= p.ay + 12 ? 0 : dist(x, y, p.ax, p.ay);
+        const w = Math.max(48, (d.text || 'Texto').length * 8 + 20);
+        dd = x >= p.ax - w / 2 && x <= p.ax + w / 2 && y >= p.ay - 14 && y <= p.ay + 14 ? 0 : dist(x, y, p.ax, p.ay);
       } else if (d.kind === 'hline') {
-        dd = dist(x, y, p.ax, p.ay);
+        const endX = Math.max(0, width - 80);
+        if (x >= 0 && x <= endX) {
+          dd = Math.abs(y - p.ay);
+        } else {
+          dd = dist(x, y, 0, p.ay);
+        }
       } else if (d.kind === 'rect') {
         const edges = [
           [p.ax, p.ay, p.bx, p.ay],
@@ -124,7 +130,7 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
           [p.ax, p.by, p.ax, p.ay],
         ];
         dd = Math.min(...edges.map(([x1, y1, x2, y2]) => pointSegDist(x, y, x1, y1, x2, y2)));
-        const inside = x >= Math.min(p.ax, p.bx) - 3 && x <= Math.max(p.ax, p.bx) + 3 && y >= Math.min(p.ay, p.by) - 3 && y <= Math.max(p.ay, p.by) + 3;
+        const inside = x >= Math.min(p.ax, p.bx) - 4 && x <= Math.max(p.ax, p.bx) + 4 && y >= Math.min(p.ay, p.by) - 4 && y <= Math.max(p.ay, p.by) + 4;
         if (inside) dd = 0;
       } else {
         dd = pointSegDist(x, y, p.ax, p.ay, p.bx, p.by);
@@ -144,6 +150,17 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
     if (!layout || editing) return;
     const pt = toChartPoint(e);
     if (!pt) return;
+
+    // Ferramenta Borracha: apaga qualquer desenho clicado
+    if (activeTool === 'eraser') {
+      const hit = hitTest(pt.px.x, pt.px.y);
+      if (hit) {
+        onDelete(hit.id);
+        if (selectedId === hit.id) onSelect(null);
+      }
+      setDrag({ mode: 'erase', tool: 'eraser', start: { bar: pt.bar, price: pt.price }, last: { bar: pt.bar, price: pt.price }, moved: false });
+      return;
+    }
 
     if (capture) {
       if (activeTool === 'text') {
@@ -166,8 +183,7 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
       return;
     }
 
-    // Modo seleção: captura desenhos para mover (pointer-events none no SVG
-    // deixa o pan do gráfico acontecer normalmente nos espaços vazios)
+    // Modo seleção: captura desenhos para mover ou selecionar
     const hit = hitTest(pt.px.x, pt.px.y);
     if (hit) {
       onSelect(hit.id);
@@ -193,6 +209,17 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
     if (!drag || !layout) return;
     const pt = toChartPoint(e);
     if (!pt) return;
+
+    // Borracha arrastada sobre desenhos
+    if (drag.mode === 'erase') {
+      const hit = hitTest(pt.px.x, pt.px.y);
+      if (hit) {
+        onDelete(hit.id);
+        if (selectedId === hit.id) onSelect(null);
+      }
+      return;
+    }
+
     const startPx = layout ? { x: layout.indexToX(drag.start.bar), y: layout.priceToY(drag.start.price) } : pt.px;
     const moved = drag.moved || dist(pt.px.x, pt.px.y, startPx.x, startPx.y) > 3;
 
@@ -209,7 +236,7 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
   const handleMouseUp = () => {
     if (!drag || !layout) return;
     if (drag.mode === 'create' && drag.tool && drag.moved) {
-      const kind = drag.tool as Exclude<DrawingTool, 'select'>;
+      const kind = drag.tool as Exclude<DrawingTool, 'select' | 'eraser'>;
       const d: Drawing = {
         id: newDrawingId(),
         kind,
@@ -251,28 +278,59 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
     const selected = d.id === selectedId;
     const selAttr = selected ? { strokeDasharray: '5 3', strokeWidth: 2.5 } : { strokeWidth: 1.8 };
 
+    const handleObjectClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (activeTool === 'eraser') {
+        onDelete(d.id);
+        if (selectedId === d.id) onSelect(null);
+      } else {
+        onSelect(d.id);
+      }
+    };
+
     switch (d.kind) {
       case 'trendline':
         return (
-          <g key={d.id} data-drawing-id={d.id}>
+          <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
+            {/* Hitbox transparente larga */}
+            <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke="transparent" strokeWidth={16} strokeLinecap="round" className="cursor-pointer" />
             <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke={hex} strokeLinecap="round" {...selAttr} />
+            {selected && (
+              <>
+                <circle cx={p.ax} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.bx} cy={p.by} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+              </>
+            )}
           </g>
         );
       case 'hline': {
         const endX = Math.max(0, width - 80);
         return (
-          <g key={d.id} data-drawing-id={d.id}>
+          <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
+            {/* Hitbox transparente larga */}
+            <line x1={0} y1={p.ay} x2={endX} y2={p.ay} stroke="transparent" strokeWidth={16} className="cursor-pointer" />
             <line x1={0} y1={p.ay} x2={endX} y2={p.ay} stroke={hex} strokeDasharray={selected ? '5 3' : '2 4'} strokeWidth={selected ? 2.5 : 1.4} />
-            <rect x={4} y={p.ay - 8} width={62} height={15} rx={3} fill="#171717" stroke="#404040" strokeWidth={0.8} />
+            <rect x={4} y={p.ay - 8} width={62} height={15} rx={3} fill="#171717" stroke={selected ? '#f59e0b' : '#404040'} strokeWidth={selected ? 1.5 : 0.8} />
             <text x={35} y={p.ay + 3} textAnchor="middle" fontSize={9.5} fontFamily="'JetBrains Mono', monospace" fill={hex}>
               {d.priceA.toLocaleString('pt-BR')}
             </text>
+            {selected && <circle cx={35} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />}
           </g>
         );
       }
       case 'rect':
         return (
-          <g key={d.id} data-drawing-id={d.id}>
+          <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
+            {/* Hitbox transparente na borda e fundo */}
+            <rect
+              x={Math.min(p.ax, p.bx) - 4}
+              y={Math.min(p.ay, p.by) - 4}
+              width={Math.abs(p.bx - p.ax) + 8}
+              height={Math.abs(p.by - p.ay) + 8}
+              fill="transparent"
+              stroke="transparent"
+              className="cursor-pointer"
+            />
             <rect
               x={Math.min(p.ax, p.bx)}
               y={Math.min(p.ay, p.by)}
@@ -284,6 +342,14 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
               strokeOpacity={0.8}
               {...selAttr}
             />
+            {selected && (
+              <>
+                <circle cx={p.ax} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.bx} cy={p.by} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.ax} cy={p.by} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.bx} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+              </>
+            )}
           </g>
         );
       case 'arrow': {
@@ -297,15 +363,23 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
           `${p.bx - headLen * Math.cos(angle + Math.PI / 7)},${p.by - headLen * Math.sin(angle + Math.PI / 7)}`,
         ].join(' ');
         return (
-          <g key={d.id} data-drawing-id={d.id}>
+          <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
+            {/* Hitbox transparente larga */}
+            <line x1={p.ax} y1={p.ay} x2={p.bx} y2={p.by} stroke="transparent" strokeWidth={16} strokeLinecap="round" className="cursor-pointer" />
             <line x1={p.ax} y1={p.ay} x2={x2} y2={y2} stroke={hex} strokeLinecap="round" {...selAttr} />
             <polygon points={pts} fill={hex} stroke="none" />
+            {selected && (
+              <>
+                <circle cx={p.ax} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.bx} cy={p.by} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+              </>
+            )}
           </g>
         );
       }
       case 'text':
         return (
-          <g key={d.id} data-drawing-id={d.id}>
+          <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
             <rect
               x={p.ax - Math.max(24, (d.text || '').length * 3.9 + 8)}
               y={p.ay - 11}
@@ -314,8 +388,9 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
               rx={4}
               fill="#171717"
               fillOpacity={0.85}
-              stroke={selected ? hex : '#404040'}
+              stroke={selected ? '#f59e0b' : '#404040'}
               strokeWidth={selected ? 1.6 : 0.8}
+              className="cursor-pointer"
             />
             <text
               x={p.ax}
@@ -332,6 +407,7 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
             >
               {d.text || '…'}
             </text>
+            {selected && <circle cx={p.ax} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />}
           </g>
         );
       default:
@@ -401,6 +477,60 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
           />
         </foreignObject>
       )}
+
+      {/* Barra de ações rápida sobre o estudo selecionado */}
+      {(() => {
+        if (!selectedId || editing) return null;
+        const sel = drawings.find((d) => d.id === selectedId);
+        if (!sel) return null;
+        const p = drawingToPoints(sel);
+        if (!p) return null;
+        const posX = Math.max(10, Math.min(width - 190, sel.kind === 'hline' ? 140 : (p.ax + p.bx) / 2 - 80));
+        const posY = Math.max(10, (sel.kind === 'hline' ? p.ay : Math.min(p.ay, p.by)) - 40);
+
+        return (
+          <foreignObject x={posX} y={posY} width={180} height={34} style={{ overflow: 'visible', pointerEvents: 'all' }}>
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-zinc-950/95 border border-zinc-700/80 shadow-2xl backdrop-blur-md">
+              {(['white', 'green', 'red', 'yellow', 'blue'] as DrawingColor[]).map((c) => (
+                <button
+                  key={c}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onUpdate(sel.id, { color: c });
+                  }}
+                  className={`w-3.5 h-3.5 rounded-full transition-transform hover:scale-125 cursor-pointer ${
+                    sel.color === c ? 'ring-2 ring-amber-400 scale-110' : ''
+                  }`}
+                  style={{ backgroundColor: DRAWING_COLOR_HEX[c] }}
+                  title={`Mudar cor para ${c}`}
+                />
+              ))}
+              <div className="w-[1px] h-3.5 bg-zinc-800 mx-0.5" />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(sel.id);
+                  onSelect(null);
+                }}
+                className="p-1 rounded text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 transition-colors cursor-pointer"
+                title="Excluir estudo selecionado (Delete)"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelect(null);
+                }}
+                className="p-1 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors cursor-pointer"
+                title="Desmarcar seleção (Esc)"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          </foreignObject>
+        );
+      })()}
     </svg>
   );
 };

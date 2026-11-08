@@ -4,9 +4,9 @@
 // acompanhando zoom, pan e scroll do gráfico automaticamente.
 // =========================================================================
 
-export type DrawingTool = 'select' | 'trendline' | 'hline' | 'rect' | 'arrow' | 'text';
+export type DrawingTool = 'select' | 'eraser' | 'trendline' | 'hline' | 'rect' | 'arrow' | 'text';
 
-export type DrawingKind = Exclude<DrawingTool, 'select'>;
+export type DrawingKind = Exclude<DrawingTool, 'select' | 'eraser'>;
 
 // Cores permitidas: neutra (padrão profissional) + sinais de operação e análise
 export type DrawingColor = 'white' | 'green' | 'red' | 'yellow' | 'blue';
