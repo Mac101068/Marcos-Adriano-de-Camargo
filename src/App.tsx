@@ -532,6 +532,10 @@ export default function App() {
   });
 
   const [isReplaying, setIsReplaying] = useState<boolean>(false);
+  const isReplayingRef = useRef<boolean>(false);
+  useEffect(() => {
+    isReplayingRef.current = isReplaying;
+  }, [isReplaying]);
 
   // Backtest com Ticks Reais (MT5 XP)
 
@@ -960,6 +964,10 @@ export default function App() {
     activeStrategyNameRef.current = activeStrategyName;
   }, [activeStrategyName]);
 
+  // Referências para controle remoto do replay
+  const handleReplayHistoryRef = useRef<((days: number, isRemoteSync?: boolean) => void) | null>(null);
+  const handleStopReplayRef = useRef<((isRemoteSync?: boolean) => void) | null>(null);
+
   // Canal de sincronização entre abas e dispositivos (SaaS Multi-Tela em tempo real)
   const saasChannelRef = useRef<BroadcastChannel | null>(null);
 
@@ -988,6 +996,22 @@ export default function App() {
               handleApplyConfigBundle(data.config, profileName, true);
             }
           }
+        } else if (data.type === 'REPLAY_START_SYNC') {
+          const rDays = data.days ?? 1;
+          const rSpd = data.speed;
+          if (rSpd) setSimulationSpeed(rSpd);
+          setReplayDays(rDays);
+          if (!isReplayingRef.current) {
+            handleReplayHistoryRef.current?.(rDays, true);
+          }
+        } else if (data.type === 'REPLAY_STOP_SYNC') {
+          if (isReplayingRef.current) {
+            handleStopReplayRef.current?.(true);
+          }
+        } else if (data.type === 'REPLAY_SPEED_SYNC') {
+          if (data.speed) setSimulationSpeed(data.speed);
+        } else if (data.type === 'REPLAY_DAYS_SYNC') {
+          if (data.days) setReplayDays(data.days);
         }
       };
 
@@ -4311,6 +4335,30 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               });
             }
 
+          } else if (payload.type === 'GLOBAL_REPLAY_START') {
+
+            const rDays = payload.data?.days ?? 1;
+            const rSpd = payload.data?.speed;
+            if (rSpd) setSimulationSpeed(rSpd);
+            setReplayDays(rDays);
+            if (!isReplayingRef.current) {
+              handleReplayHistoryRef.current?.(rDays, true);
+            }
+
+          } else if (payload.type === 'GLOBAL_REPLAY_STOP') {
+
+            if (isReplayingRef.current) {
+              handleStopReplayRef.current?.(true);
+            }
+
+          } else if (payload.type === 'GLOBAL_REPLAY_SPEED') {
+
+            if (payload.data?.speed) setSimulationSpeed(payload.data.speed);
+
+          } else if (payload.type === 'GLOBAL_REPLAY_DAYS') {
+
+            if (payload.data?.days) setReplayDays(payload.data.days);
+
           } else if (payload.type === 'REPLAY_MODE_RESULT') {
 
             // A ponte bateu a trava do ambiente? Então o clique em "desligar" não ligou nada e a
@@ -6054,9 +6102,37 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-  const handleReplayHistory = (days: number) => {
+  const changeSimulationSpeed = (spd: number, isRemoteSync?: boolean) => {
+    setSimulationSpeed(spd);
+    if (!isRemoteSync) {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({ action: 'REPLAY_SPEED_SYNC', speed: spd }));
+        } catch {}
+      }
+      try {
+        saasChannelRef.current?.postMessage({ type: 'REPLAY_SPEED_SYNC', speed: spd });
+      } catch {}
+    }
+  };
 
-    if (isReplaying) return;
+  const changeReplayDays = (days: number, isRemoteSync?: boolean) => {
+    setReplayDays(days);
+    if (!isRemoteSync) {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({ action: 'REPLAY_DAYS_SYNC', days }));
+        } catch {}
+      }
+      try {
+        saasChannelRef.current?.postMessage({ type: 'REPLAY_DAYS_SYNC', days });
+      } catch {}
+    }
+  };
+
+  const handleReplayHistory = (days: number, isRemoteSync?: boolean) => {
+
+    if (isReplayingRef.current) return;
 
     // Instala o marco de início desta corrida: ledger e PnL da sessão zeram completamente
     // para não carregar resultados anteriores nem mascarar a validação.
@@ -6100,12 +6176,25 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     });
 
     // A ponte segura o ensaio sozinha: entra em modo validação agora e só sai quando o replay
-    // termina (REPLAY_END). Assim uma queda da aba no meio do teste não abre entrada de verdade.
-    try {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ action: 'REPLAY_START' }));
-      }
-    } catch {}
+    // termina (REPLAY_END). Sincroniza também com todos os dispositivos da rede (SaaS Multi-Tela).
+    if (!isRemoteSync) {
+      try {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            action: 'REPLAY_START_SYNC',
+            days: replayTargetDays,
+            speed: simulationSpeed
+          }));
+        }
+      } catch {}
+      try {
+        saasChannelRef.current?.postMessage({
+          type: 'REPLAY_START_SYNC',
+          days: replayTargetDays,
+          speed: simulationSpeed
+        });
+      } catch {}
+    }
 
     setIsReplaying(true);
     setReplayProgress(0);
@@ -6598,12 +6687,24 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
   // Parar a reprodução no meio do caminho (o período já desenhado fica na tela e no coletor)
-
-  const handleStopReplay = () => {
-
+  const handleStopReplay = (isRemoteSync?: boolean) => {
     replayAbortRef.current?.();
-
+    if (!isRemoteSync) {
+      try {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ action: 'REPLAY_STOP_SYNC' }));
+        }
+      } catch {}
+      try {
+        saasChannelRef.current?.postMessage({ type: 'REPLAY_STOP_SYNC' });
+      } catch {}
+    }
   };
+
+  useEffect(() => {
+    handleReplayHistoryRef.current = handleReplayHistory;
+    handleStopReplayRef.current = handleStopReplay;
+  });
 
 
 
@@ -8202,8 +8303,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   { value: 5, label: '5 dias', title: 'Replay dos últimos 5 pregões' },
                 ]}
                 onChange={(d) => {
-                  if (isReplaying) setReplayDays(d);
-                  else handleReplayHistory(d);
+                  changeReplayDays(d);
+                  if (!isReplaying) handleReplayHistory(d);
                 }}
                 title="Escolha o pregão para rodar a simulação com dados reais do MetaTrader 5"
               />
@@ -8218,7 +8319,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 {[0.25, 0.5, 1, 2, 3, 5, 10].map((s) => (
                   <button
                     key={s}
-                    onClick={() => setSimulationSpeed(s)}
+                    onClick={() => changeSimulationSpeed(s)}
                     className={`px-1.5 py-0.5 text-[10px] font-bold rounded cursor-pointer transition-all ${
                       simulationSpeed === s
                         ? 'bg-amber-500 text-slate-950 shadow-[0_0_6px_rgba(245,158,11,0.5)] scale-105'
@@ -8259,7 +8360,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 <span className="text-amber-300 font-bold ml-0.5">({simulationSpeed}x)</span>
                 <span className="text-emerald-200 tabular-nums">[{replayProgress}%]</span>
                 <button
-                  onClick={handleStopReplay}
+                  onClick={() => handleStopReplay()}
                   className="ml-1.5 px-2 py-0.5 rounded bg-rose-700 hover:bg-rose-600 text-white text-[10px] font-sans font-bold cursor-pointer transition-colors shadow-sm"
                   title="Interromper simulação"
                 >
