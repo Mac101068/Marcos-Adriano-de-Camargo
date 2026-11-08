@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowUp, ArrowDown, ChevronDown, ChevronUp, Pin, PinOff, Settings } from 'lucide-react';
 import { TradeOrder } from '../types/trading';
-import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, pointsToBRL } from '../assets/assetRegistry';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, pointsToBRL, snapToTick } from '../assets/assetRegistry';
 
 /**
  * BOLETA — ordem rápida do operador, numa caixa única com recolhimento automático.
@@ -126,6 +126,8 @@ interface BoletaTicketProps {
   onBreakevenTriggerChange?: (v: number) => void;
   onBreakevenLockChange?: (v: number) => void;
   onContractsChange?: (v: number) => void;
+  /** Alteração do Risco em R$ (sincroniza com Stop Loss em pontos). */
+  onRiskBRLChange?: (v: number) => void;
 }
 
 const brl = (v: number) =>
@@ -268,6 +270,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
   breakevenLockPoints = 0,
   onBreakevenTriggerChange,
   onBreakevenLockChange,
+  onRiskBRLChange,
 }) => {
   const [pinned, setPinned] = useState<boolean>(false);
   const [hovered, setHovered] = useState<boolean>(false);
@@ -472,6 +475,22 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
                     hint={`Stop Loss fixo: ${stopLossPoints} pts atrás da entrada ≈ ${pointsToBRL(stopLossPoints, contracts, asset).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de risco por ${contracts} contrato(s). Base das estratégias.`}
                   />
                   <StepperRow
+                    label="Risco"
+                    value={Number(pointsToBRL(stopLossPoints, contracts, asset).toFixed(2))}
+                    min={0}
+                    max={Math.round(pointsToBRL(maxSL, contracts, asset))}
+                    step={asset.id === 'WDO' ? 10 : 5}
+                    decimals={2}
+                    unit="R$"
+                    onChange={(val) => {
+                      const c = Math.max(1, contracts);
+                      const pts = snapToTick(val / (asset.pointValue * c), asset);
+                      onStopLossPointsChange?.(pts);
+                      onRiskBRLChange?.(val);
+                    }}
+                    hint={`Risco financeiro da operação: R$ ${pointsToBRL(stopLossPoints, contracts, asset).toFixed(2)} (${stopLossPoints} pts no ${asset.label} com ${contracts} ctro(s)). Ao alterar aqui, o Stop Loss em pontos é recalculado automaticamente.`}
+                  />
+                  <StepperRow
                     label="Alvo"
                     value={takeProfitPoints}
                     min={0}
@@ -548,13 +567,6 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
                 </>
               );
             })()}
-            {riskBRL > 0 && (
-              <Row
-                label="Risco"
-                value={`−${riskBRL.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`}
-                tone="rose"
-              />
-            )}
           </div>
         )}
       </div>
