@@ -194,7 +194,7 @@ import { StrategyLibraryService, mergeConfig, splitStrategyPatch } from './servi
 
 import { SavedStrategy } from './types/strategy';
 
-import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, ShieldAlert, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Pause, Zap, Square, Clock, Sparkles, RefreshCw } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, ShieldAlert, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Pause, Zap, Square, Clock, Sparkles, RefreshCw, ChevronDown } from 'lucide-react';
 
 
 
@@ -610,6 +610,21 @@ export default function App() {
     const sym = chartSymbolFor(asset).toUpperCase();
     return localPregoes.filter((p) => p.symbol.toUpperCase() === sym || sym.startsWith(p.symbol.toUpperCase().slice(0, 3)));
   }, [localPregoes, asset]);
+
+  const getPregaoCompactCode = (val: string): string => {
+    if (val.startsWith('date:')) {
+      const d = val.replace('date:', '');
+      const idx = currentAssetPregoes.findIndex((p) => p.date === d);
+      if (idx >= 0) return `Flow${idx + 1}`;
+      const parts = d.split('-');
+      return `Flow (${parts[2]}/${parts[1]})`;
+    }
+    if (val.startsWith('days:')) {
+      const days = val.replace('days:', '');
+      return `Flow ${days}D`;
+    }
+    return 'Flow1';
+  };
 
   // "Replay opera": durante a reprodução cada tick passa pelo MESMO caminho do feed ao vivo
 
@@ -8400,46 +8415,54 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             <span>Opera</span>
           </button>
 
-          {/* Janela de Seleção do Pregão com recuo e dias da base */}
+          {/* Janela de Seleção do Pregão com chip compacto (mostra só o código Flow1, 2, 3) */}
           <div className="flex items-center gap-1.5 ml-3 pl-3 border-l border-slate-800">
             <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Pregão:</span>
-            <select
-              value={selectedPregaoValue}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSelectedPregaoValue(val);
-                if (val.startsWith('date:')) {
-                  const d = val.replace('date:', '');
-                  setSelectedPregaoDate(d);
-                  changeReplayDays(1);
-                  if (!isReplaying) handleReplayHistory(1, undefined, d);
-                } else {
-                  const d = Number(val.replace('days:', '')) || 1;
-                  setSelectedPregaoDate(null);
-                  changeReplayDays(d);
-                  if (!isReplaying) handleReplayHistory(d);
-                }
-              }}
-              className="h-6 rounded bg-slate-900/90 text-slate-200 text-[11px] font-mono px-2 border border-slate-800 cursor-pointer focus:outline-none hover:bg-slate-800 transition-colors"
-              title="Escolha o pregão gravado da base ou período acumulado para o replay"
-            >
-              {currentAssetPregoes.length > 0 && (
-                <optgroup label={`── 📂 PREGÕES GRAVADOS (${chartSymbolFor(asset)}) ──`} className="bg-slate-950 font-bold text-emerald-400">
-                  {currentAssetPregoes.map((p, idx) => (
-                    <option key={p.date} value={`date:${p.date}`} className="bg-slate-900 text-slate-100 font-normal">
-                      Flow{idx + 1} · {p.date.split('-').reverse().join('/')} ({p.weekday}) · {p.sizeMb.toLocaleString('pt-BR')} MB
-                    </option>
-                  ))}
+            <div className="relative inline-flex items-center" title="Escolha o pregão gravado da base ou período acumulado para o replay">
+              {/* Botão visual compacto: mostra APENAS o código (1/3 da largura anterior!) */}
+              <div className="h-6 px-2 rounded bg-slate-900 border border-slate-800 text-slate-200 text-[11px] font-mono font-bold flex items-center gap-1 cursor-pointer hover:bg-slate-800 transition-colors pointer-events-none">
+                <span className="text-emerald-400">{getPregaoCompactCode(selectedPregaoValue)}</span>
+                <ChevronDown className="w-3 h-3 text-slate-500" />
+              </div>
+              {/* Select nativo invisível por cima para disparar o menu nativo completo com datas e MB */}
+              <select
+                value={selectedPregaoValue}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedPregaoValue(val);
+                  if (val.startsWith('date:')) {
+                    const d = val.replace('date:', '');
+                    setSelectedPregaoDate(d);
+                    changeReplayDays(1);
+                    if (!isReplaying) handleReplayHistory(1, undefined, d);
+                  } else {
+                    const d = Number(val.replace('days:', '')) || 1;
+                    setSelectedPregaoDate(null);
+                    changeReplayDays(d);
+                    if (!isReplaying) handleReplayHistory(d);
+                  }
+                }}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                title="Escolha o pregão gravado da base ou período acumulado para o replay"
+              >
+                {currentAssetPregoes.length > 0 && (
+                  <optgroup label={`── 📂 PREGÕES GRAVADOS (${chartSymbolFor(asset)}) ──`} className="bg-slate-950 font-bold text-emerald-400">
+                    {currentAssetPregoes.map((p, idx) => (
+                      <option key={p.date} value={`date:${p.date}`} className="bg-slate-900 text-slate-100 font-normal">
+                        Flow{idx + 1} · {p.date.split('-').reverse().join('/')} ({p.weekday}) · {p.sizeMb.toLocaleString('pt-BR')} MB
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label="── ⏱️ PERÍODOS AGREGADOS ──" className="bg-slate-950 font-bold text-sky-400">
+                  <option value="days:1" className="bg-slate-900 text-slate-100">Flow 1D · Hoje (Mais recente)</option>
+                  <option value="days:2" className="bg-slate-900 text-slate-100">Flow 2D · Ontem (Penúltimo)</option>
+                  <option value="days:3" className="bg-slate-900 text-slate-100">Flow 3D · Últimos 3 pregões</option>
+                  <option value="days:5" className="bg-slate-900 text-slate-100">Flow 5D · Últimos 5 pregões</option>
+                  <option value="days:10" className="bg-slate-900 text-slate-100">Flow 10D · Últimos 10 pregões</option>
                 </optgroup>
-              )}
-              <optgroup label="── ⏱️ PERÍODOS AGREGADOS ──" className="bg-slate-950 font-bold text-sky-400">
-                <option value="days:1" className="bg-slate-900 text-slate-100">Flow 1D · Hoje (Mais recente)</option>
-                <option value="days:2" className="bg-slate-900 text-slate-100">Flow 2D · Ontem (Penúltimo)</option>
-                <option value="days:3" className="bg-slate-900 text-slate-100">Flow 3D · Últimos 3 pregões</option>
-                <option value="days:5" className="bg-slate-900 text-slate-100">Flow 5D · Últimos 5 pregões</option>
-                <option value="days:10" className="bg-slate-900 text-slate-100">Flow 10D · Últimos 10 pregões</option>
-              </optgroup>
-            </select>
+              </select>
+            </div>
           </div>
 
           {/* SELETOR DE VELOCIDADE EM CAIXA COMPACTA */}
