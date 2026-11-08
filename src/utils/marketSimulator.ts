@@ -176,8 +176,35 @@ export function generateHistoricalTicks(
   }
 }
 
+function assetSimulatorScales(asset: AssetSpec) {
+  if (asset.id === 'WDO') {
+    return {
+      gapPoints: 15,
+      minuteNoise: 3.5,
+      maxAnchorPull: 4.5,
+      trendMultiplier: 0.15,
+    };
+  }
+  if (asset.id === 'BTCBR' || asset.id === 'BTC') {
+    return {
+      gapPoints: 1200,
+      minuteNoise: 400,
+      maxAnchorPull: 500,
+      trendMultiplier: 10,
+    };
+  }
+  // Default WIN
+  return {
+    gapPoints: 400,
+    minuteNoise: 110,
+    maxAnchorPull: 120,
+    trendMultiplier: 4,
+  };
+}
+
 function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: number, asset: AssetSpec): Tick[] {
   const clock = sessionClock(asset);
+  const scales = assetSimulatorScales(asset);
   // Dias terminando hoje; sáb/dom só são pulados se o pregão do ativo for de dias úteis
   const sessionDays: Date[] = [];
   const cursor = new Date();
@@ -192,15 +219,14 @@ function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: nu
   const ticks: Tick[] = [];
   let price = startPrice;
   let counter = 0;
-  // ÂNCORA INTRADIANÁRIA (calibração base real WINZ26): o preço do pregão real ORBILITA em
-  // torno de um nível que deriva devagar — não é random walk puro, que acumula deriva e faixa
-  // irreais. Cada virada de minuto move a âncora; dentro do minuto o preço é puxado de volta.
+  // ÂNCORA INTRADIANÁRIA: o preço do pregão real orbita em torno de um nível que deriva devagar.
+  // Cada virada de minuto move a âncora proporcionalmente à volatilidade e escala do ativo.
   let anchor = startPrice;
   let anchorBucket = -1;
 
   for (const day of sessionDays) {
-    // Gap de abertura do dia (faixa calhada na base real: dias de ±200-400 pts)
-    price += (Math.random() - 0.5) * 400;
+    // Gap de abertura proporcional ao ativo (WIN: ±200-400 pts; WDO: ±7-15 pts)
+    price += (Math.random() - 0.5) * scales.gapPoints;
     price = snapToTick(price, asset);
     anchor = price;
     anchorBucket = -1;
@@ -238,13 +264,11 @@ function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: nu
       else if (minutes < 16 * 60 + 30) activity = 1.0;
       else activity = 1.5; // fechamento / decruzação D+1
 
-      // Mudanças de regime de tendência (pernas longas = boxes 10R como no real) — neutras
+      // Mudanças de regime de tendência (pernas longas = boxes como no real) — neutras
       if (Math.random() < 0.012 * activity) {
         trend = (Math.random() - 0.5) * 2.5;
       }
       // O viés do dia (dayBias) permeia a sessão toda; no almoço perde força (mercado quieto/lateral).
-      // Pesos calibrados contra a base real WINZ26: deriva líquida modesta (~700-900 pts/dia),
-      // com a "energia" do pregão vindo da serração (varredura de book), não da tendência.
       const lunchDamp = minutes >= 11 * 60 + 30 && minutes < 13 * 60 + 30 ? 0.35 : 1.0;
       const effectiveTrend = (trend + dayBias * 0.25 * lunchDamp) * 0.5;
 
@@ -264,26 +288,23 @@ function buildHistoricalTicks(days: number, startPrice: number, TICK_STEP_MS: nu
 
       const moveChance = Math.min(0.95, (0.45 + volume / 150) * activity);
       if (Math.random() < moveChance) {
-        // Varredura de book calibrada contra a base real WINZ26 (~600 boxes 10R e
-        // ~118k pts de caminho por pregão): volume e atividade mandam os níveis percorridos
+        // Varredura de book calibrada por ativo
         const levels = 1 + Math.floor(Math.random() * (2 + volume / 24) * (activity > 1.2 ? 1.5 : 1));
         price += aggressor === 'BUY' ? levels * asset.tickSize : -levels * asset.tickSize;
       }
 
-      // Dinâmica da âncora (calibração base real): a virada de minuto move o nível com o viés
-      // do dia + ruído; entre ticks o preço é puxado de volta para a âncora. O pregão real
-      // ORBITA um nível — serra muito (caminho ~118k) e anda pouco líquido (~735).
+      // Dinâmica da âncora: move o nível com o viés do dia + ruído calibrado pelo ativo
       const minuteBucket = Math.floor(ts / 60000);
       if (minuteBucket !== anchorBucket) {
         anchorBucket = minuteBucket;
         anchor = snapToTick(
-          anchor + effectiveTrend * 4 * activity + (Math.random() - 0.5) * 110 * activity,
+          anchor + effectiveTrend * scales.trendMultiplier * activity + (Math.random() - 0.5) * scales.minuteNoise * activity,
           asset,
         );
       }
       const toAnchor = (anchor - price) * 0.015;
       if (Math.abs(toAnchor) >= asset.tickSize) {
-        price += Math.sign(toAnchor) * Math.min(Math.abs(toAnchor), 120);
+        price += Math.sign(toAnchor) * Math.min(Math.abs(toAnchor), scales.maxAnchorPull);
       }
 
       const buyerBroker = BROKERS[Math.floor(Math.random() * BROKERS.length)];
