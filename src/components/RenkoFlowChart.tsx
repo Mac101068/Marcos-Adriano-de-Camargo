@@ -3316,7 +3316,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* ========================================================================= */}
       {/* TIRA DE STATUS DA SÉRIE / CONTROLES COLADA NO GRÁFICO (LINHA 4)          */}
       {/* ========================================================================= */}
-      <div className="flex items-center justify-between gap-2 px-2.5 sm:px-4 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
+      <div className="flex items-center justify-between gap-2 px-1.5 sm:px-2 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
         <div className="flex items-center gap-2 min-w-0">
           {/* Abre a barra lateral de controles em telas pequenas */}
           <button

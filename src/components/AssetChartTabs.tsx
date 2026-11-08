@@ -65,7 +65,7 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
   rightContent,
 }) => {
   return (
-    <div className="flex items-center justify-between px-2.5 sm:px-4 md:px-6 bg-zinc-950 select-none shrink-0 h-9 font-mono overflow-x-auto no-scrollbar">
+    <div className="flex items-center justify-between px-1.5 sm:px-2 bg-zinc-950 select-none shrink-0 h-9 font-mono overflow-x-auto no-scrollbar border-b border-zinc-800/80">
       {/* Abas dos Ativos */}
       <div className="flex items-center gap-1 min-w-0">
         {TAB_CONFIGS.map((tab) => {

@@ -311,8 +311,24 @@
         "sizeMb": 0.5
       }
     ],
-    "WDOZ26": [],
-    "BITX26": [],
+    "WDOZ26": [
+      {
+        "path": "data/pregoes/wdoz26_ticks_20261104.csv.gz",
+        "date": "2026-11-04",
+        "weekday": "Quarta",
+        "symbol": "WDOZ26",
+        "sizeMb": 0.74
+      }
+    ],
+    "BITX26": [
+      {
+        "path": "data/pregoes/bitx26_ticks_20261104.csv.gz",
+        "date": "2026-11-04",
+        "weekday": "Quarta",
+        "symbol": "BITX26",
+        "sizeMb": 0.81
+      }
+    ],
     "BIT$": []
   }
 }

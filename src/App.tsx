@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 
 import { Tick, RenkoBox, TradeOrder, AutomationConfig, TerminalStats, MT5ConnectionState, LocalPregao, MANUAL_ORDER_MAGIC, mainRobotMagic, SessionGap } from './types/trading';
 
@@ -195,7 +195,7 @@ import { StrategyLibraryService, mergeConfig, splitStrategyPatch } from './servi
 
 import { SavedStrategy } from './types/strategy';
 
-import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, ShieldAlert, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Square, Clock, Sparkles, RefreshCw } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Wifi, AlertTriangle, ShieldAlert, TrendingUp, Activity, Layers, Sliders, ShieldCheck, Terminal, LineChart, Cpu, BarChart3, AppWindow, MoreHorizontal, FileText, Box, Play, Pause, Zap, Square, Clock, Sparkles, RefreshCw } from 'lucide-react';
 
 
 
@@ -563,6 +563,14 @@ export default function App() {
         cancelado = true;
       };
     }, [asset]);
+
+  const [selectedPregaoDate, setSelectedPregaoDate] = useState<string | null>(null);
+  const [selectedPregaoValue, setSelectedPregaoValue] = useState<string>('days:1');
+
+  const currentAssetPregoes = useMemo(() => {
+    const sym = chartSymbolFor(asset).toUpperCase();
+    return localPregoes.filter((p) => p.symbol.toUpperCase() === sym || sym.startsWith(p.symbol.toUpperCase().slice(0, 3)));
+  }, [localPregoes, asset]);
 
   // "Replay opera": durante a reprodução cada tick passa pelo MESMO caminho do feed ao vivo
 
@@ -8299,124 +8307,141 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           (antes, com o replay na linha, o conteúdo estourava a largura e o PnL sumia da tela) */}
 
-      <div className="flex items-center gap-2.5 px-3 sm:px-6 py-0 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono">
+      <div className="flex items-center gap-2.5 px-3 sm:px-4 md:px-5 py-1 bg-slate-950 border-b border-slate-900 text-[11px] sm:text-xs shrink-0 font-mono">
 
-        <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 overflow-x-auto no-scrollbar">
 
-          {/* ── REPLAY DO SIMULADOR & CONTROLE DE VELOCIDADE ── */}
-          <div className="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md border border-slate-700/80 bg-slate-900/95 shadow-sm">
-            {/* Botão OPERA (Simulação Paper Trading com ticks reais) */}
-            <button
-              onClick={() => {
-                const nextVal = !replayOperates;
-                setReplayOperates(nextVal);
-                setConfig((prev) => {
-                  const updated = { ...prev, active: nextVal, lastSavedTimestamp: Date.now() };
-                  EaConfigService.saveConfig(updated);
-                  return updated;
-                });
-                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                  try {
-                    wsRef.current.send(JSON.stringify({ action: nextVal ? 'ARM' : 'DISARM' }));
-                  } catch {}
-                }
+          {/* Botão compacto OPERA: ícone + bolinha pulsante + texto 'Opera' */}
+          <button
+            onClick={() => {
+              const nextVal = !replayOperates;
+              setReplayOperates(nextVal);
+              setConfig((prev) => {
+                const updated = { ...prev, active: nextVal, lastSavedTimestamp: Date.now() };
+                EaConfigService.saveConfig(updated);
+                return updated;
+              });
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                 try {
-                  saasChannelRef.current?.postMessage({
-                    type: 'ROBOT_ARMED_SYNC',
-                    armed: nextVal
-                  });
+                  wsRef.current.send(JSON.stringify({ action: nextVal ? 'ARM' : 'DISARM' }));
                 } catch {}
-              }}
-              className={`px-2 py-0.5 rounded text-[10.5px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
-                replayOperates
-                  ? 'border-emerald-500 bg-emerald-950/90 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.25)]'
-                  : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-              }`}
-              title="Quando ativado (verde), o robô executa a estratégia e opera na tela (paper trading) com os dados reais do MT5 sem enviar para a corretora real."
-            >
-              <span className={`w-2 h-2 rounded-full ${replayOperates ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-zinc-600'}`} />
-              <span>OPERA: {replayOperates ? 'LIGADO' : 'OFF'}</span>
-            </button>
+              }
+              try {
+                saasChannelRef.current?.postMessage({
+                  type: 'ROBOT_ARMED_SYNC',
+                  armed: nextVal
+                });
+              } catch {}
+            }}
+            className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-all cursor-pointer select-none text-[11px] font-semibold ${
+              replayOperates
+                ? 'text-emerald-300 hover:text-emerald-200'
+                : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+            title={replayOperates ? 'Robô Opera: LIGADO (paper trading ativo)' : 'Robô Opera: DESLIGADO (modo silencioso)'}
+          >
+            <Zap className={`w-3.5 h-3.5 ${replayOperates ? 'text-emerald-400 fill-emerald-400' : 'text-zinc-600'}`} />
+            <span className={`w-2 h-2 rounded-full ${replayOperates ? 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse' : 'bg-zinc-600'}`} />
+            <span>Opera</span>
+          </button>
 
-            {/* Seletor do Pregão / Dias de Replay */}
-            <div className="flex items-center gap-1 border-l border-slate-800 pl-1.5">
-              <span className="text-[10px] text-slate-400 font-semibold uppercase">Pregão:</span>
-              <MiniSelect
-                label="pregão / histórico"
-                value={replayDays}
-                options={[
-                  { value: 1, label: 'Hoje (04/11)', title: 'Replay com ticks reais do pregão de Hoje (04/11/2026)' },
-                  { value: 2, label: 'Ontem (03/11)', title: 'Replay com ticks reais do pregão de Ontem (03/11/2026)' },
-                  { value: 3, label: '3 dias', title: 'Replay dos últimos 3 pregões' },
-                  { value: 5, label: '5 dias', title: 'Replay dos últimos 5 pregões' },
-                ]}
-                onChange={(d) => {
+          {/* Janela de Seleção do Pregão com recuo e dias da base */}
+          <div className="flex items-center gap-1.5 ml-3 pl-3 border-l border-slate-800">
+            <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Pregão:</span>
+            <select
+              value={selectedPregaoValue}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedPregaoValue(val);
+                if (val.startsWith('date:')) {
+                  const d = val.replace('date:', '');
+                  setSelectedPregaoDate(d);
+                  changeReplayDays(1);
+                  if (!isReplaying) handleReplayHistory(1, undefined, d);
+                } else {
+                  const d = Number(val.replace('days:', '')) || 1;
+                  setSelectedPregaoDate(null);
                   changeReplayDays(d);
                   if (!isReplaying) handleReplayHistory(d);
-                }}
-                title="Escolha o pregão para rodar a simulação com dados reais do MetaTrader 5"
-              />
-            </div>
-
-            {/* SELETOR DE VELOCIDADE EM DESTAQUE NA TELA PRINCIPAL */}
-            <div className="flex items-center gap-1 border-l border-slate-800 pl-1.5 bg-slate-950/60 px-1.5 py-0.5 rounded border border-slate-800/80">
-              <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide flex items-center gap-0.5">
-                ⚡ Vel:
-              </span>
-              <div className="flex items-center gap-0.5">
-                {[0.25, 0.5, 1, 2, 3, 5, 10].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => changeSimulationSpeed(s)}
-                    className={`px-1.5 py-0.5 text-[10px] font-bold rounded cursor-pointer transition-all ${
-                      simulationSpeed === s
-                        ? 'bg-amber-500 text-slate-950 shadow-[0_0_6px_rgba(245,158,11,0.5)] scale-105'
-                        : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
-                    }`}
-                    title={`Definir velocidade em ${s}x (${
-                      s === 0.25 ? 'bem devagar — 1 tick a cada 4 passos'
-                      : s === 0.5 ? 'devagar — 1 tick a cada 2 passos'
-                      : s === 1 ? '1min45 por pregão'
-                      : s === 2 ? '55s' : s === 3 ? '35s' : s === 5 ? '15s' : '5s'
-                    })`}
-                  >
-                    {s === 0.25 ? '¼x' : s === 0.5 ? '½x' : `${s}x`}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Botão de Disparo / Indicador de Replay Ativo */}
-            {!isReplaying ? (
-              <button
-                onClick={() => handleReplayHistory(replayDays)}
-                className="ml-1 px-3 py-1 rounded bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-[11px] font-bold flex items-center gap-1.5 cursor-pointer shadow-md active:scale-95 transition-all"
-                title="Iniciar simulação com os dados reais do MT5 para o pregão selecionado"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" />
-                <span>RODAR REPLAY</span>
-              </button>
-            ) : (
-              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-500/80 text-emerald-300 text-[10.5px] font-mono font-bold shadow-md">
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                <span>PREGÃO:</span>
-                <span className="text-white font-bold">{replayDateLabel}</span>
-                {replayCurrentTimeStr && <span className="text-emerald-400 font-normal">{replayCurrentTimeStr}</span>}
-                <span className="text-amber-300 font-bold ml-0.5">({simulationSpeed}x)</span>
-                <span className="text-emerald-200 tabular-nums">[{replayProgress}%]</span>
-                <button
-                  onClick={() => handleStopReplay()}
-                  className="ml-1.5 px-2 py-0.5 rounded bg-rose-700 hover:bg-rose-600 text-white text-[10px] font-sans font-bold cursor-pointer transition-colors shadow-sm"
-                  title="Interromper simulação"
-                >
-                  PARAR
-                </button>
-              </div>
-            )}
+                }
+              }}
+              className="h-6 rounded bg-slate-900/90 text-slate-200 text-[11px] font-mono px-2 border border-slate-800 cursor-pointer focus:outline-none hover:bg-slate-800 transition-colors"
+              title="Escolha o pregão gravado da base ou período acumulado para o replay"
+            >
+              {currentAssetPregoes.length > 0 && (
+                <optgroup label={`── 📂 PREGÕES GRAVADOS (${chartSymbolFor(asset)}) ──`} className="bg-slate-950 font-bold text-emerald-400">
+                  {currentAssetPregoes.map((p) => (
+                    <option key={p.date} value={`date:${p.date}`} className="bg-slate-900 text-slate-100 font-normal">
+                      {p.date.split('-').reverse().join('/')} ({p.weekday}) · {p.sizeMb.toLocaleString('pt-BR')} MB
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="── ⏱️ PERÍODOS AGREGADOS ──" className="bg-slate-950 font-bold text-sky-400">
+                <option value="days:1" className="bg-slate-900 text-slate-100">Hoje (Mais recente)</option>
+                <option value="days:2" className="bg-slate-900 text-slate-100">Ontem (Penúltimo pregão)</option>
+                <option value="days:3" className="bg-slate-900 text-slate-100">Últimos 3 pregões</option>
+                <option value="days:5" className="bg-slate-900 text-slate-100">Últimos 5 pregões</option>
+                <option value="days:10" className="bg-slate-900 text-slate-100">Últimos 10 pregões</option>
+              </optgroup>
+            </select>
           </div>
+
+          {/* SELETOR DE VELOCIDADE EM DESTAQUE NA TELA PRINCIPAL */}
+          <div className="flex items-center gap-1 border-l border-slate-800 pl-3">
+            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide flex items-center gap-0.5">
+              ⚡ Vel:
+            </span>
+            <div className="flex items-center gap-0.5">
+              {[0.25, 0.5, 1, 2, 3, 5, 10].map((s) => (
+                <button
+                  key={s}
+                  onClick={() => changeSimulationSpeed(s)}
+                  className={`px-1.5 py-0.5 text-[10px] font-bold rounded cursor-pointer transition-all ${
+                    simulationSpeed === s
+                      ? 'bg-amber-500 text-slate-950 shadow-[0_0_6px_rgba(245,158,11,0.5)] scale-105'
+                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
+                  }`}
+                  title={`Definir velocidade em ${s}x (${
+                    s === 0.25 ? 'bem devagar — 1 tick a cada 4 passos'
+                    : s === 0.5 ? 'devagar — 1 tick a cada 2 passos'
+                    : s === 1 ? '1min45 por pregão'
+                    : s === 2 ? '55s' : s === 3 ? '35s' : s === 5 ? '15s' : '5s'
+                  })`}
+                >
+                  {s === 0.25 ? '¼x' : s === 0.5 ? '½x' : `${s}x`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Botão de Disparo / Indicador de Replay Ativo — Clean, sem roxo, sem bordas */}
+          {!isReplaying ? (
+            <button
+              onClick={() => handleReplayHistory(replayDays, undefined, selectedPregaoDate || undefined)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded text-slate-200 hover:text-white hover:bg-slate-800/60 text-[11px] font-bold cursor-pointer transition-all select-none ml-2"
+              title="Iniciar simulação com os dados reais do pregão selecionado"
+            >
+              <Play className="w-3.5 h-3.5 fill-emerald-400 text-emerald-400" />
+              <span>Replay</span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5 text-[10.5px] font-mono select-none ml-2">
+              <button
+                onClick={() => handleStopReplay()}
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 cursor-pointer transition-colors"
+                title="Pausar replay"
+              >
+                <Pause className="w-3.5 h-3.5 fill-amber-400 text-amber-400 animate-pulse" />
+                <span className="font-sans font-bold">Pausar</span>
+              </button>
+              <span className="text-slate-600">·</span>
+              <span className="text-white font-bold">{replayDateLabel}</span>
+              {replayCurrentTimeStr && <span className="text-emerald-400 font-normal">{replayCurrentTimeStr}</span>}
+              <span className="text-amber-300 font-bold ml-0.5">({simulationSpeed}x)</span>
+              <span className="text-emerald-300 tabular-nums">[{replayProgress}%]</span>
+            </div>
+          )}
 
           {/* Seed do pregão sintético: é o que torna honesta a comparação entre velocidades.
 
@@ -8651,7 +8676,7 @@ ${
 
           cria um segundo vão visível entre a tira de status e a barra do gráfico. */}
 
-      <main className="flex-1 min-h-0 p-0.5 pt-0 pb-16 sm:p-1 sm:pt-0 lg:pb-1 bg-slate-950 overflow-hidden">
+      <main className="flex-1 min-h-0 px-3 sm:px-4 md:px-5 pt-0 pb-16 lg:pb-1 bg-slate-950 overflow-hidden">
 
         {!AuthService.isSubscriptionActive(currentUser) && currentUser.role !== 'ADMIN' ? (
 

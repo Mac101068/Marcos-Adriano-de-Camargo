@@ -472,7 +472,7 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   return (
-    <header className="flex items-center justify-between gap-2 px-2.5 sm:px-4 md:px-6 py-0.5 bg-slate-950 border-b border-slate-800/80 shrink-0">
+    <header className="flex items-center justify-between gap-2 px-3 sm:px-4 md:px-5 py-0.5 bg-slate-950 border-b border-slate-800/80 shrink-0">
       {/* Zone 1: Brand Title & EA Registered Status. Vão apertado e fonte miúda: cabeçalho, tira de
           métricas e barra do gráfico são três faixas empilhadas — cada pixel vertical aqui é tela de
           gráfico ganha embaixo. */}
