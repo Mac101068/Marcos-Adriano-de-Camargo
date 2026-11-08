@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   MousePointer2,
   TrendingUp,
@@ -8,8 +8,11 @@ import {
   Type,
   Undo2,
   Trash2,
+  Palette,
+  ChevronLeft,
+  Pencil,
 } from 'lucide-react';
-import { DrawingColor, DrawingTool } from '../types/drawing';
+import { DrawingColor, DrawingTool, DRAWING_COLOR_HEX } from '../types/drawing';
 
 interface DrawingToolbarProps {
   activeTool: DrawingTool;
@@ -23,22 +26,26 @@ interface DrawingToolbarProps {
   layout?: 'vertical' | 'inline';
 }
 
-const TOOL_ITEMS: { tool: DrawingTool; icon: React.ElementType; label: string }[] = [
-  { tool: 'select', icon: MousePointer2, label: 'Selecionar / Mover (tecla V) — clique num desenho para apagar com Delete' },
-  { tool: 'trendline', icon: TrendingUp, label: 'Linha de Tendência — arraste entre dois tijolos' },
-  { tool: 'hline', icon: Minus, label: 'Linha Horizontal — suporte/resistência (tecla H)' },
-  { tool: 'rect', icon: Square, label: 'Retângulo / Zona — arraste para marcar região (tecla R)' },
-  { tool: 'arrow', icon: MoveUpRight, label: 'Seta — aponte um movimento (tecla A)' },
-  { tool: 'text', icon: Type, label: 'Texto — clique e digite a anotação (tecla T)' },
+const TOOL_ITEMS: { tool: DrawingTool; icon: React.ElementType; label: string; shortcut: string }[] = [
+  { tool: 'select', icon: MousePointer2, label: 'Cursor / Selecionar', shortcut: 'V' },
+  { tool: 'trendline', icon: TrendingUp, label: 'Linha de Tendência', shortcut: 'L' },
+  { tool: 'hline', icon: Minus, label: 'Linha Horizontal (Suporte/Resistência)', shortcut: 'H' },
+  { tool: 'rect', icon: Square, label: 'Retângulo / Região de Liquidez', shortcut: 'R' },
+  { tool: 'arrow', icon: MoveUpRight, label: 'Seta de Direção de Fluxo', shortcut: 'A' },
+  { tool: 'text', icon: Type, label: 'Texto / Anotação', shortcut: 'T' },
 ];
 
-const COLOR_ITEMS: { color: DrawingColor; dot: string; label: string }[] = [
-  { color: 'white', dot: '#e5e5e5', label: 'Cor neutra (padrão)' },
-  { color: 'green', dot: '#10b981', label: 'Sinal de compra (verde)' },
-  { color: 'red', dot: '#ef4444', label: 'Sinal de venda (vermelho)' },
+const COLOR_OPTIONS: { color: DrawingColor; dot: string; label: string }[] = [
+  { color: 'white', dot: DRAWING_COLOR_HEX.white, label: 'Branco (neutro)' },
+  { color: 'green', dot: DRAWING_COLOR_HEX.green, label: 'Verde (compra)' },
+  { color: 'red', dot: DRAWING_COLOR_HEX.red, label: 'Vermelho (venda)' },
+  { color: 'yellow', dot: DRAWING_COLOR_HEX.yellow, label: 'Amarelo (alerta)' },
+  { color: 'blue', dot: DRAWING_COLOR_HEX.blue, label: 'Azul (institucional)' },
 ];
 
-// Barra de ferramentas de desenho: vertical flutuante (TradingView-like) ou inline na barra lateral
+const STORAGE_KEY_DRAWING_BAR_COLLAPSED = 'fluxo_drawing_bar_collapsed_v1';
+
+// Barra de ferramentas de desenho vertical limpa (estilo TradingView / Photoshop)
 export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   activeTool,
   onSelectTool,
@@ -49,67 +56,213 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   hasDrawings,
   layout = 'vertical',
 }) => {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(STORAGE_KEY_DRAWING_BAR_COLLAPSED) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const [colorMenuOpen, setColorMenuOpen] = useState(false);
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(STORAGE_KEY_DRAWING_BAR_COLLAPSED, next ? '1' : '0');
+      } catch {}
+      return next;
+    });
+  };
+
   const inline = layout === 'inline';
-  const toolBtn = (active: boolean) =>
-    `w-7 h-7 flex items-center justify-center rounded-md transition-colors cursor-pointer ${
-      active ? 'bg-slate-700 text-slate-50 shadow-inner' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
-    }`;
 
-  return (
-    <div
-      className={
-        inline
-          ? 'flex flex-wrap items-center gap-0.5'
-          : 'flex flex-col gap-0.5 p-1 rounded-lg bg-slate-900/90 backdrop-blur-md border border-slate-700/80 shadow-2xl pointer-events-auto select-none'
-      }
-    >
-      {TOOL_ITEMS.map(({ tool, icon: Icon, label }) => (
-        <button key={tool} onClick={() => onSelectTool(tool)} title={label} className={toolBtn(activeTool === tool)}>
-          <Icon className="w-3.5 h-3.5" />
-        </button>
-      ))}
-
-      <div className={inline ? 'w-[1px] h-5 bg-slate-800 mx-1' : 'h-[1px] bg-slate-700/70 my-0.5'} />
-
-      {/* Seletor de cor: neutra + cores de sinal */}
-      {COLOR_ITEMS.map(({ color, dot, label }) => (
+  // Se inline (dentro do painel lateral de controles)
+  if (inline) {
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        {TOOL_ITEMS.map(({ tool, icon: Icon, label, shortcut }) => (
+          <button
+            key={tool}
+            onClick={() => onSelectTool(tool)}
+            title={`${label} (tecla ${shortcut})`}
+            className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors cursor-pointer ${
+              activeTool === tool
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+            }`}
+          >
+            <Icon className="w-3.5 h-3.5" />
+          </button>
+        ))}
+        <div className="w-[1px] h-5 bg-zinc-800 mx-1" />
+        {COLOR_OPTIONS.map(({ color, dot, label }) => (
+          <button
+            key={color}
+            onClick={() => onSelectColor(color)}
+            title={label}
+            className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors cursor-pointer ${
+              activeColor === color ? 'bg-zinc-800 ring-1 ring-zinc-500' : 'hover:bg-zinc-800/60'
+            }`}
+          >
+            <span className="w-2.5 h-2.5 rounded-full border border-black/40" style={{ backgroundColor: dot }} />
+          </button>
+        ))}
+        <div className="w-[1px] h-5 bg-zinc-800 mx-1" />
         <button
-          key={color}
-          onClick={() => onSelectColor(color)}
-          title={label}
-          className={`w-7 h-5 flex items-center justify-center rounded-md transition-colors cursor-pointer ${
-            activeColor === color ? 'bg-slate-700 ring-1 ring-slate-500' : 'hover:bg-slate-800'
+          onClick={onUndo}
+          disabled={!hasDrawings}
+          title="Desfazer (Ctrl+Z)"
+          className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+            hasDrawings
+              ? 'text-zinc-300 hover:text-white hover:bg-zinc-800 cursor-pointer'
+              : 'text-zinc-600 cursor-not-allowed'
           }`}
         >
-          <span className="w-2.5 h-2.5 rounded-full border border-black/40" style={{ backgroundColor: dot }} />
+          <Undo2 className="w-3.5 h-3.5" />
         </button>
-      ))}
+        <button
+          onClick={onClearAll}
+          disabled={!hasDrawings}
+          title="Limpar todos os desenhos"
+          className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+            hasDrawings
+              ? 'text-zinc-300 hover:text-rose-300 hover:bg-zinc-800 cursor-pointer'
+              : 'text-zinc-600 cursor-not-allowed'
+          }`}
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  }
 
-      <div className={inline ? 'w-[1px] h-5 bg-slate-800 mx-1' : 'h-[1px] bg-slate-700/70 my-0.5'} />
+  // Se vertical flutuante (no lado esquerdo do gráfico)
+  if (collapsed) {
+    return (
+      <div className="absolute top-12 left-2 z-30 select-none pointer-events-auto">
+        <button
+          onClick={toggleCollapsed}
+          title="Expandir barra de desenho"
+          className="w-8 h-8 flex items-center justify-center rounded-lg bg-zinc-950/85 backdrop-blur-md border border-zinc-800/80 text-zinc-400 hover:text-amber-300 hover:border-zinc-700 shadow-xl transition-all cursor-pointer group"
+        >
+          <Pencil className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+        </button>
+      </div>
+    );
+  }
 
+  return (
+    <div className="absolute top-12 left-2 z-30 select-none pointer-events-auto flex flex-col items-center gap-1 p-1 rounded-xl bg-zinc-950/90 backdrop-blur-md border border-zinc-800/90 shadow-2xl transition-all">
+      {/* Botão de minimizar/recolher */}
+      <button
+        onClick={toggleCollapsed}
+        title="Recolher barra de desenho"
+        className="w-7 h-5 flex items-center justify-center rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 transition-colors cursor-pointer"
+      >
+        <ChevronLeft className="w-3 h-3" />
+      </button>
+
+      <div className="w-5 h-[1px] bg-zinc-800/80 my-0.5" />
+
+      {/* Ferramentas de Desenho */}
+      {TOOL_ITEMS.map(({ tool, icon: Icon, label, shortcut }) => {
+        const isActive = activeTool === tool;
+        return (
+          <button
+            key={tool}
+            onClick={() => onSelectTool(tool)}
+            title={`${label} (${shortcut})`}
+            className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all cursor-pointer relative group ${
+              isActive
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80'
+            }`}
+          >
+            <Icon className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
+            {/* Tooltip flutuante lateral à direita */}
+            <span className="pointer-events-none absolute left-full ml-2 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-[10px] font-sans text-zinc-200 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-lg">
+              {label} <span className="text-amber-400 font-mono font-bold ml-1">{shortcut}</span>
+            </span>
+          </button>
+        );
+      })}
+
+      <div className="w-5 h-[1px] bg-zinc-800/80 my-0.5" />
+
+      {/* Seletor de Cores com Popover / Flyout lateral */}
+      <div className="relative">
+        <button
+          onClick={() => setColorMenuOpen((v) => !v)}
+          title="Selecionar cor do desenho"
+          className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-zinc-800/80 transition-colors cursor-pointer relative group"
+        >
+          <span
+            className="w-3 h-3 rounded-full border border-black/50 shadow-sm transition-transform group-hover:scale-110"
+            style={{ backgroundColor: DRAWING_COLOR_HEX[activeColor] }}
+          />
+        </button>
+
+        {/* Menu suspenso de cores para a direita */}
+        {colorMenuOpen && (
+          <div
+            className="absolute left-full top-0 ml-2 p-1.5 rounded-lg bg-zinc-900/95 border border-zinc-700 shadow-2xl flex flex-col gap-1.5 z-50 backdrop-blur-md"
+            onMouseLeave={() => setColorMenuOpen(false)}
+          >
+            {COLOR_OPTIONS.map(({ color, dot, label }) => (
+              <button
+                key={color}
+                onClick={() => {
+                  onSelectColor(color);
+                  setColorMenuOpen(false);
+                }}
+                title={label}
+                className={`w-6 h-6 flex items-center justify-center rounded-md transition-all cursor-pointer ${
+                  activeColor === color ? 'bg-zinc-800 ring-1 ring-amber-400' : 'hover:bg-zinc-800/60'
+                }`}
+              >
+                <span className="w-3 h-3 rounded-full border border-black/40" style={{ backgroundColor: dot }} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="w-5 h-[1px] bg-zinc-800/80 my-0.5" />
+
+      {/* Ações: Desfazer */}
       <button
         onClick={onUndo}
         disabled={!hasDrawings}
-        title="Desfazer último desenho (Ctrl+Z)"
-        className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+        title="Desfazer último traço (Ctrl+Z)"
+        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors relative group ${
           hasDrawings
-            ? 'text-slate-300 hover:text-slate-50 hover:bg-slate-800 cursor-pointer'
-            : 'text-slate-600 cursor-not-allowed'
+            ? 'text-zinc-400 hover:text-white hover:bg-zinc-800/80 cursor-pointer'
+            : 'text-zinc-600 cursor-not-allowed opacity-50'
         }`}
       >
         <Undo2 className="w-3.5 h-3.5" />
+        <span className="pointer-events-none absolute left-full ml-2 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-[10px] font-sans text-zinc-200 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-lg">
+          Desfazer <span className="text-zinc-400 font-mono ml-1">Ctrl+Z</span>
+        </span>
       </button>
+
+      {/* Ações: Limpar Tudo */}
       <button
         onClick={onClearAll}
         disabled={!hasDrawings}
         title="Limpar todos os desenhos"
-        className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors relative group ${
           hasDrawings
-            ? 'text-slate-300 hover:text-rose-300 hover:bg-slate-800 cursor-pointer'
-            : 'text-slate-600 cursor-not-allowed'
+            ? 'text-zinc-400 hover:text-rose-400 hover:bg-zinc-800/80 cursor-pointer'
+            : 'text-zinc-600 cursor-not-allowed opacity-50'
         }`}
       >
         <Trash2 className="w-3.5 h-3.5" />
+        <span className="pointer-events-none absolute left-full ml-2 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-[10px] font-sans text-rose-300 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-lg">
+          Limpar desenhos
+        </span>
       </button>
     </div>
   );

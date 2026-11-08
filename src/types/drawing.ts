@@ -8,13 +8,15 @@ export type DrawingTool = 'select' | 'trendline' | 'hline' | 'rect' | 'arrow' | 
 
 export type DrawingKind = Exclude<DrawingTool, 'select'>;
 
-// Cores permitidas: neutra (padrão profissional) + sinais de operação
-export type DrawingColor = 'white' | 'green' | 'red';
+// Cores permitidas: neutra (padrão profissional) + sinais de operação e análise
+export type DrawingColor = 'white' | 'green' | 'red' | 'yellow' | 'blue';
 
 export const DRAWING_COLOR_HEX: Record<DrawingColor, string> = {
   white: '#e5e5e5',
   green: '#10b981',
   red: '#ef4444',
+  yellow: '#f59e0b',
+  blue: '#38bdf8',
 };
 
 export interface Drawing {

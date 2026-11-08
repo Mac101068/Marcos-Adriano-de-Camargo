@@ -26,6 +26,7 @@ import type { FunnelMetricsSnapshot } from '../utils/funnelMetrics';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
+import { DrawingToolbar } from './DrawingToolbar';
 import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff } from 'lucide-react';
 
 const getStorageKeyScales = (assetId?: string) => `fluxo_renko_chart_scales_${assetId || 'WIN'}_v3`;
@@ -3575,6 +3576,23 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           onCreate={handleDrawingCreate}
           onUpdate={handleDrawingUpdate}
           onDelete={handleDrawingDelete}
+        />
+
+        {/* ========================================================================= */}
+        {/* BARRA DE DESENHO LATERAL ESQUERDA (TradingView-like, clean & flutuante)    */}
+        {/* ========================================================================= */}
+        <DrawingToolbar
+          activeTool={activeDrawingTool}
+          onSelectTool={setActiveDrawingTool}
+          activeColor={drawingColor}
+          onSelectColor={setDrawingColor}
+          onUndo={() => setDrawings((prev) => prev.slice(0, -1))}
+          onClearAll={() => {
+            setDrawings([]);
+            setSelectedDrawingId(null);
+          }}
+          hasDrawings={drawings.length > 0}
+          layout="vertical"
         />
 
         {/* ========================================================================= */}
