@@ -296,7 +296,33 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Qual painel foi agarrado no mousedown: o pan vertical move só ele (preço ou fluxo).
   const dragPaneRef = useRef<'price' | 'flow'>('price');
   const [canvasSize, setCanvasSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
-  const [layoutVersion, setLayoutVersion] = useState(0);
+  const canvasMetricsRef = useRef<{ w: number; h: number; dpr: number }>({ w: 0, h: 0, dpr: 1 });
+
+  // Observa o tamanho do contêiner do canvas sem forçar reflow nem recriar buffers a cada tick
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const updateSize = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.round(rect.width);
+      const h = Math.round(rect.height);
+      if (w > 0 && h > 0 && (canvasMetricsRef.current.w !== w || canvasMetricsRef.current.h !== h || canvasMetricsRef.current.dpr !== dpr)) {
+        canvasMetricsRef.current = { w, h, dpr };
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        setCanvasSize({ w, h });
+      }
+    };
+    updateSize();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateSize) : null;
+    if (ro) ro.observe(canvas);
+    window.addEventListener('resize', updateSize);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', updateSize);
+    };
+  }, []);
   const lastLayoutSigRef = useRef<string>('');
 
   // Armazena posições dos boxes para hit-testing sem causar re-render cíclico
@@ -703,15 +729,19 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Resolução DPI
+    // Resolução DPI com preservação de textura da GPU (só realoca buffer se dimensões mudarem)
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
+    const width = Math.round(rect.width);
+    const height = Math.round(rect.height);
 
-    const width = rect.width;
-    const height = rect.height;
+    if (canvasMetricsRef.current.w !== width || canvasMetricsRef.current.h !== height || canvasMetricsRef.current.dpr !== dpr) {
+      canvasMetricsRef.current = { w: width, h: height, dpr };
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+    }
+    // Aplica matriz limpa sem acumular escala na GPU
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const isMobile = width < 640;
 
     // Layout dos painéis: Preço (topo) e Janela de Fluxo (base com divisor ajustável)
@@ -2090,8 +2120,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         indexToX: (k: number) => lastBoxX - (endIdx - 1 - k) * stepX,
         xToIndex: (x: number) => endIdx - 1 - (lastBoxX - x) / stepX,
       };
-      setCanvasSize((prev) => (prev.w === width && prev.h === height ? prev : { w: width, h: height }));
-      setLayoutVersion((v) => v + 1);
+// Layout atualizado na ref sem forçar re-render em loop do React
     }
 
     // =======================================================================

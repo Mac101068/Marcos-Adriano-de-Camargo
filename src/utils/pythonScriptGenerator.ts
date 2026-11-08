@@ -1527,21 +1527,39 @@ async def handle_request_history(websocket, req_id, symbol, days):
     print(f"\ud83d\udcdc HISTÓRICO enviado a {get_peer_ip(websocket)}: {total} ticks de '{symbol}' ({days} dia(s), volume {volume_source}) em {chunks} chunk(s) \u2014 agressores: {_hist_buy} C / {_hist_sell} V / {_hist_cross} cruzados (bid/ask test).")
 
 
-def _ultimo_pregao_janela():
+def _ultimo_pregao_janela(symbol=None):
     """Janela do ÚLTIMO PREGÃO do contrato: abertura 09:00 e fechamento 18:00 (horário de
     Brasília) do último dia em que houve tick. Devolve (inicio, fim, motivo)."""
     try:
-        now = datetime.now(timezone.utc)
-        recent = mt5.copy_ticks_from(SYMBOL, now - timedelta(days=10), 1, mt5.COPY_TICKS_TRADE)
-        probe = mt5.copy_ticks_range(SYMBOL, now - timedelta(days=10), now, mt5.COPY_TICKS_TRADE)
-        if probe is None or len(probe) == 0:
-            return None, None, "sem tick nos ultimos 10 dias"
-        last_msc = int(probe[-1]['time_msc'])
+        sym = symbol or SYMBOL
         tz_br = timezone(timedelta(hours=-3))
-        dia = datetime.fromtimestamp(last_msc / 1000, tz_br).date()
-        start = datetime(dia.year, dia.month, dia.day, 9, 0, tzinfo=tz_br)
-        end = datetime(dia.year, dia.month, dia.day, 18, 0, tzinfo=tz_br)
-        return start, end, "ultimo pregao %s" % dia.isoformat()
+        # 1. Consulta ultrarrápida da barra diária (em <1ms em vez de puxar milhões de ticks)
+        rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_D1, 0, 1)
+        if rates is not None and len(rates) > 0:
+            dia = datetime.fromtimestamp(int(rates[0]['time']), timezone.utc).astimezone(tz_br).date()
+            start = datetime(dia.year, dia.month, dia.day, 9, 0, tzinfo=tz_br)
+            end = datetime(dia.year, dia.month, dia.day, 18, 0, tzinfo=tz_br)
+            return start, end, f"ultimo pregao D1 {dia.isoformat()}"
+
+        # 2. Se não houver barra D1, pega o último tick via symbol_info_tick (instantâneo)
+        last_tick = mt5.symbol_info_tick(sym)
+        if last_tick is not None and getattr(last_tick, 'time', 0) > 0:
+            dia = datetime.fromtimestamp(int(last_tick.time), timezone.utc).astimezone(tz_br).date()
+            start = datetime(dia.year, dia.month, dia.day, 9, 0, tzinfo=tz_br)
+            end = datetime(dia.year, dia.month, dia.day, 18, 0, tzinfo=tz_br)
+            return start, end, f"ultimo pregao tick {dia.isoformat()}"
+
+        # 3. Fallback seguro: últimos 5 ticks (nunca range de 10 dias)
+        now = datetime.now(timezone.utc)
+        probe = mt5.copy_ticks_from(sym, now - timedelta(days=10), 5, mt5.COPY_TICKS_TRADE)
+        if probe is not None and len(probe) > 0:
+            last_msc = int(probe[-1]['time_msc'])
+            dia = datetime.fromtimestamp(last_msc / 1000, tz_br).date()
+            start = datetime(dia.year, dia.month, dia.day, 9, 0, tzinfo=tz_br)
+            end = datetime(dia.year, dia.month, dia.day, 18, 0, tzinfo=tz_br)
+            return start, end, f"ultimo pregao fallback {dia.isoformat()}"
+
+        return None, None, "sem tick nos ultimos 10 dias"
     except Exception as exc:
         print(f"[AVISO] nao foi possivel determinar o ultimo pregao: {exc}")
         return None, None, str(exc)
@@ -1581,7 +1599,7 @@ async def handle_backfill(websocket, symbol, days):
     # Boxes Renko do ÚLTIMO PREGÃO INTEIRO (regra do operador: o gráfico abre com o dia completo,
     # parado). Reconstrói pelo caminho real dos ticks do dia — mesma regra do loop vivo — e só cai
     # nas barras de 1 min se o terminal não tiver tick desse dia.
-    day_start, day_end, tick_source = _ultimo_pregao_janela()
+    day_start, day_end, tick_source = await asyncio.to_thread(_ultimo_pregao_janela, symbol)
     raw_day_ticks = None
     if day_start is not None:
         raw_day_ticks = await asyncio.to_thread(mt5.copy_ticks_range, symbol, day_start, day_end, mt5.COPY_TICKS_TRADE)
@@ -1602,7 +1620,8 @@ async def handle_backfill(websocket, symbol, days):
     boxes_fonte = "TICKS"
     if raw_day_ticks is not None and len(raw_day_ticks) > 0:
         prev_price = None
-        for raw in raw_day_ticks:
+        ticks_to_process = raw_day_ticks[-60000:] if len(raw_day_ticks) > 60000 else raw_day_ticks
+        for raw in ticks_to_process:
             price = float(raw['last'] if 'last' in raw.dtype.names else raw[1])
             if price <= 0:
                 price = float(raw['bid'] if 'bid' in raw.dtype.names else 0) or price
