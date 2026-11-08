@@ -4041,6 +4041,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           brokerCompany: 'MetaTrader 5 Live Bridge',
         });
         setIsSimulating(false); // Pausa simulação quando conectado ao MT5 real
+        // Na volta do mercado real: zera ordens e sessão do replay anterior para abrir pregão limpo
+        sessionStartRef.current = Date.now();
+        setOrders([]);
+        OrderAuditService.clearIntradayAudit(asset.id);
         setLatestToast({
           id: `mt5-conn-${Date.now()}`,
           type: 'BUY',
@@ -6392,6 +6396,39 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
         setReplayProgress(0);
 
+        // Se alguma ordem do replay ainda estiver aberta na linha de chegada,
+        // liquida a mercado no preço final para consolidar o PnL sem deixar posições soltas
+        const lastTick = ticks[Math.max(0, Math.min(cursor - 1, ticks.length - 1))];
+        const finalPrice = lastTick ? lastTick.price : currentPrice;
+        setOrders((prev) =>
+          prev.map((o) => {
+            if (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') {
+              const pts = o.type === 'BUY' ? finalPrice - o.entryPrice : o.entryPrice - finalPrice;
+              const rc = o.remainingContracts ?? o.contracts ?? 1;
+              const fin = pointsToBRL(pts, rc, asset) + (o.partialFinancial || 0);
+              const closeEvt = OrderAuditService.createEvent(
+                'DAY_CLOSE_FORCED',
+                `Encerramento do Replay (${pts >= 0 ? '+' : ''}${pts} pts)`,
+                `Ordem liquidada a mercado no preço de fechamento do replay (${finalPrice} pts) · R$ ${fin.toFixed(2)}`,
+                finalPrice,
+                rc
+              );
+              return {
+                ...o,
+                status: 'CLOSED_MANUAL' as const,
+                exitPrice: finalPrice,
+                exitTimestamp: Date.now(),
+                exitTimeStr: new Date().toTimeString().split(' ')[0],
+                exitReason: 'DAY_CLOSE' as const,
+                pointsResult: pts,
+                financialResult: fin,
+                auditTrail: o.auditTrail ? [...o.auditTrail, closeEvt] : [closeEvt],
+              };
+            }
+            return o;
+          })
+        );
+
         setIsReplaying(false);
 
         // Fim do ensaio: a ponte volta ao estado em que estava antes do replay.
@@ -7397,13 +7434,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   // convenção do antigo chip do gráfico (soma dos pontos por ordem, sem ponderar contratos).
 
   const hedgeBook: HedgeBook = React.useMemo(() => {
-    // Trava de realidade: se nada está rodando (MT5 desconectado, sem replay ativo e sem simulador),
-    // o livro do hedge acorda 100% zerado para não manter posições fantasmas na tela.
-    const isLive = mt5State.status === 'CONNECTED' || isReplaying || isSimulating;
+    // Posições abertas no hedge só existem enquanto estiver conectado ao MT5 ou rodando replay/simulador
+    const canHaveLivePositions = mt5State.status === 'CONNECTED' || isReplaying || isSimulating;
 
     const sideBook = (type: 'BUY' | 'SELL'): HedgeSideBook => {
-      const filled = isLive ? orders.filter((o) => o.status === 'OPEN' && o.type === type) : [];
-      const pending = isLive ? orders.filter((o) => o.status === 'PENDING_LIMIT' && o.type === type).length : 0;
+      const filled = canHaveLivePositions ? orders.filter((o) => o.status === 'OPEN' && o.type === type) : [];
+      const pending = canHaveLivePositions ? orders.filter((o) => o.status === 'PENDING_LIMIT' && o.type === type).length : 0;
       let ctros = 0;
       let avgNum = 0;
       let livePts = 0;
@@ -7432,20 +7468,19 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       };
     };
 
-    const closed = isLive
-      ? orders.filter(
-          (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
-        )
-      : [];
+    // Ordens fechadas da sessão: DEVEM PERMANECER VISÍVEIS após o encerramento do replay
+    // (para permitir a análise e auditoria na boleta), sendo zeradas apenas ao iniciar
+    // um novo replay ou com o retorno do mercado real (MT5 conectado).
+    const closed = orders.filter(
+      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
+    );
 
     const realizedProfit = closed.reduce((a, o) => a + Math.max(0, o.financialResult || 0), 0);
     const realizedLoss = closed.reduce((a, o) => a + Math.min(0, o.financialResult || 0), 0);
     const buy = sideBook('BUY');
     const sell = sideBook('SELL');
 
-    const traded = isLive
-      ? orders.filter((o) => o.status !== 'PENDING_LIMIT' && o.timestamp >= sessionStartRef.current)
-      : [];
+    const traded = orders.filter((o) => o.status !== 'PENDING_LIMIT' && o.timestamp >= sessionStartRef.current);
 
     const buyContractsToday = traded.filter((o) => o.type === 'BUY').reduce((a, o) => a + (o.contracts || 1), 0);
     const sellContractsToday = traded.filter((o) => o.type === 'SELL').reduce((a, o) => a + (o.contracts || 1), 0);
