@@ -58,43 +58,6 @@ export function sessionFinancialLock(
   config: AutomationConfig,
   sessionStart: number
 ): FinancialLock | null {
-  const profitOn = config.maxDailyProfit > 0;
-  const lossOn = config.maxDailyLoss > 0;
-  const tradesOn = config.maxDailyTrades > 0;
-  if (!profitOn && !lossOn && !tradesOn) return null;
-
-  let net = 0;
-  let trades = 0;
-  for (const o of list) {
-    if (o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStart) {
-      net += o.financialResult || 0;
-      trades += 1;
-    }
-  }
-
-  if (profitOn && net >= config.maxDailyProfit) {
-    return {
-      short: `Meta batida · ${brl(net)} de ${brl(config.maxDailyProfit)}`,
-      reason: `Meta diária de ganho atingida: ${brl(net)} ≥ ${brl(config.maxDailyProfit)} em ${trades} trade(s). O Robô para de abrir posições até reiniciar o pregão.`,
-      net,
-      trades,
-    };
-  }
-  if (lossOn && net <= -config.maxDailyLoss) {
-    return {
-      short: `Perda máxima · ${brl(net)} de -${brl(config.maxDailyLoss)}`,
-      reason: `Trava de perda diária acionada: ${brl(net)} ≤ -${brl(config.maxDailyLoss)} em ${trades} trade(s). O Robô para de abrir posições até reiniciar o pregão.`,
-      net,
-      trades,
-    };
-  }
-  if (tradesOn && trades >= config.maxDailyTrades) {
-    return {
-      short: `Limite de trades · ${trades}/${config.maxDailyTrades}`,
-      reason: `Limite de ${config.maxDailyTrades} trades do dia atingido (${trades} fechados, ${brl(net)}). O Robô para de abrir posições até reiniciar o pregão.`,
-      net,
-      trades,
-    };
-  }
+  // Travas financeiras (meta de ganho, perda máxima e limite de trades) desativadas a pedido do usuário
   return null;
 }
