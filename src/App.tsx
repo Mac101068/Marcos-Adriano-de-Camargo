@@ -972,6 +972,21 @@ export default function App() {
 
   const activeStrategyName = activeStrategy?.name ?? config.profileName ?? null;
 
+  const builtInPresets = React.useMemo(() => EaConfigService.getBuiltInPresets(), []);
+
+  const currentStratSelectValue = React.useMemo(() => {
+    if (config.strategyId && strategyLibrary.some((s) => s.id === config.strategyId)) {
+      return `strat:${config.strategyId}`;
+    }
+    const matchedPreset = builtInPresets.find(
+      (p) => p.name === config.profileName || p.id === config.profileName || p.config.profileName === config.profileName
+    );
+    if (matchedPreset) {
+      return `preset:${matchedPreset.id}`;
+    }
+    return '__CUSTOM__';
+  }, [config.strategyId, config.profileName, strategyLibrary, builtInPresets]);
+
   const refreshStrategyLibrary = () => {
 
     const list = StrategyLibraryService.list();
@@ -8195,86 +8210,83 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               duas fichas dizendo a mesma coisa na mesma linha eram redundância pura. */}
 
-          {/* Estratégia ativa — caixinha de seleção da biblioteca do Estúdio. Trocar aqui
-
-              aplica o snapshot e força o Robô PAUSADO; o link dos ajustes continua no cadeado.
-
-              SEMPRE visível (era `hidden lg:flex` e sumia do operador em telas menores): a
-
-              caixinha é o acesso do operador a TODAS as estratégias configuradas no Estúdio. */}
-
-          <div className="flex items-center gap-1.5 px-1.5 py-0 rounded bg-slate-900 border border-slate-800 text-[11px] shrink-0"
-
-            title="Selecione uma estratégia salva para aplicar no terminal (o Robô é pausado por segurança). Para programar novas, abra o Estúdio."
-
+          {/* Estratégia ativa — caixinha de seleção unificada (Presets Oficiais B3 + Estúdio).
+              SEMPRE visível: acesso do operador a TODAS as estratégias configuradas. */}
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-700/80 text-[11px] shrink-0 shadow-sm"
+            title="Selecione uma estratégia oficial ou criada no Estúdio (o Robô é pausado por segurança). Para programar ou editar, clique no ícone do Estúdio ao lado."
           >
-
-            <span className="hidden sm:inline text-slate-400">Trocar:</span>
-
+            <span className="hidden sm:inline text-amber-400 font-semibold">Trocar:</span>
             <select
-
-              value={config.strategyId ?? ''}
-
+              value={currentStratSelectValue}
               onChange={(e) => {
+                const val = e.target.value;
+                if (!val || val === '__CUSTOM__') return;
 
-                // Lê a biblioteca FRIA do storage: o estado `strategyLibrary` pode estar atrasado
-
-                // (salva em outra aba, ou criada por write-through da Boleta), e a caixinha nunca
-
-                // pode deixar de listar uma estratégia que existe na biblioteca.
-
-                const list = StrategyLibraryService.list();
-
-                setStrategyLibrary(list);
-
-                const target = list.find((s) => s.id === e.target.value);
-
-                if (target) handleActivateStrategy(target);
-
+                if (val.startsWith('preset:')) {
+                  const pid = val.replace('preset:', '');
+                  const p = builtInPresets.find((x) => x.id === pid);
+                  if (p) {
+                    handleApplyConfigBundle(p.config, p.name);
+                    setLatestToast({
+                      id: `preset-applied-${Date.now()}`,
+                      type: 'BUY',
+                      title: 'PRESET OFICIAL APLICADO',
+                      description: `Estratégia "${p.name}" ativada no terminal (Robô pausado por segurança).`,
+                      timestamp: Date.now(),
+                    });
+                  }
+                } else if (val.startsWith('strat:')) {
+                  const sid = val.replace('strat:', '');
+                  const list = StrategyLibraryService.list();
+                  setStrategyLibrary(list);
+                  const s = list.find((x) => x.id === sid);
+                  if (s) {
+                    handleActivateStrategy(s);
+                    setLatestToast({
+                      id: `strat-applied-${Date.now()}`,
+                      type: 'BUY',
+                      title: 'ESTRATÉGIA DO ESTÚDIO ATIVADA',
+                      description: `Estratégia "${s.name}" aplicada no terminal (Robô pausado por segurança).`,
+                      timestamp: Date.now(),
+                    });
+                  }
+                }
               }}
-
-              className="bg-transparent font-mono text-slate-200 font-medium focus:outline-none cursor-pointer max-w-[130px] sm:max-w-[180px]"
-
+              className="bg-transparent font-mono text-slate-100 font-medium focus:outline-none cursor-pointer max-w-[170px] sm:max-w-[240px] truncate"
             >
-
-              {!config.strategyId && activeStrategyName && (
-
-                <option value="" className="bg-slate-900">{activeStrategyName} (config manual)</option>
-
+              {currentStratSelectValue === '__CUSTOM__' && (
+                <option value="__CUSTOM__" className="bg-slate-900 text-amber-300 font-semibold">
+                  ★ {activeStrategyName || 'Configuração Atual (Manual)'}
+                </option>
               )}
-
-              {!config.strategyId && !activeStrategyName && (
-
-                <option value="" className="bg-slate-900">— selecione —</option>
-
-              )}
-
-              {StrategyLibraryService.list().length === 0 && (
-
-                <option value="" className="bg-slate-900">nenhuma salva — use o Estúdio</option>
-
-              )}
-
-              {StrategyLibraryService.list().map((s) => (
-
-                <option key={s.id} value={s.id} className="bg-slate-900">{s.name}</option>
-
-              ))}
-
+              <optgroup label="── 🏛️ PRESETS OFICIAIS B3 ──" className="bg-slate-950 font-bold text-emerald-400">
+                {builtInPresets.map((p) => (
+                  <option key={p.id} value={`preset:${p.id}`} className="bg-slate-900 text-slate-100 font-normal">
+                    {p.name}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="── 🎨 MINHAS ESTRATÉGIAS (ESTÚDIO) ──" className="bg-slate-950 font-bold text-sky-400">
+                {strategyLibrary.length === 0 ? (
+                  <option value="" disabled className="bg-slate-900 text-slate-500 italic">
+                    (Nenhuma personalizada — use o Estúdio)
+                  </option>
+                ) : (
+                  strategyLibrary.map((s) => (
+                    <option key={s.id} value={`strat:${s.id}`} className="bg-slate-900 text-slate-100 font-normal">
+                      {s.name}
+                    </option>
+                  ))
+                )}
+              </optgroup>
             </select>
 
             <button
-
               onClick={() => setActiveTab('studio')}
-
-              className="text-slate-500 hover:text-slate-200 transition-colors cursor-pointer"
-
+              className="text-amber-400/80 hover:text-amber-300 transition-colors cursor-pointer p-0.5"
               title="Abrir o Estúdio de Estratégias (programar, salvar, importar/exportar)"
-
             >
-
-              <Sparkles className="w-3 h-3" />
-
+              <Sparkles className="w-3.5 h-3.5" />
             </button>
 
             <span className={`w-1.5 h-1.5 rounded-full ${config.active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} title={config.active ? 'Robô ligado' : 'Robô pausado'} />
@@ -8477,8 +8489,6 @@ ${
                   currentAssetId={asset.id}
                   onSelectAsset={handleSelectAsset}
                   isMt5Connected={mt5State.status === 'CONNECTED'}
-                  strategyMode={config.strategyMode}
-                  onSelectStrategy={(m) => handleBoletaConfigPatch({ strategyMode: m })}
                   assetStates={{
                     WIN: {
                       currentPrice: (asset.id === 'WIN' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4)

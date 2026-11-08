@@ -148,6 +148,36 @@ export const BUILT_IN_PRESETS: ConfigPreset[] = [
     },
   },
   {
+    id: 'preset-cv-win',
+    name: 'C/V Acumulação por Sinal — Mini Índice (WIN)',
+    badge: 'C/V ÍNDICE',
+    description:
+      'Acumulação contínua por sinal no Mini Índice: abre no fluxo comprador/vendedor de cada box fechado, ' +
+      'acumula contratos na mesma direção e zera tudo na virada de fluxo. Sem SL/TP fixo na mãe (saída por reversão). ' +
+      'Escala clássica 10R (50 pts por box).',
+    config: {
+      ...DEFAULT_EA_CONFIG,
+      profileName: 'C/V Acumulação — WIN',
+      strategyMode: 'SIGNAL_STACK',
+      assetId: 'WIN',
+      symbol: chartSymbolFor(ASSETS.WIN),
+      boxPoints: 50,
+      contracts: 1,
+      stopLossPoints: 0,
+      takeProfitPoints: 0,
+      enablePartialExit: false,
+      trailingStop: false,
+      accountMode: 'HEDGE',
+      maxSimultaneousPositions: 15,
+      hedgeOppositeAction: 'CLOSE_OPPOSITE',
+      minDeltaThreshold: 50,
+      adaptiveThresholdEnabled: true,
+      adaptiveThresholdPercentile: 0.7,
+      adaptiveFloorMultiple: 1.6,
+      flowDivergenceMin: 0.5,
+    },
+  },
+  {
     id: 'preset-cv-wdo',
     name: 'C/V Acumulação por Sinal — Mini Dólar (WDO)',
     badge: 'C/V DÓLAR',
