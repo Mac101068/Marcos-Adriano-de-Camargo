@@ -418,3 +418,10 @@ export class OrderAuditService {
     return lines.join('\n');
   }
 }
+
+// Execução imediata no carregamento do bundle (garante storage higienizado antes do React montar)
+if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+  try {
+    OrderAuditService.purgeOrphanOpenOrders();
+  } catch {}
+}

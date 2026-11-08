@@ -172,6 +172,13 @@ import { EaConfigService } from './services/eaConfigService';
 
 import { OrderAuditService } from './services/orderAuditService';
 
+// Purga imediata no carregamento do módulo: garante que o storage local esteja higienizado
+if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+  try {
+    OrderAuditService.purgeOrphanOpenOrders();
+  } catch {}
+}
+
 import { IntradayOrderAudit } from './components/IntradayOrderAudit';
 
 import { ProjectDossierPdfModal } from './components/ProjectDossierPdfModal';
@@ -1586,17 +1593,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     }
 
     // A SOMBRA ACORDA ZERADA como a boleta: o livro do dia anterior (replays + simulação) não
-
     // reabre no F5 — quem persiste entre sessões são só as ESCOLHAS (ligada, estratégia, escala,
-
     // ativo). Sem isto o Robô 2 acordava somando os trades de todas as corridas de hoje enquanto
-
     // a boleta e o gráfico acordavam vazios (regra do operador, Ciclo 12).
-
     shadowRobotService.resetBook();
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Se o MT5 não está conectado, força a boleta e o livro a acordarem 100% zerados de posições abertas
+    OrderAuditService.purgeOrphanOpenOrders();
+    setOrders([]);
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -7391,114 +7397,72 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   // convenção do antigo chip do gráfico (soma dos pontos por ordem, sem ponderar contratos).
 
   const hedgeBook: HedgeBook = React.useMemo(() => {
+    // Trava de realidade: se nada está rodando (MT5 desconectado, sem replay ativo e sem simulador),
+    // o livro do hedge acorda 100% zerado para não manter posições fantasmas na tela.
+    const isLive = mt5State.status === 'CONNECTED' || isReplaying || isSimulating;
 
     const sideBook = (type: 'BUY' | 'SELL'): HedgeSideBook => {
-
-      const filled = orders.filter((o) => o.status === 'OPEN' && o.type === type);
-
-      const pending = orders.filter((o) => o.status === 'PENDING_LIMIT' && o.type === type).length;
-
+      const filled = isLive ? orders.filter((o) => o.status === 'OPEN' && o.type === type) : [];
+      const pending = isLive ? orders.filter((o) => o.status === 'PENDING_LIMIT' && o.type === type).length : 0;
       let ctros = 0;
-
       let avgNum = 0;
-
       let livePts = 0;
-
       let liveBRL = 0;
-
       let partialBRL = 0;
 
       filled.forEach((o) => {
-
         const rc = o.remainingContracts ?? o.contracts ?? 1;
-
         ctros += rc;
-
         avgNum += o.entryPrice * rc;
-
         const pts = type === 'BUY' ? currentPrice - o.entryPrice : o.entryPrice - currentPrice;
-
         livePts += pts;
-
         liveBRL += pointsToBRL(pts, rc, asset);
-
         partialBRL += o.partialFinancial || 0;
-
       });
 
       return {
-
         orders: filled.length + pending,
-
         filled: filled.length,
-
         pending,
-
         contracts: ctros,
-
         avgEntry: ctros > 0 ? avgNum / ctros : 0,
-
         livePts,
-
         liveBRL,
-
         partialBRL,
-
       };
-
     };
 
-    const closed = orders.filter(
-
-      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
-
-    );
+    const closed = isLive
+      ? orders.filter(
+          (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
+        )
+      : [];
 
     const realizedProfit = closed.reduce((a, o) => a + Math.max(0, o.financialResult || 0), 0);
-
     const realizedLoss = closed.reduce((a, o) => a + Math.min(0, o.financialResult || 0), 0);
-
     const buy = sideBook('BUY');
-
     const sell = sideBook('SELL');
 
-    // Giro do dia por lado: contratos NEGOCIADOS nesta sessão (ordens que viraram posição,
-
-    // abertas ou fechadas); limites ainda paradas não contam como negócio.
-
-    const traded = orders.filter((o) => o.status !== 'PENDING_LIMIT' && o.timestamp >= sessionStartRef.current);
+    const traded = isLive
+      ? orders.filter((o) => o.status !== 'PENDING_LIMIT' && o.timestamp >= sessionStartRef.current)
+      : [];
 
     const buyContractsToday = traded.filter((o) => o.type === 'BUY').reduce((a, o) => a + (o.contracts || 1), 0);
-
     const sellContractsToday = traded.filter((o) => o.type === 'SELL').reduce((a, o) => a + (o.contracts || 1), 0);
-
-    // PnL do dia = realizado (fechados desta abertura) + flutuante dos dois lados + parciais já
-
-    // realizadas dentro de ordens ainda abertas.
 
     const dayPnl = realizedProfit + realizedLoss + buy.liveBRL + buy.partialBRL + sell.liveBRL + sell.partialBRL;
 
     return {
-
       buy,
-
       sell,
-
       realizedProfit,
-
       realizedLoss,
-
       dayPnl,
-
       buyContractsToday,
-
       sellContractsToday,
-
       contractsTodayTotal: buyContractsToday + sellContractsToday,
-
     };
-
-  }, [orders, currentPrice, asset]);
+  }, [orders, currentPrice, asset, mt5State.status, isReplaying, isSimulating]);
 
 
 
@@ -7544,10 +7508,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
   const openOrders = React.useMemo(() => {
-
+    // Trava de realidade: sem MT5 conectado, sem replay ativo e sem simulação rodando,
+    // não existe posição aberta no mercado. Retorna lista vazia imediatamente.
+    if (mt5State.status !== 'CONNECTED' && !isReplaying && !isSimulating) {
+      return [];
+    }
     return orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT');
-
-  }, [orders]);
+  }, [orders, mt5State.status, isReplaying, isSimulating]);
 
 
 
