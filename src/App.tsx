@@ -271,27 +271,10 @@ const ALT_RENKO_SCALES: { key: 'renko15r' | 'renko20r' | 'renko25r'; pts: number
 
 const REPLAY_DAY_CHOICES = [1, 3, 5];
 
-/** Identifica se o símbolo recebido pela rede corresponde ao ativo atualmente em foco na tela. */
-function getAssetIdForSymbol(symbolStr?: string): AssetId {
-  if (!symbolStr) return 'WIN';
-  const s = symbolStr.toUpperCase();
-  if (s.includes('WDO') || s.includes('DOL')) return 'WDO';
-  if (s.includes('BIT') || s.includes('BTC') || s.includes('WBRA')) return 'BTCBR';
-  return 'WIN';
-}
-
+/** Identifica se o símbolo recebido pela rede corresponde ao ativo alvo usando a resolução oficial. */
 function isSameAssetSymbol(incomingSym: string, targetAsset: AssetSpec): boolean {
   if (!incomingSym) return true;
-  const inc = incomingSym.toUpperCase().trim();
-  const targetChart = chartSymbolFor(targetAsset).toUpperCase();
-  if (inc === targetChart) return true;
-  if (targetAsset.activeContract && inc === targetAsset.activeContract.toUpperCase()) return true;
-  if (targetAsset.primarySymbol && inc === targetAsset.primarySymbol.toUpperCase()) return true;
-  const cleanInc = inc.replace(/[$0-9]/g, '');
-  return targetAsset.prefixes.some((p) => {
-    const cleanP = p.toUpperCase().replace(/[$0-9]/g, '');
-    return inc.startsWith(p.toUpperCase()) || inc.includes(p.toUpperCase()) || (cleanP && cleanInc.includes(cleanP));
-  });
+  return resolveAsset(incomingSym).id === targetAsset.id;
 }
 
 
@@ -1539,22 +1522,7 @@ export default function App() {
       timeEngine: new TimeBarEngine(30000),
       allTicks: [],
     },
-    BTC: {
-      ticks: [],
-      boxes: [],
-      sessionGaps: [],
-      currentBox: null,
-      currentPrice: referencePrice(ASSETS.BTC),
-      cvd: 0,
-      rangeBoxes: [],
-      rangeCurrentBox: null,
-      timeBoxes: [],
-      timeCurrentBox: null,
-      engine: new RenkoFlowEngine(200, ASSETS.BTC),
-      rangeEngine: new RangeBarEngine(400),
-      timeEngine: new TimeBarEngine(30000),
-      allTicks: [],
-    },
+
   });
 
 const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
@@ -2002,7 +1970,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         if (now - lastPriceWriteRef.current > 30_000) {
           lastPriceWriteRef.current = now;
           const tickSym = String((tick as any).symbol || config.symbol || '').toUpperCase();
-          const tickAssetId = getAssetIdForSymbol(tickSym);
+          const tickAssetId = resolveAsset(tickSym).id;
           rememberLastPrice(tickAssetId, tick.price);
         }
 
@@ -4348,22 +4316,19 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             for (const rawTick of rawTicks) {
               if (!rawTick || !(rawTick.price > 0)) continue;
               const tickSym = String(payload.symbol || (rawTick as any).symbol || '').toUpperCase();
-              const tickAssetId = getAssetIdForSymbol(tickSym);
-              const targetSpec = ASSETS[tickAssetId] || (tickAssetId === 'BTC' ? ASSETS.BTCBR : undefined);
-              if (!targetSpec) continue;
-              // Rejeita qualquer tick com preço incompatível com este ativo (ex: tick de WIN caindo em WDO)
+              const targetSpec = resolveAsset(tickSym);
+              const tickAssetId = targetSpec.id;
               if (Math.abs(rawTick.price - targetSpec.basePrice) / targetSpec.basePrice >= 0.4) {
                 continue;
               }
-              const targetState = assetStateRef.current[tickAssetId] || (tickAssetId === 'BTC' ? assetStateRef.current.BTCBR : tickAssetId === 'BTCBR' ? assetStateRef.current.BTC : undefined);
+              const targetState = assetStateRef.current[tickAssetId];
 
               // O timeStr da ponte vem do relógio do servidor MT5; a fita deve bater com o gráfico
               if (Number.isFinite(Number(rawTick.timestamp))) {
                 rawTick.timeStr = formatTickTimeStr(Number(rawTick.timestamp));
               }
 
-              const currentActiveId = activeAssetIdRef.current;
-              const isCurrent = tickAssetId === currentActiveId || (currentActiveId === 'BTC' && tickAssetId === 'BTCBR') || (currentActiveId === 'BTCBR' && tickAssetId === 'BTC');
+              const isCurrent = tickAssetId === activeAssetIdRef.current;
 
               if (isCurrent) {
                 // Sincroniza referências e histórico do ativo ativo na tela
@@ -4417,8 +4382,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           } else if (payload.type === 'SESSION_BACKFILL') {
             const bfSym = String(payload.symbol || '').toUpperCase();
-            const bfAssetId = getAssetIdForSymbol(bfSym);
-            const bfAssetSpec = ASSETS[bfAssetId] || asset;
+            const bfAssetSpec = resolveAsset(bfSym);
+            const bfAssetId = bfAssetSpec.id;
             const bfBoxPoints = Number(payload.data?.boxPoints) || config.boxPoints;
 
             // A ponte manda os boxes do ÚLTIMO PREGÃO já formados (reconstruídos do tick real).
@@ -4466,11 +4431,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 targetState.cvd = Number(payload.data?.cvd) || lastBf.cvdAtClose;
               }
 
-              const currentActiveId = activeAssetIdRef.current;
-              const isCurrent =
-                bfAssetId === currentActiveId ||
-                (currentActiveId === 'BTC' && bfAssetId === 'BTCBR') ||
-                (currentActiveId === 'BTCBR' && bfAssetId === 'BTC');
+              const isCurrent = bfAssetId === activeAssetIdRef.current;
 
               if (isCurrent) {
                 setBoxes(bfBoxes);
@@ -7076,7 +7037,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   }) => {
     const activeAsset = options?.assetOverride ?? asset;
     const newBoxPts = options?.boxPointsOverride ?? (options?.assetOverride ? nextBoxPointsFor(config.boxPoints, activeAsset).points : config.boxPoints);
-    const newRangePts = options?.rangePointsOverride ?? (activeAsset.id === 'WDO' ? 10 : (activeAsset.id === 'BTCBR' || activeAsset.id === 'BTC' ? 400 : (rangePoints || 100)));
+    const newRangePts = options?.rangePointsOverride ?? (rangePoints || getAssetTradeParams(activeAsset.id).rangePoints || activeAsset.tradeDefaults.rangePoints);
 
     // A régua é o último preço REAL visto do ativo (se fresco) ou o basePrice do registro.
     const reference = referencePrice(activeAsset);
@@ -7231,8 +7192,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     setConfig(updated);
 
     // Motores e eixos no preço de referência do ativo novo; o livro é o DELE (persistido à parte).
-    const nextRangePts = assetParams.rangePoints || (next.id === 'WDO' ? 5 : (next.id === 'BTCBR' || next.id === 'BTC' ? 400 : 100));
-    const targetState = assetStateRef.current[id] || (id === 'BTC' ? assetStateRef.current.BTCBR : id === 'BTCBR' ? assetStateRef.current.BTC : undefined);
+    const nextRangePts = assetParams.rangePoints || next.tradeDefaults.rangePoints;
+    const targetState = assetStateRef.current[id];
 
     const isPriceSane = (p?: number) =>
       Number.isFinite(p) && (p || 0) > 0 && Math.abs((p || 0) - next.basePrice) / next.basePrice < 0.4;
@@ -8487,28 +8448,28 @@ ${
                   isMt5Connected={mt5State.status === 'CONNECTED'}
                   assetStates={{
                     WIN: {
-                      currentPrice: (asset.id === 'WIN' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4)
+                      currentPrice: asset.id === 'WIN' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4
                         ? currentPrice
                         : (Number.isFinite(assetStateRef.current.WIN?.currentPrice) && assetStateRef.current.WIN.currentPrice > 0 && Math.abs(assetStateRef.current.WIN.currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4
                           ? assetStateRef.current.WIN.currentPrice
-                          : ASSETS.WIN.basePrice),
+                          : referencePrice(ASSETS.WIN)),
                       openOrdersCount: asset.id === 'WIN' ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.WIN) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
                     },
                     WDO: {
-                      currentPrice: (asset.id === 'WDO' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4)
+                      currentPrice: asset.id === 'WDO' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4
                         ? currentPrice
                         : (Number.isFinite(assetStateRef.current.WDO?.currentPrice) && assetStateRef.current.WDO.currentPrice > 0 && Math.abs(assetStateRef.current.WDO.currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4
                           ? assetStateRef.current.WDO.currentPrice
-                          : ASSETS.WDO.basePrice),
+                          : referencePrice(ASSETS.WDO)),
                       openOrdersCount: asset.id === 'WDO' ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.WDO) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
                     },
                     BTCBR: {
-                      currentPrice: ((asset.id === 'BTCBR' || asset.id === 'BTC') && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4)
+                      currentPrice: asset.id === 'BTCBR' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4
                         ? currentPrice
                         : (Number.isFinite(assetStateRef.current.BTCBR?.currentPrice) && assetStateRef.current.BTCBR.currentPrice > 0 && Math.abs(assetStateRef.current.BTCBR.currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4
                           ? assetStateRef.current.BTCBR.currentPrice
-                          : ASSETS.BTCBR.basePrice),
-                      openOrdersCount: (asset.id === 'BTCBR' || asset.id === 'BTC') ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.BTCBR) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
+                          : referencePrice(ASSETS.BTCBR)),
+                      openOrdersCount: asset.id === 'BTCBR' ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.BTCBR) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
                     },
                   }}
                 />

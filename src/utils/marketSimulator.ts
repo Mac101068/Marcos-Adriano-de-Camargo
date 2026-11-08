@@ -185,7 +185,7 @@ function assetSimulatorScales(asset: AssetSpec) {
       trendMultiplier: 0.15,
     };
   }
-  if (asset.id === 'BTCBR' || asset.id === 'BTC') {
+  if (asset.id === 'BTCBR') {
     return {
       gapPoints: 1200,
       minuteNoise: 400,

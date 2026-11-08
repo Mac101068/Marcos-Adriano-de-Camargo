@@ -21,7 +21,7 @@
  */
 export const ALLOW_UNCONFIRMED_PREVIEW = true;
 
-export type AssetId = 'WIN' | 'WDO' | 'BTC' | 'BTCBR';
+export type AssetId = 'WIN' | 'WDO' | 'BTCBR';
 
 export interface AssetSessionSpec {
   /** Abertura do pregão no relógio de Brasília ("HH:MM"). */
@@ -184,44 +184,8 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
     primarySymbol: 'BIT$',
     activeContract: 'BITX26',
     watermarkCaption: 'Bitcoin Futuro · B3',
-    prefixes: ['BTCBR', 'BTC', 'BIT', 'WBRA', 'BITX'],
-    pointValue: 0.1,
-    tickSize: 20,
-    decimals: 0,
-    basePrice: 440000,
-    staleTolerancePct: 0.15,
-    renkoDefaults: [100, 200, 500],
-    session: {
-      open: '09:00',
-      close: '18:30',
-      weekdaysOnly: true,
-      auctionMinutes: 10,
-      settlementWindowMinutes: 30,
-    },
-    tradeDefaults: {
-      boxPoints: 200,
-      stopLossPoints: 200,
-      takeProfitPoints: 400,
-      partialPoints: 200,
-      breakevenOffsetPoints: 20,
-      trailingDistancePoints: 200,
-      minDeltaThreshold: 10,
-      contracts: 1,
-      rangePoints: 400,
-      stepperStep: 20,
-      maxSL: 5000,
-      maxTP: 10000,
-    },
-    status: 'ativo',
-    contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts',
-  },
-  BTC: {
-    id: 'BTC',
-    label: 'Bitcoin B3 (BIT / BTC)',
-    primarySymbol: 'BIT$',
-    activeContract: 'BITX26',
-    watermarkCaption: 'Bitcoin Futuro · B3',
-    prefixes: ['BTC', 'BIT', 'WBRA', 'BTCBR', 'BITX'],
+    // Prefixos ordenados por especificidade (maiores primeiro)
+    prefixes: ['BTCBR', 'BITX', 'WBRA', 'BTC', 'BIT'],
     pointValue: 0.1,
     tickSize: 20,
     decimals: 0,
@@ -268,14 +232,22 @@ export const DEFAULT_ASSET_ID: AssetId = 'WIN';
  * Desconhecido devolve o padrão e avisa UMA vez por símbolo — o app nunca pode quebrar.
  */
 const warnedSymbols = new Set<string>();
-export function resolveAsset(symbol?: string | null, assetId?: AssetId | null): AssetSpec {
-  if (assetId && ASSETS[assetId]) return ASSETS[assetId];
+export function resolveAsset(symbol?: string | null, assetId?: AssetId | string | null): AssetSpec {
+  const normId = (assetId === 'BTC' ? 'BTCBR' : assetId) as AssetId;
+  if (normId && ASSETS[normId]) return ASSETS[normId];
   const raw = (symbol || '').toUpperCase().trim();
   if (raw) {
-    const ids = Object.keys(ASSETS) as AssetId[];
-    for (const id of ids) {
-      if (ASSETS[id].prefixes.some((p) => raw.startsWith(p))) return ASSETS[id];
+    // Ordem de especificidade: testa prefixos mais longos primeiro
+    const allPrefixes: { prefix: string; asset: AssetSpec }[] = [];
+    (Object.keys(ASSETS) as AssetId[]).forEach((id) => {
+      ASSETS[id].prefixes.forEach((p) => allPrefixes.push({ prefix: p, asset: ASSETS[id] }));
+    });
+    allPrefixes.sort((a, b) => b.prefix.length - a.prefix.length);
+
+    for (const item of allPrefixes) {
+      if (raw.startsWith(item.prefix)) return item.asset;
     }
+
     if (!warnedSymbols.has(raw)) {
       warnedSymbols.add(raw);
       console.warn(

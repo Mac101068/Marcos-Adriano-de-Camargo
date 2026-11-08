@@ -13,7 +13,7 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd, asse
   const [minVolumeFilter, setMinVolumeFilter] = useState<number>(1);
   const [onlyInstitutional, setOnlyInstitutional] = useState<boolean>(false);
 
-  const instLimit = asset?.id === 'WDO' ? 20 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 5 : 40);
+  const instLimit = asset?.id === 'WDO' ? 20 : (asset?.id === 'BTCBR' ? 5 : 40);
 
   // Estatísticas da fita
   const stats = useMemo(() => {

@@ -70,7 +70,7 @@ export const AssetChartTabs: React.FC<AssetChartTabsProps> = ({
           const spec = ASSETS[tab.id];
           if (!spec) return null;
 
-          const isActive = currentAssetId === tab.id || (tab.id === 'BTCBR' && currentAssetId === 'BTC');
+          const isActive = currentAssetId === tab.id;
           const Icon = tab.icon;
           const liveContract = spec.activeContract || spec.primarySymbol;
           const stateData = assetStates[tab.id];

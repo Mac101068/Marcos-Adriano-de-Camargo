@@ -848,7 +848,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
 
       setSelectedBacktestR(10);
 
-    } else if (sym === 'BTC' || sym === 'BTCBR') {
+    } else if (sym === 'BTCBR') {
 
       setSelectedBacktestDate('data/bitx26_ticks.csv');
 
@@ -866,7 +866,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
 
 
 
-  const backtestSymbol = asset?.id === 'WDO' ? 'WDOZ26' : (asset?.id === 'BTC' || asset?.id === 'BTCBR') ? 'BITX26' : 'WINZ26';
+  const backtestSymbol = asset?.id === 'WDO' ? 'WDOZ26' : asset?.id === 'BTCBR' ? 'BITX26' : 'WINZ26';
 
   const pregoesLocais = React.useMemo(
     () => localPregoes.filter((pregao) => pregao.symbol === backtestSymbol),
@@ -899,7 +899,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
 
       ];
 
-    } else if (sym === 'BTC' || sym === 'BTCBR') {
+    } else if (sym === 'BTCBR') {
 
       return [
 
@@ -1513,7 +1513,7 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
 
                       if (sym === 'WDO') setSelectedBacktestDate('data/wdoz26_ticks.csv');
 
-                      else if (sym === 'BTC' || sym === 'BTCBR') setSelectedBacktestDate('data/bitx26_ticks.csv');
+                      else if (sym === 'BTCBR') setSelectedBacktestDate('data/bitx26_ticks.csv');
 
                       else setSelectedBacktestDate('data/winz26_ticks.csv');
 

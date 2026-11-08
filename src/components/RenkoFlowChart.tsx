@@ -1121,7 +1121,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       // eixo Y sem nenhum box na tela: a régua do ativo (preço real fresco ou basePrice do registro)
       const isCurrSane = isPriceSane(currentPrice);
       const fallbackCenter = isCurrSane ? currentPrice : referencePrice(asset);
-      const span = asset?.id === 'WDO' ? 10 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 500 : 100);
+      const span = asset?.id === 'WDO' ? 10 : (asset?.id === 'BTCBR' ? 500 : 100);
       boxMin = fallbackCenter - span;
       boxMax = fallbackCenter + span;
     }
@@ -1130,7 +1130,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     let maxPrice = boxMax;
 
     // Apenas expande a escala para ordens abertas se estiverem a até a distância máxima permitida E compatíveis com o ativo
-    const maxAllowedOrderDist = asset?.id === 'WDO' ? 25 : (asset?.id === 'BTCBR' || asset?.id === 'BTC' ? 1500 : 350);
+    const maxAllowedOrderDist = asset?.id === 'WDO' ? 25 : (asset?.id === 'BTCBR' ? 1500 : 350);
     openOrders.forEach((o) => {
       const isPending = o.status === 'PENDING_LIMIT';
       const effPrice = isPending && o.limitPrice ? o.limitPrice : o.entryPrice;
@@ -1154,7 +1154,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       }
     });
 
-    const isBtc = asset?.id === 'BTCBR' || asset?.id === 'BTC';
+    const isBtc = asset?.id === 'BTCBR';
     // ESCALA ACOPLADA AO BOX (fonte única: renkoBoxPoints). Antes a folga e o piso do range eram
     // fixos por ativo (1,5 pt no WDO, 16 no WIN): com box pequeno a folga devorava o painel e com
     // box grande sobrava espaço morto. Agora tudo deriva do tamanho do tijolo, então trocar o R
@@ -3422,7 +3422,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               >
                 {(asset.id === 'WDO'
                   ? [2.5, 5, 10, 15, 20]
-                  : asset.id === 'BTCBR' || asset.id === 'BTC'
+                  : asset.id === 'BTCBR'
                   ? [100, 200, 400, 500, 1000]
                   : [10, 25, 50, 75, 100, 150]
                 ).map((p) => (

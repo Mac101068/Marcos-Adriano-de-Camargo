@@ -45,7 +45,7 @@ function migrateLegacyStorage(): void {
           const samplePrice = Number(day.ticks[0]?.price);
           if (samplePrice > 0) {
             if (samplePrice < 20_000) detectedAsset = 'WDO';
-            else if (samplePrice > 200_000) detectedAsset = 'BTC';
+            else if (samplePrice > 200_000) detectedAsset = 'BTCBR';
             else detectedAsset = 'WIN';
             break;
           }
@@ -261,7 +261,7 @@ export class RealTapeService {
       try {
         localStorage.removeItem(getStorageKey('WIN'));
         localStorage.removeItem(getStorageKey('WDO'));
-        localStorage.removeItem(getStorageKey('BTC'));
+        localStorage.removeItem(getStorageKey('BTCBR'));
       } catch {
         /* ignore */
       }

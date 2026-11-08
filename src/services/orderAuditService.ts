@@ -107,6 +107,18 @@ export class OrderAuditService {
    * Chamado no boot do sistema para garantir que a tela comece 100% zerada de posições zumbis.
    */
   static purgeOrphanOpenOrders(): void {
+    // Migração de chave legada ..._BTC para ..._BTCBR
+    try {
+      const btcKey = `${AUDIT_STORAGE_KEY}_BTC`;
+      const btcbrKey = `${AUDIT_STORAGE_KEY}_BTCBR`;
+      const btcRaw = localStorage.getItem(btcKey);
+      if (btcRaw) {
+        if (!localStorage.getItem(btcbrKey)) {
+          localStorage.setItem(btcbrKey, btcRaw);
+        }
+        localStorage.removeItem(btcKey);
+      }
+    } catch {}
     const assets: AssetId[] = ['WIN', 'WDO', 'BTCBR'];
     for (const assetId of assets) {
       try {
