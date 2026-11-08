@@ -6347,29 +6347,27 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         ticks = daysMap.get(targetDayKey) || rawTicks;
         calculatedContextEnd = 0;
         const [y, m, d] = (targetDayKey || '').split('-');
-        const isToday = !targetDayKey || new Date().toISOString().startsWith(targetDayKey) || (d === '04' && m === '11');
-        label = `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''}`;
+        const flowIdx = currentAssetPregoes.findIndex((p) => p.date === targetDayKey);
+        const flowCode = flowIdx >= 0 ? `Flow${flowIdx + 1}` : 'Flow';
+        label = `${flowCode} (${d}/${m})`;
       } else if (sortedDays.length >= 1 && replayTargetDays === 1) {
-        // Replay do pregão de Hoje (mais recente): inicia 100% limpo a partir da abertura
+        // Replay do pregão Flow1 (mais recente): inicia 100% limpo a partir da abertura
         const targetDayKey = sortedDays[sortedDays.length - 1];
         ticks = daysMap.get(targetDayKey) || rawTicks;
         calculatedContextEnd = 0;
         const [y, m, d] = (targetDayKey || '').split('-');
-        const isToday = !targetDayKey || new Date().toISOString().startsWith(targetDayKey) || (d === '04' && m === '11');
-        label = `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''}`;
+        label = `Flow1 (${d}/${m})`;
       } else if (sortedDays.length >= 2 && replayTargetDays === 2) {
-        // Replay do pregão de Ontem: inicia 100% limpo a partir da abertura daquele pregão
+        // Replay do pregão Flow2 (penúltimo pregão): inicia 100% limpo
         const targetDayKey = sortedDays[sortedDays.length - 2];
         ticks = daysMap.get(targetDayKey) || rawTicks;
         calculatedContextEnd = 0;
         const [y, m, d] = (targetDayKey || '').split('-');
-        label = `${d}/${m}/${y} (Ontem)`;
+        label = `Flow2 (${d}/${m})`;
       } else {
         ticks = rawTicks;
         calculatedContextEnd = 0;
-        const firstKey = sortedDays[0];
-        const lastKey = sortedDays[sortedDays.length - 1];
-        label = `${replayTargetDays} pregões (${firstKey} a ${lastKey})`;
+        label = `Flow ${replayTargetDays}D`;
       }
 
       setReplayDateLabel(label);
@@ -8427,49 +8425,42 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             >
               {currentAssetPregoes.length > 0 && (
                 <optgroup label={`── 📂 PREGÕES GRAVADOS (${chartSymbolFor(asset)}) ──`} className="bg-slate-950 font-bold text-emerald-400">
-                  {currentAssetPregoes.map((p) => (
+                  {currentAssetPregoes.map((p, idx) => (
                     <option key={p.date} value={`date:${p.date}`} className="bg-slate-900 text-slate-100 font-normal">
-                      {p.date.split('-').reverse().join('/')} ({p.weekday}) · {p.sizeMb.toLocaleString('pt-BR')} MB
+                      Flow{idx + 1} · {p.date.split('-').reverse().join('/')} ({p.weekday}) · {p.sizeMb.toLocaleString('pt-BR')} MB
                     </option>
                   ))}
                 </optgroup>
               )}
               <optgroup label="── ⏱️ PERÍODOS AGREGADOS ──" className="bg-slate-950 font-bold text-sky-400">
-                <option value="days:1" className="bg-slate-900 text-slate-100">Hoje (Mais recente)</option>
-                <option value="days:2" className="bg-slate-900 text-slate-100">Ontem (Penúltimo pregão)</option>
-                <option value="days:3" className="bg-slate-900 text-slate-100">Últimos 3 pregões</option>
-                <option value="days:5" className="bg-slate-900 text-slate-100">Últimos 5 pregões</option>
-                <option value="days:10" className="bg-slate-900 text-slate-100">Últimos 10 pregões</option>
+                <option value="days:1" className="bg-slate-900 text-slate-100">Flow 1D · Hoje (Mais recente)</option>
+                <option value="days:2" className="bg-slate-900 text-slate-100">Flow 2D · Ontem (Penúltimo)</option>
+                <option value="days:3" className="bg-slate-900 text-slate-100">Flow 3D · Últimos 3 pregões</option>
+                <option value="days:5" className="bg-slate-900 text-slate-100">Flow 5D · Últimos 5 pregões</option>
+                <option value="days:10" className="bg-slate-900 text-slate-100">Flow 10D · Últimos 10 pregões</option>
               </optgroup>
             </select>
           </div>
 
-          {/* SELETOR DE VELOCIDADE EM DESTAQUE NA TELA PRINCIPAL */}
-          <div className="flex items-center gap-1 border-l border-slate-800 pl-3">
-            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide flex items-center gap-0.5">
+          {/* SELETOR DE VELOCIDADE EM CAIXA COMPACTA */}
+          <div className="flex items-center gap-1 border-l border-slate-800 pl-2.5">
+            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide flex items-center gap-0.5 shrink-0">
               ⚡ Vel:
             </span>
-            <div className="flex items-center gap-0.5">
-              {[0.25, 0.5, 1, 2, 3, 5, 10].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => changeSimulationSpeed(s)}
-                  className={`px-1.5 py-0.5 text-[10px] font-bold rounded cursor-pointer transition-all ${
-                    simulationSpeed === s
-                      ? 'bg-amber-500 text-slate-950 shadow-[0_0_6px_rgba(245,158,11,0.5)] scale-105'
-                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
-                  }`}
-                  title={`Definir velocidade em ${s}x (${
-                    s === 0.25 ? 'bem devagar — 1 tick a cada 4 passos'
-                    : s === 0.5 ? 'devagar — 1 tick a cada 2 passos'
-                    : s === 1 ? '1min45 por pregão'
-                    : s === 2 ? '55s' : s === 3 ? '35s' : s === 5 ? '15s' : '5s'
-                  })`}
-                >
-                  {s === 0.25 ? '¼x' : s === 0.5 ? '½x' : `${s}x`}
-                </button>
-              ))}
-            </div>
+            <select
+              value={simulationSpeed}
+              onChange={(e) => changeSimulationSpeed(Number(e.target.value))}
+              className="h-6 rounded bg-slate-900 border border-slate-800 text-amber-400 font-bold text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-amber-500 hover:bg-slate-800 transition-colors"
+              title="Velocidade da reprodução do replay"
+            >
+              <option value={0.25}>¼x (Muito lenta)</option>
+              <option value={0.5}>½x (Lenta)</option>
+              <option value={1}>1x (Normal)</option>
+              <option value={2}>2x (Rápida)</option>
+              <option value={3}>3x (Dinâmica)</option>
+              <option value={5}>5x (Acelerada)</option>
+              <option value={10}>10x (Máxima)</option>
+            </select>
           </div>
 
           {/* Botão de Disparo / Indicador de Replay Ativo — Clean, sem roxo, sem bordas */}
@@ -8500,63 +8491,34 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             </div>
           )}
 
-          {/* Seed do pregão sintético: é o que torna honesta a comparação entre velocidades.
-
-                Um controle só — o eco que existia na ponta direita da tira foi removido. */}
-
-            <div className="flex items-center gap-1 shrink-0 ml-0.5">
-
-              <span className="text-[9px] uppercase tracking-wider text-slate-600">Seed</span>
-
+          {/* Seed do pregão sintético: fonte aumentada e sem caixa no manual */}
+          <div className="flex items-center gap-1 shrink-0 ml-1">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Seed</span>
+            <button
+              onClick={() => setReplaySeed((prev) => (prev === null ? lastReplay?.seed ?? randomReplaySeed() : null))}
+              className={`px-1 py-0 rounded text-[11px] font-semibold transition-colors whitespace-nowrap cursor-pointer font-mono tabular-nums ${
+                replaySeed === null
+                  ? 'text-slate-400 hover:text-slate-100'
+                  : 'text-emerald-400 hover:text-emerald-300'
+              }`}
+              title={
+                replaySeed === null
+                  ? `AUTO: cada corrida sorteia um pregão sintético diferente. Clique para FIXAR o seed da última corrida.`
+                  : `Pregão sintético FIXO (seed #${replaySeed}): toda corrida reproduz o MESMO mercado. Clique para voltar ao AUTO.`
+              }
+            >
+              {replaySeed === null ? 'AUTO' : `#${replaySeed}`}
+            </button>
+            {replaySeed !== null && (
               <button
-
-                onClick={() => setReplaySeed((prev) => (prev === null ? lastReplay?.seed ?? randomReplaySeed() : null))}
-
-                className={`px-1 py-0 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap cursor-pointer font-mono tabular-nums ${
-
-                  replaySeed === null
-
-                    ? 'border-transparent text-slate-400 hover:text-slate-100'
-
-                    : 'border-slate-600 bg-slate-800 text-emerald-300'
-
-                }`}
-
-                title={
-
-                  replaySeed === null
-
-                    ? `AUTO: cada corrida sorteia um pregão sintético diferente (o número fica no chip "Corrida"). Clique para FIXAR o seed da última corrida e reproduzir exatamente o mesmo mercado — só assim faz sentido comparar PnL entre velocidades.`
-
-                    : `Pregão sintético FIXO (seed #${replaySeed}): toda corrida reproduz o MESMO mercado, tick por tick. Clique para voltar ao AUTO.`
-
-                }
-
+                onClick={() => setReplaySeed(randomReplaySeed())}
+                className="p-0.5 rounded text-slate-500 hover:text-slate-200 transition-colors cursor-pointer"
+                title="Sortear outro seed fixo"
               >
-
-                {replaySeed === null ? 'AUTO' : `#${replaySeed}`}
-
+                <RefreshCw className="w-3 h-3" />
               </button>
-
-              {replaySeed !== null && (
-
-                <button
-
-                  onClick={() => setReplaySeed(randomReplaySeed())}
-
-                  className="p-1 rounded text-slate-500 hover:text-slate-200 transition-colors cursor-pointer"
-
-                  title="Sortear outro seed fixo (outro pregão, também reproduzível)"
-
-                >
-
-                  <RefreshCw className="w-3 h-3" />
-
-                </button>
-
-              )}
-
-            </div>
+            )}
+          </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
 
