@@ -176,6 +176,8 @@ interface RenkoFlowChartProps {
   /** Trava de silenciamento das notificações de ordens (toasts flutuantes na tela). */
   orderNotifsMuted?: boolean;
   onToggleOrderNotifs?: () => void;
+  /** Conteúdo customizado à direita na barra superior (ex: seletor de estratégias) */
+  rightContent?: React.ReactNode;
 }
 
 interface FlowHeikinAshi {
@@ -263,6 +265,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   onFunnelPatch,
   orderNotifsMuted = false,
   onToggleOrderNotifs,
+  rightContent,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -3491,6 +3494,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {rightContent}
           {/* Níveis do pregão: ficam ligados por padrão e este chip serve para sumir com eles
               quando a tela estiver cheia demais. No hover, a lista completa com os preços. */}
           {priceLevels.length > 0 && (

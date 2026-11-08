@@ -144,7 +144,6 @@ import { B3MarketSimulator, generateHistoricalTicks, randomReplaySeed } from './
 import { Header } from './components/Header';
 
 import { RenkoFlowChart } from './components/RenkoFlowChart';
-import { AssetChartTabs } from './components/AssetChartTabs';
 
 import { MiniSelect } from './components/MiniSelect';
 
@@ -8786,40 +8785,8 @@ ${
 
             {activeTab === 'chart' && (
               <div className="h-full w-full rounded-lg border border-slate-800 overflow-hidden flex flex-col">
-                <AssetChartTabs
-                  currentAssetId={asset.id}
-                  onSelectAsset={handleSelectAsset}
-                  isMt5Connected={mt5State.status === 'CONNECTED'}
-                  rightContent={strategySelectorNode}
-                  assetStates={{
-                    WIN: {
-                      currentPrice: asset.id === 'WIN' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4
-                        ? currentPrice
-                        : (Number.isFinite(assetStateRef.current.WIN?.currentPrice) && assetStateRef.current.WIN.currentPrice > 0 && Math.abs(assetStateRef.current.WIN.currentPrice - ASSETS.WIN.basePrice) / ASSETS.WIN.basePrice < 0.4
-                          ? assetStateRef.current.WIN.currentPrice
-                          : referencePrice(ASSETS.WIN)),
-                      openOrdersCount: asset.id === 'WIN' ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.WIN) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
-                    },
-                    WDO: {
-                      currentPrice: asset.id === 'WDO' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4
-                        ? currentPrice
-                        : (Number.isFinite(assetStateRef.current.WDO?.currentPrice) && assetStateRef.current.WDO.currentPrice > 0 && Math.abs(assetStateRef.current.WDO.currentPrice - ASSETS.WDO.basePrice) / ASSETS.WDO.basePrice < 0.4
-                          ? assetStateRef.current.WDO.currentPrice
-                          : referencePrice(ASSETS.WDO)),
-                      openOrdersCount: asset.id === 'WDO' ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.WDO) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
-                    },
-                    BTCBR: {
-                      currentPrice: asset.id === 'BTCBR' && Number.isFinite(currentPrice) && currentPrice > 0 && Math.abs(currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4
-                        ? currentPrice
-                        : (Number.isFinite(assetStateRef.current.BTCBR?.currentPrice) && assetStateRef.current.BTCBR.currentPrice > 0 && Math.abs(assetStateRef.current.BTCBR.currentPrice - ASSETS.BTCBR.basePrice) / ASSETS.BTCBR.basePrice < 0.4
-                          ? assetStateRef.current.BTCBR.currentPrice
-                          : referencePrice(ASSETS.BTCBR)),
-                      openOrdersCount: asset.id === 'BTCBR' ? openOrders.length : (mt5State.status === 'CONNECTED' ? (OrderAuditService.loadIntradayOrders(ASSETS.BTCBR) || []).filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length : 0),
-                    },
-                  }}
-                />
                 <RenkoFlowChart
-
+                  rightContent={strategySelectorNode}
                   boxes={chartSeries === 'renko' ? boxes : chartSeries === 'range' ? rangeBoxes : timeBoxes}
 
 
