@@ -8206,9 +8206,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           </div>
 
-          {/* "Modo: SIMULADA" saiu daqui: a linha Origem abaixo já diz MT5 Real ou Simulação B3 —
+        </div>
 
-              duas fichas dizendo a mesma coisa na mesma linha eram redundância pura. */}
+        {/* ZONA FIXA DIREITA: Estratégia Ativa (Seta Amarela) + Resumo da Corrida + Alertas.
+            Possui shrink-0 para NUNCA sumir em telas estreitas como o navegador interno! */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
 
           {/* Estratégia ativa — caixinha de seleção unificada (Presets Oficiais B3 + Estúdio).
               SEMPRE visível: acesso do operador a TODAS as estratégias configuradas. */}
@@ -8292,12 +8294,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             <span className={`w-1.5 h-1.5 rounded-full ${config.active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} title={config.active ? 'Robô ligado' : 'Robô pausado'} />
 
           </div>
-
-        </div>
-
-
-
-        <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
 
           {/* A medida da corrida fica na zona fixa (a direita nunca some). O eco de velocidade/seed
 
