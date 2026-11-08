@@ -954,6 +954,11 @@ export default function App() {
   );
 
   const activeStrategyName = activeStrategy?.name ?? config.profileName ?? null;
+  const activeStrategyNameRef = useRef<string | null>(activeStrategyName);
+
+  useEffect(() => {
+    activeStrategyNameRef.current = activeStrategyName;
+  }, [activeStrategyName]);
 
   // Canal de sincronização entre abas e dispositivos (SaaS Multi-Tela em tempo real)
   const saasChannelRef = useRef<BroadcastChannel | null>(null);
@@ -974,7 +979,7 @@ export default function App() {
           setReplayOperates(armed);
         } else if (data.type === 'STRATEGY_SYNC') {
           const profileName = data.profileName;
-          if (profileName && profileName !== activeStrategyName) {
+          if (profileName && profileName !== activeStrategyNameRef.current) {
             const library = StrategyLibraryService.list();
             const existing = library.find((s) => s.name.toLowerCase() === profileName.toLowerCase());
             if (existing) {
@@ -990,7 +995,7 @@ export default function App() {
         channel.close();
       };
     }
-  }, [activeStrategyName]);
+  }, []);
 
   const builtInPresets = React.useMemo(() => EaConfigService.getBuiltInPresets(), []);
 
@@ -4033,7 +4038,15 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     userDisconnectedRef.current = false;
     setMt5State({ status: 'CONNECTING' });
-    const host = config.mt5Host || 'localhost';
+    const rawHost = (config.mt5Host || '').trim();
+    let host = rawHost;
+    if (!host || host.toLowerCase() === 'localhost') {
+      if (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        host = window.location.hostname;
+      } else {
+        host = '127.0.0.1';
+      }
+    }
     const port = config.mt5Port || 8765;
     const wsUrl = `ws://${host}:${port}`;
 
