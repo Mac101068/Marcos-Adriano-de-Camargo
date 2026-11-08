@@ -63,8 +63,12 @@ export class OrderAuditService {
       if (raw) {
         const parsed = JSON.parse(raw) as TradeOrder[];
         if (Array.isArray(parsed)) {
+          // Purga ordens mock hardcoded antigas de demonstração
+          const clean = parsed.filter(
+            (o) => !o.id?.startsWith('ord-mother-') && !o.id?.startsWith('ord-pyramid-') && !o.id?.startsWith('init-ord-')
+          );
           // Sanitiza ordens abertas longe demais do preço de referência do ativo
-          return parsed.map((o) => {
+          return clean.map((o) => {
             if (o.status === 'OPEN' && isStaleOrderPrice(o.entryPrice, asset)) {
               return {
                 ...o,
