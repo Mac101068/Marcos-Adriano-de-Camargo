@@ -875,9 +875,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     // Etiquetas dos painéis, no mesmo padrão das subfaixas de fluxo. A do preço sobe para logo acima
     // da faixa da régua de tempo (que agora vive dentro do painel de preço), para não brigar com ela.
     if (!isMobile) {
-      ctx.font = '8.5px "Plus Jakarta Sans", sans-serif';
+      ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillStyle = '#52525b';
+      ctx.fillStyle = '#d4d4d8';
       const pricePaneLabel =
         chartSeries === 'range' ? 'PREÇO · RANGE' : chartSeries === 'tempo' ? 'PREÇO · TEMPO' : 'PREÇO · RENKO';
       ctx.fillText(pricePaneLabel, 53, pricePaneHeight - TIME_AXIS_BAND_H - 4);
@@ -886,7 +886,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       // topo: a régua de tempo não mora mais aí, o indicador é dono da janela.
       if (flowViewMode !== 'heikin_ashi') {
         ctx.fillText(
-          flowViewMode === 'histogram' ? 'FLUXO · DELTA' : 'FLUXO · HÍBRIDO',
+          flowViewMode === 'histogram' ? 'AGRESSÃO' : 'FLUXO · HÍBRIDO',
           53,
           pricePaneHeight + FLOW_TOP_PAD - 4
         );
@@ -1588,34 +1588,16 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.fill();
       }
 
-      // Etiqueta das subfaixas com status da JANELA DE FLUXO do robô (deslocada respeitando barra de desenho)
+      // Etiquetas das subfaixas de Fluxo e Agressão (tom nítido e visível)
       if (!isMobile) {
-        ctx.font = '8.5px "Plus Jakarta Sans", sans-serif';
+        ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillStyle = '#71717a';
-        ctx.fillText('FLUXO · HEIKIN-ASHI', 53, haBandTop + 9);
+        ctx.fillStyle = '#d4d4d8';
+        ctx.fillText('FLUXO', 53, haBandTop + 9);
 
-        const lastHa = flowHaData.length > 0 ? flowHaData[flowHaData.length - 1] : null;
-        if (lastHa) {
-          const isUp = lastHa.state === 'UP';
-          const isDn = lastHa.state === 'DOWN';
-          const isAbs = lastHa.state === 'ABSORPTION';
-          const tagTxt = isUp
-            ? '🟢 JANELA DE COMPRA (FLUXO VALIDADO)'
-            : isDn
-            ? '🔴 JANELA DE VENDA (FLUXO VALIDADO)'
-            : isAbs
-            ? '🟡 ABSORÇÃO / DIVERGÊNCIA'
-            : '⚪ FLUXO NEUTRO / EXAUSTÃO';
-          const tagColor = isUp ? '#34d399' : isDn ? '#f87171' : isAbs ? '#facc15' : '#71717a';
-          ctx.font = 'bold 8.5px "Plus Jakarta Sans", sans-serif';
-          ctx.fillStyle = tagColor;
-          ctx.fillText(`• ${tagTxt}`, 53 + 114, haBandTop + 9);
-        }
-
-        ctx.font = '8.5px "Plus Jakarta Sans", sans-serif';
-        ctx.fillStyle = '#52525b';
-        ctx.fillText('HISTOGRAMA · DELTA', 53, histBandTop + 9);
+        ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
+        ctx.fillStyle = '#d4d4d8';
+        ctx.fillText('AGRESSÃO', 53, histBandTop + 9);
       }
 
       // Linha de zero do Delta
