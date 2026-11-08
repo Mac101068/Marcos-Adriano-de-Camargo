@@ -33,11 +33,18 @@ interface DrawingToolbarProps {
   layout?: 'vertical' | 'inline';
 }
 
+const VLineIcon: React.FC<{ className?: string }> = ({ className = 'w-3.5 h-3.5' }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" className={className}>
+    <line x1="12" y1="4" x2="12" y2="20" />
+  </svg>
+);
+
 const TOOL_ITEMS: { tool: DrawingTool; icon: React.ElementType; label: string; shortcut: string }[] = [
   { tool: 'select', icon: MousePointer2, label: 'Cursor / Selecionar', shortcut: 'V' },
   { tool: 'eraser', icon: Eraser, label: 'Borracha (apagar estudo)', shortcut: 'E' },
   { tool: 'trendline', icon: TrendingUp, label: 'Linha de Tendência', shortcut: 'L' },
   { tool: 'hline', icon: Minus, label: 'Linha Horizontal (Suporte/Resistência)', shortcut: 'H' },
+  { tool: 'vline', icon: VLineIcon, label: 'Linha Vertical (Tempo / Evento)', shortcut: 'I' },
   { tool: 'rect', icon: Square, label: 'Retângulo / Região de Liquidez', shortcut: 'R' },
   { tool: 'arrow', icon: MoveUpRight, label: 'Seta de Direção de Fluxo', shortcut: 'A' },
   { tool: 'text', icon: Type, label: 'Texto / Anotação', shortcut: 'T' },
@@ -334,6 +341,8 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
                       ? 'Linha de Tendência'
                       : d.kind === 'hline'
                       ? `Suporte/Resistência ${d.priceA.toLocaleString('pt-BR')}`
+                      : d.kind === 'vline'
+                      ? `Linha Vertical #${d.barA}`
                       : d.kind === 'rect'
                       ? 'Região de Liquidez'
                       : d.kind === 'arrow'

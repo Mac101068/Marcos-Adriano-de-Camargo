@@ -122,6 +122,13 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         } else {
           dd = dist(x, y, 0, p.ay);
         }
+      } else if (d.kind === 'vline') {
+        const paneH = layout.pricePaneHeight;
+        if (y >= 0 && y <= paneH) {
+          dd = Math.abs(x - p.ax);
+        } else {
+          dd = dist(x, y, p.ax, 0);
+        }
       } else if (d.kind === 'rect') {
         const edges = [
           [p.ax, p.ay, p.bx, p.ay],
@@ -176,6 +183,20 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         };
         onCreate(d);
         setEditing({ id: d.id, value: '', x: pt.px.x, y: pt.px.y });
+        return;
+      }
+      if (activeTool === 'vline') {
+        const d: Drawing = {
+          id: newDrawingId(),
+          kind: 'vline',
+          barA: pt.bar,
+          priceA: pt.price,
+          barB: pt.bar,
+          priceB: pt.price,
+          color: activeColor,
+        };
+        onCreate(d);
+        onSelect(d.id);
         return;
       }
       setDrag({ mode: 'create', tool: activeTool, start: { bar: pt.bar, price: pt.price }, last: { bar: pt.bar, price: pt.price }, moved: false });
@@ -242,8 +263,8 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         kind,
         barA: drag.start.bar,
         priceA: drag.start.price,
-        barB: kind === 'hline' ? drag.start.bar : drag.last.bar,
-        priceB: kind === 'hline' ? drag.start.price : drag.last.price,
+        barB: kind === 'hline' || kind === 'vline' ? drag.start.bar : drag.last.bar,
+        priceB: kind === 'hline' || kind === 'vline' ? drag.start.price : drag.last.price,
         color: activeColor,
       };
       onCreate(d);
@@ -316,6 +337,26 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
               {d.priceA.toLocaleString('pt-BR')}
             </text>
             {selected && <circle cx={tagX + 31} cy={p.ay} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />}
+          </g>
+        );
+      }
+      case 'vline': {
+        const paneH = layout?.pricePaneHeight ?? 500;
+        return (
+          <g key={d.id} data-drawing-id={d.id} style={{ pointerEvents: 'all' }} onClick={handleObjectClick}>
+            {/* Hitbox transparente larga */}
+            <line x1={p.ax} y1={0} x2={p.ax} y2={paneH} stroke="transparent" strokeWidth={16} className="cursor-pointer" />
+            <line x1={p.ax} y1={0} x2={p.ax} y2={paneH} stroke={hex} strokeDasharray={selected ? '5 3' : '3 3'} strokeWidth={selected ? 2.5 : 1.4} />
+            <rect x={p.ax - 22} y={6} width={44} height={14} rx={3} fill="#171717" stroke={selected ? '#f59e0b' : '#404040'} strokeWidth={selected ? 1.5 : 0.8} />
+            <text x={p.ax} y={16} textAnchor="middle" fontSize={8.5} fontFamily="'JetBrains Mono', monospace" fill={hex}>
+              #{d.barA}
+            </text>
+            {selected && (
+              <>
+                <circle cx={p.ax} cy={13} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+                <circle cx={p.ax} cy={paneH - 12} r={4.5} fill="#ffffff" stroke="#f59e0b" strokeWidth={2} />
+              </>
+            )}
           </g>
         );
       }
@@ -426,6 +467,8 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         return <line x1={preview.a.x} y1={preview.a.y} x2={preview.b.x} y2={preview.b.y} stroke={hex} {...op} />;
       case 'hline':
         return <line x1={0} y1={preview.a.y} x2={preview.b.x} y2={preview.a.y} stroke={hex} strokeDasharray="2 4" {...op} />;
+      case 'vline':
+        return <line x1={preview.b.x} y1={0} x2={preview.b.x} y2={layout?.pricePaneHeight ?? 500} stroke={hex} strokeDasharray="2 4" {...op} />;
       case 'rect':
         return (
           <rect
@@ -486,8 +529,8 @@ export const DrawingOverlay: React.FC<DrawingOverlayProps> = ({
         if (!sel) return null;
         const p = drawingToPoints(sel);
         if (!p) return null;
-        const posX = Math.max(10, Math.min(width - 190, sel.kind === 'hline' ? 140 : (p.ax + p.bx) / 2 - 80));
-        const posY = Math.max(10, (sel.kind === 'hline' ? p.ay : Math.min(p.ay, p.by)) - 40);
+        const posX = Math.max(10, Math.min(width - 190, sel.kind === 'hline' ? 140 : sel.kind === 'vline' ? p.ax - 65 : (p.ax + p.bx) / 2 - 80));
+        const posY = Math.max(10, (sel.kind === 'hline' ? p.ay : sel.kind === 'vline' ? 26 : Math.min(p.ay, p.by)) - 40);
 
         return (
           <foreignObject x={posX} y={posY} width={180} height={34} style={{ overflow: 'visible', pointerEvents: 'all' }}>

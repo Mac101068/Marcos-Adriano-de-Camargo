@@ -4,7 +4,7 @@
 // acompanhando zoom, pan e scroll do gráfico automaticamente.
 // =========================================================================
 
-export type DrawingTool = 'select' | 'eraser' | 'trendline' | 'hline' | 'rect' | 'arrow' | 'text';
+export type DrawingTool = 'select' | 'eraser' | 'trendline' | 'hline' | 'vline' | 'rect' | 'arrow' | 'text';
 
 export type DrawingKind = Exclude<DrawingTool, 'select' | 'eraser'>;
 
@@ -47,7 +47,7 @@ export const loadDrawings = (): Drawing[] => {
       (d) =>
         d &&
         typeof d.id === 'string' &&
-        ['trendline', 'hline', 'rect', 'arrow', 'text'].includes(d.kind) &&
+        ['trendline', 'hline', 'vline', 'rect', 'arrow', 'text'].includes(d.kind) &&
         Number.isFinite(d.barA) &&
         Number.isFinite(d.priceA)
     ) as Drawing[];
