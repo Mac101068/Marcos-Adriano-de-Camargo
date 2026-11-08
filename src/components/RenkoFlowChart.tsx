@@ -3651,63 +3651,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               </button>
             </div>
 
-            {/* ESCALA DO BOX (R) — a definição mora aqui. Trocar o R redesenha a história inteira
-                na escala nova (o App reprocessa os ticks guardados), então o teste é imediato. */}
-            {chartSeries === 'renko' && onRenkoBoxPointsChange && (
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-semibold text-zinc-400">Box Renko (tijolo)</span>
-                  <span className="text-[10px] font-mono text-zinc-500 tabular-nums">
-                    1R = {asset.tickSize} pts
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => stepRenkoR(-1)}
-                    className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 text-sm font-bold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
-                    title={`Diminuir 1R (box ${renkoR - 1}R = ${boxPointsForR(renkoR - 1, asset)} pts)`}
-                  >
-                    −
-                  </button>
-                  <button
-                    onClick={cycleRenkoR}
-                    className="flex-1 h-7 rounded bg-zinc-800 text-[11px] font-mono font-bold text-zinc-100 hover:bg-zinc-700 cursor-pointer tabular-nums"
-                    title="Clique para percorrer a escada de testes (5R → 8R → 9R → 10R → 15R → 20R → 25R → 29R → 30R)"
-                  >
-                    {renkoR}R · {renkoBoxPoints} pts
-                  </button>
-                  <button
-                    onClick={() => stepRenkoR(1)}
-                    className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 text-sm font-bold text-zinc-200 hover:bg-zinc-700 cursor-pointer"
-                    title={`Aumentar 1R (box ${renkoR + 1}R = ${boxPointsForR(renkoR + 1, asset)} pts)`}
-                  >
-                    +
-                  </button>
-                </div>
-                {/* Escada de testes: um toque por escala, sem precisar clicar 19 vezes no +. */}
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {renkoRChoices(asset, renkoR).map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => applyRenkoR(r)}
-                      className={`px-1.5 h-[22px] rounded text-[10px] font-mono font-bold cursor-pointer border transition-colors ${
-                        r === renkoR
-                          ? 'bg-zinc-700 text-zinc-100 border-zinc-500'
-                          : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white'
-                      }`}
-                      title={`Box de ${r}R = ${boxPointsForR(r, asset)} pts`}
-                    >
-                      {r}R
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[9px] leading-snug text-zinc-500 mt-1">
-                  Esta é a escala do tijolo: o gráfico redesenha na hora e robôs, boleta, auditoria e
-                  script Python passam a usar este box.
-                </p>
-              </div>
-            )}
-
             {/* Tijolos na tela (eixo X) */}
             <div>
               <div className="flex items-center justify-between mb-1">
