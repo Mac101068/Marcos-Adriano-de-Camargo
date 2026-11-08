@@ -117,6 +117,46 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
 
 export const BUILT_IN_PRESETS: ConfigPreset[] = [
   {
+    id: 'preset-janela-fluxo',
+    name: 'Janela de Fluxo & Agressão',
+    badge: 'JANELA DE FLUXO',
+    description:
+      'Estratégia direcional desenhada para capturar as janelas de desequilíbrio entre Fluxo e Agressão. ' +
+      'Entra a mercado na confirmação da confluência (Delta institucional + Heikin-Ashi) e surfa a pernada ' +
+      'com saída cirúrgica na virada de fluxo ou exaustão.',
+    config: {
+      ...DEFAULT_EA_CONFIG,
+      profileName: 'Janela de Fluxo & Agressão',
+      strategyMode: 'PYRAMID_FLOW_CONFLUENCE',
+      entryTriggerType: 'MARKET_ON_CLOSE',
+      contracts: 1,
+      pyramidContracts: 1,
+      pyramidTpPoints: 60,
+      moveMainToBreakevenOnPyramidTp: true,
+      holdMainUntilFlip: true,
+      closeAllOnFlowFlip: true,
+      noFixedStopLoss: false,
+      stopLossPoints: 80,
+      takeProfitPoints: 200,
+      enablePartialExit: true,
+      partialPoints: 60,
+      partialContracts: 1,
+      moveStopToBreakevenOnPartial: true,
+      breakevenOffsetPoints: 5,
+      trailingStop: true,
+      trailingActivationPoints: 80,
+      trailingDistancePoints: 40,
+      accountMode: 'HEDGE',
+      maxSimultaneousPositions: 10,
+      hedgeOppositeAction: 'CLOSE_OPPOSITE',
+      minDeltaThreshold: 150,
+      adaptiveThresholdEnabled: true,
+      adaptiveThresholdPercentile: 0.7,
+      adaptiveFloorMultiple: 1.6,
+      flowDivergenceMin: 0.5,
+    },
+  },
+  {
     id: 'preset-pyramid-flow-10r',
     name: '10R Pirâmide & Confluência (TP 50p + Surfe)',
     badge: 'PIRÂMIDE 50P',
