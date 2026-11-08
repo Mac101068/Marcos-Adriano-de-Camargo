@@ -151,14 +151,14 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
     );
   }
 
-  // Se vertical flutuante (no lado esquerdo do gráfico)
+  // Se vertical flutuante (encostada na lateral esquerda do painel, logo abaixo da caixa Controles)
   if (collapsed) {
     return (
-      <div className="absolute top-12 left-2 z-30 select-none pointer-events-auto">
+      <div className="absolute top-1 left-0 z-30 select-none pointer-events-auto">
         <button
           onClick={toggleCollapsed}
-          title="Expandir barra de desenho"
-          className="w-8 h-8 flex items-center justify-center rounded-lg bg-zinc-950/85 backdrop-blur-md border border-zinc-800/80 text-zinc-400 hover:text-amber-300 hover:border-zinc-700 shadow-xl transition-all cursor-pointer group"
+          title="Abrir barra de desenho"
+          className="w-7 h-7 flex items-center justify-center rounded-r-lg bg-zinc-950/90 backdrop-blur-md border border-l-0 border-zinc-800/90 text-zinc-400 hover:text-amber-300 hover:border-zinc-700 shadow-xl transition-all cursor-pointer group"
         >
           <Pencil className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
         </button>
@@ -167,7 +167,7 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   }
 
   return (
-    <div className="absolute top-12 left-2 z-30 select-none pointer-events-auto flex flex-col items-center gap-1 p-1 rounded-xl bg-zinc-950/90 backdrop-blur-md border border-zinc-800/90 shadow-2xl transition-all">
+    <div className="absolute top-1 left-0 z-30 select-none pointer-events-auto flex flex-col items-center gap-1 p-1 rounded-r-xl bg-zinc-950/92 backdrop-blur-md border border-l-0 border-zinc-800/90 shadow-2xl transition-all">
       {/* Botão de minimizar/recolher */}
       <button
         onClick={toggleCollapsed}
