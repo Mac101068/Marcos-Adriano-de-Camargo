@@ -965,9 +965,10 @@ export default function App() {
   }, [activeStrategyName]);
 
   // Referências para controle remoto do replay e conexão
-  const handleReplayHistoryRef = useRef<((days: number, seedOverride?: number, isRemoteSync?: boolean) => void) | null>(null);
+  const handleReplayHistoryRef = useRef<((days: number, seedOverride?: number, dayKeyOverride?: string, isRemoteSync?: boolean) => void) | null>(null);
   const handleStopReplayRef = useRef<((isRemoteSync?: boolean) => void) | null>(null);
   const toggleMT5ConnectRef = useRef<((manualAction?: 'CONNECT' | 'DISCONNECT', isRemoteSync?: boolean) => void) | null>(null);
+  const handleBoletaConfigPatchRef = useRef<((patch: Partial<AutomationConfig>, isRemoteSync?: boolean) => void) | null>(null);
 
   // Canal de sincronização entre abas e dispositivos (SaaS Multi-Tela em tempo real)
   const saasChannelRef = useRef<BroadcastChannel | null>(null);
@@ -1003,14 +1004,24 @@ export default function App() {
           } else if (data.action === 'DISCONNECT') {
             toggleMT5ConnectRef.current?.('DISCONNECT', true);
           }
+        } else if (data.type === 'BOX_POINTS_SYNC') {
+          const bPts = Number(data.boxPoints);
+          if (bPts > 0) {
+            handleBoletaConfigPatchRef.current?.({ boxPoints: bPts }, true);
+          }
         } else if (data.type === 'REPLAY_START_SYNC') {
           const rDays = data.days ?? 1;
           const rSpd = data.speed;
           const rSeed = data.seed;
+          const rDayKey = data.dayKey;
+          const rBoxPoints = Number(data.boxPoints);
           if (rSpd) setSimulationSpeed(rSpd);
           setReplayDays(rDays);
+          if (rBoxPoints > 0) {
+            handleBoletaConfigPatchRef.current?.({ boxPoints: rBoxPoints }, true);
+          }
           if (!isReplayingRef.current) {
-            handleReplayHistoryRef.current?.(rDays, rSeed, true);
+            handleReplayHistoryRef.current?.(rDays, rSeed, rDayKey, true);
           }
         } else if (data.type === 'REPLAY_STOP_SYNC') {
           if (isReplayingRef.current) {
@@ -4338,10 +4349,15 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const rDays = payload.data?.days ?? 1;
             const rSpd = payload.data?.speed;
             const rSeed = payload.data?.seed;
+            const rDayKey = payload.data?.dayKey;
+            const rBoxPoints = Number(payload.data?.boxPoints);
             if (rSpd) setSimulationSpeed(rSpd);
             setReplayDays(rDays);
+            if (rBoxPoints > 0) {
+              handleBoletaConfigPatchRef.current?.({ boxPoints: rBoxPoints }, true);
+            }
             if (!isReplayingRef.current) {
-              handleReplayHistoryRef.current?.(rDays, rSeed, true);
+              handleReplayHistoryRef.current?.(rDays, rSeed, rDayKey, true);
             }
 
           } else if (payload.type === 'GLOBAL_REPLAY_STOP') {
@@ -4357,6 +4373,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           } else if (payload.type === 'GLOBAL_REPLAY_DAYS') {
 
             if (payload.data?.days) setReplayDays(payload.data.days);
+
+          } else if (payload.type === 'GLOBAL_BOX_POINTS_SYNC') {
+
+            const bPts = Number(payload.data?.boxPoints);
+            if (bPts > 0) {
+              handleBoletaConfigPatchRef.current?.({ boxPoints: bPts }, true);
+            }
 
           } else if (payload.type === 'REPLAY_MODE_RESULT') {
 
@@ -4820,7 +4843,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
   // host, porta, active) fica só no config. Robô, script Python e saídas leem o config materializado.
 
-  const patchActiveStrategy = (patch: Partial<AutomationConfig>) => {
+  const patchActiveStrategy = (patch: Partial<AutomationConfig>, isRemoteSync?: boolean) => {
     // Salva parâmetros operacionais no storage específico do ativo atual
     const tradeKeys = [
       'boxPoints',
@@ -4838,6 +4861,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     }
     if (Object.keys(tradePatch).length > 0) {
       saveAssetTradeParams(asset.id, tradePatch as Partial<AssetTradeDefaults>);
+    }
+
+    if (!isRemoteSync && patch.boxPoints !== undefined) {
+      try {
+        saasChannelRef.current?.postMessage({
+          type: 'BOX_POINTS_SYNC',
+          boxPoints: patch.boxPoints,
+          assetId: asset.id
+        });
+      } catch {}
     }
 
     if (patch.boxPoints !== undefined && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -5918,7 +5951,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       try {
         const res = await marketHistoryService.requestHistory({
           reqId: `hist-${Date.now()}`,
-          symbol: asset.primarySymbol,
+          symbol: chartSymbolFor(asset),
           days: daysToRequest,
           asset,
           send: (payload) => socket.send(payload),
@@ -6129,7 +6162,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     }
   };
 
-  const handleReplayHistory = (days: number, seedOverride?: number, isRemoteSync?: boolean) => {
+  const handleReplayHistory = (days: number, seedOverride?: number, dayKeyOverride?: string, isRemoteSync?: boolean) => {
 
     if (isReplayingRef.current) return;
 
@@ -6185,7 +6218,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             action: 'REPLAY_START_SYNC',
             days: replayTargetDays,
             speed: simulationSpeed,
-            seed: seedForRun
+            seed: seedForRun,
+            boxPoints: config.boxPoints,
+            dayKey: dayKeyOverride
           }));
         }
       } catch {}
@@ -6194,7 +6229,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           type: 'REPLAY_START_SYNC',
           days: replayTargetDays,
           speed: simulationSpeed,
-          seed: seedForRun
+          seed: seedForRun,
+          boxPoints: config.boxPoints,
+          dayKey: dayKeyOverride
         });
       } catch {}
     }
@@ -6240,7 +6277,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       let label = '';
       let calculatedContextEnd = 0;
 
-      if (sortedDays.length >= 1 && replayTargetDays === 1) {
+      if (dayKeyOverride && daysMap.has(dayKeyOverride)) {
+        const targetDayKey = dayKeyOverride;
+        ticks = daysMap.get(targetDayKey) || rawTicks;
+        calculatedContextEnd = 0;
+        const [y, m, d] = (targetDayKey || '').split('-');
+        const isToday = !targetDayKey || new Date().toISOString().startsWith(targetDayKey) || (d === '04' && m === '11');
+        label = `${d}/${m}/${y}${isToday ? ' (Hoje)' : ''}`;
+      } else if (sortedDays.length >= 1 && replayTargetDays === 1) {
         // Replay do pregão de Hoje (mais recente): inicia 100% limpo a partir da abertura
         const targetDayKey = sortedDays[sortedDays.length - 1];
         ticks = daysMap.get(targetDayKey) || rawTicks;
@@ -6707,6 +6751,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     handleReplayHistoryRef.current = handleReplayHistory;
     handleStopReplayRef.current = handleStopReplay;
     toggleMT5ConnectRef.current = toggleMT5Connect;
+    handleBoletaConfigPatchRef.current = handleBoletaConfigPatch;
   });
 
 
