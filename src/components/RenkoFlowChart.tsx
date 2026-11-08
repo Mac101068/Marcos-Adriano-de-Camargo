@@ -1161,11 +1161,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     });
 
     const isBtc = asset?.id === 'BTCBR';
-    // ESCALA ACOPLADA AO BOX (fonte única: renkoBoxPoints). Antes a folga e o piso do range eram
-    // fixos por ativo (1,5 pt no WDO, 16 no WIN): com box pequeno a folga devorava o painel e com
-    // box grande sobrava espaço morto. Agora tudo deriva do tamanho do tijolo, então trocar o R
-    // reenquadra o gráfico sozinho.
-    const boxPts = Math.max(0.5, Number(renkoBoxPoints) || (isBtc ? 500 : 50));
+    const isRange = chartSeries === 'range';
+    // ESCALA ACOPLADA AO BOX / RANGE: Quando a série for Range, utiliza rangePoints; quando Renko, renkoBoxPoints.
+    const boxPts = Math.max(0.5, Number(isRange ? rangePoints : renkoBoxPoints) || (isBtc ? 500 : 50));
     const minRange = boxPts * 4;
     const priceRange = Math.max(minRange, maxPrice - minPrice);
     // Folga da auto-escala: 60% de um box em cima e embaixo (sem zoom), 90% com zoom Y

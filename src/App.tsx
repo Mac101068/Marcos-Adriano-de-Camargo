@@ -329,6 +329,54 @@ type ReplayRunSummary = {
 
 
 
+
+/**
+ * Sintetiza ticks a partir de boxes formados (ex: do SESSION_BACKFILL ou do motor Renko),
+ * garantindo que séries derivadas como Range e Tempo possam ser reconstruídas imediatamente.
+ */
+function synthesizeTicksFromBoxes(bxList: RenkoBox[]): Tick[] {
+  const result: Tick[] = [];
+  const len = bxList.length;
+  for (let i = 0; i < len; i++) {
+    const b = bxList[i];
+    if (!b || !(b.close > 0) || !(b.open > 0)) continue;
+    const tsStart = b.timeStart || Date.now() - (len - i) * 3000;
+    const tsEnd = b.timeEnd && b.timeEnd >= tsStart ? b.timeEnd : tsStart + 1500;
+    const midTs = Math.round((tsStart + tsEnd) / 2);
+    const vol = Math.max(1, Math.round((b.totalVolume || 8) / 4));
+
+    const mk = (p: number, t: number, agg: 'BUY' | 'SELL', sub: number): Tick => ({
+      id: 'synth-' + i + '-' + sub,
+      price: p,
+      volume: vol,
+      timestamp: t,
+      timeStr: new Date(t).toLocaleTimeString('pt-BR'),
+      aggressor: agg,
+    });
+
+    if (b.direction === 'UP') {
+      result.push(mk(b.open, tsStart, 'BUY', 1));
+      if (Number.isFinite(b.low) && b.low < b.open) {
+        result.push(mk(b.low, tsStart + 200, 'SELL', 2));
+      }
+      if (Number.isFinite(b.high) && b.high > b.close) {
+        result.push(mk(b.high, midTs, 'BUY', 3));
+      }
+      result.push(mk(b.close, tsEnd, 'BUY', 4));
+    } else {
+      result.push(mk(b.open, tsStart, 'SELL', 1));
+      if (Number.isFinite(b.high) && b.high > b.open) {
+        result.push(mk(b.high, tsStart + 200, 'BUY', 2));
+      }
+      if (Number.isFinite(b.low) && b.low < b.close) {
+        result.push(mk(b.low, midTs, 'SELL', 3));
+      }
+      result.push(mk(b.close, tsEnd, 'SELL', 4));
+    }
+  }
+  return result;
+}
+
 export default function App() {
 
   const [activeTab, setActiveTab] = useState<'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'studio' | 'admin'>('chart');
@@ -1778,29 +1826,31 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-  // Recalcula toda a história em Range quando a escala mudar (experimentar instantâneo)
-
-  useEffect(() => {
-
+  // Recalcula toda a história em Range quando a escala mudar ou quando alternar para Range
+  const rebuildRangeSeries = useCallback((targetPoints?: number) => {
+    const pts = targetPoints ?? rangePoints;
     const eng = rangeEngineRef.current;
+    eng.setRangePoints(pts);
 
-    eng.setRangePoints(rangePoints);
-
-    const hist = allTicksRef.current;
-
-    if (hist.length > 0) {
-
-      eng.initialize(hist[0].price, hist[0].timestamp);
-
-      for (const t of hist) eng.processTick(t);
-
+    let hist = allTicksRef.current;
+    if (hist.length === 0 && boxes.length > 0) {
+      hist = synthesizeTicksFromBoxes(boxes);
+      allTicksRef.current = hist;
     }
 
-    setRangeBoxes([...eng.getBoxes()]);
-
+    if (hist.length > 0) {
+      eng.initialize(hist[0].price, hist[0].timestamp);
+      for (const t of hist) eng.processTick(t);
+    }
+    const bxs = [...eng.getBoxes()];
+    setRangeBoxes(bxs);
     setRangeCurrentBox(eng.getCurrentBox());
+    return bxs;
+  }, [rangePoints, boxes]);
 
-  }, [rangePoints]);
+  useEffect(() => {
+    rebuildRangeSeries(rangePoints);
+  }, [rangePoints, chartSeries, rebuildRangeSeries]);
 
 
 
@@ -2119,7 +2169,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           }
           const rEng = rangeEngineRef.current;
           setRangeCurrentBox(rEng.getCurrentBox());
-          if (buf.rangeBoxesChanged) {
+          if (buf.rangeBoxesChanged || (chartSeries === 'range' && rEng.getBoxes().length !== rangeBoxes.length)) {
             setRangeBoxes([...rEng.getBoxes()]);
             buf.rangeBoxesChanged = false;
           }
@@ -4595,6 +4645,18 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 setBoxes(bfBoxes);
                 setCurrentPrice(lastPrice);
                 if (Number.isFinite(Number(payload.data?.cvd))) setCvd(Number(payload.data.cvd));
+
+                // Sintetiza e popula imediatamente o motor de Range e o buffer de ticks
+                const synthTicks = synthesizeTicksFromBoxes(bfBoxes);
+                if (synthTicks.length > 0) {
+                  allTicksRef.current = synthTicks;
+                  const rEng = rangeEngineRef.current;
+                  rEng.setRangePoints(rangePoints);
+                  rEng.initialize(synthTicks[0].price, synthTicks[0].timestamp);
+                  for (const st of synthTicks) rEng.processTick(st);
+                  setRangeBoxes([...rEng.getBoxes()]);
+                  setRangeCurrentBox(rEng.getCurrentBox());
+                }
                 setLatestToast({
                   id: `bf-${Date.now()}`,
                   type: 'INFO',
@@ -5616,6 +5678,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     if (s === chartSeries) return;
 
     setChartSeries(s);
+
+    if (s === 'range') {
+      rebuildRangeSeries(rangePoints);
+    }
 
     const label =
 
