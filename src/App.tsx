@@ -955,6 +955,43 @@ export default function App() {
 
   const activeStrategyName = activeStrategy?.name ?? config.profileName ?? null;
 
+  // Canal de sincronização entre abas e dispositivos (SaaS Multi-Tela em tempo real)
+  const saasChannelRef = useRef<BroadcastChannel | null>(null);
+
+  useEffect(() => {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('fluxo_saas_sync');
+      saasChannelRef.current = channel;
+
+      channel.onmessage = (event) => {
+        const data = event.data;
+        if (!data) return;
+
+        if (data.type === 'ROBOT_ARMED_SYNC') {
+          const armed = Boolean(data.armed);
+          setMt5State((prev) => ({ ...prev, bridgeArmed: armed }));
+          setConfig((prev) => (prev.active === armed ? prev : { ...prev, active: armed, lastSavedTimestamp: Date.now() }));
+          setReplayOperates(armed);
+        } else if (data.type === 'STRATEGY_SYNC') {
+          const profileName = data.profileName;
+          if (profileName && profileName !== activeStrategyName) {
+            const library = StrategyLibraryService.list();
+            const existing = library.find((s) => s.name.toLowerCase() === profileName.toLowerCase());
+            if (existing) {
+              handleActivateStrategy(existing, true);
+            } else if (data.config) {
+              handleApplyConfigBundle(data.config, profileName, true);
+            }
+          }
+        }
+      };
+
+      return () => {
+        channel.close();
+      };
+    }
+  }, [activeStrategyName]);
+
   const builtInPresets = React.useMemo(() => EaConfigService.getBuiltInPresets(), []);
 
   const currentStratSelectValue = React.useMemo(() => {
@@ -1042,110 +1079,87 @@ export default function App() {
 
   };
 
-  const handleActivateStrategy = (strategy: SavedStrategy) => {
+  const handleActivateStrategy = (strategy: SavedStrategy, isRemoteSync?: boolean) => {
 
     // Fase A: ativar NÃO copia mais o snapshot inteiro por cima do config — ele vira uma visão
-
     // materializada da estratégia (campos de estratégia do snapshot, runtime/conexão preservados
-
     // do config atual) e passa a apontar para a biblioteca pelo id.
 
     const updated: AutomationConfig = {
-
       ...StrategyLibraryService.resolveOperational(strategy, config),
-
       active: false,
-
       profileName: strategy.name,
-
       lastSavedTimestamp: Date.now(),
-
     };
 
     EaConfigService.saveConfig(updated);
-
     setConfig(updated);
 
+    if (!isRemoteSync) {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({
+            action: 'SET_ACTIVE_STRATEGY',
+            profileName: strategy.name,
+            config: updated
+          }));
+        } catch {}
+      }
+      try {
+        saasChannelRef.current?.postMessage({
+          type: 'STRATEGY_SYNC',
+          profileName: strategy.name,
+          config: updated
+        });
+      } catch {}
+    }
+
     // Trocar de estratégia com posições no livro é mudança de regras no meio do jogo: as
-
     // abertas continuam gerenciadas só por TP/stop/zeragem manual (a virada de fluxo é da
-
     // Pirâmide; o Reteste novo não liquida herança de ninguém). O operador precisa saber.
 
     const openNow = orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT').length;
 
     setLatestToast({
-
       id: `toast-${Date.now()}`,
-
       type: 'INFO',
-
-      title: `Estratégia "${strategy.name}" ativada`,
-
+      title: isRemoteSync ? `🔄 Estratégia Sincronizada: "${strategy.name}"` : `Estratégia "${strategy.name}" ativada`,
       description:
-
         'Robô mantido PAUSADO por segurança — ligue no On quando quiser operar.' +
-
         (openNow > 0
-
           ? ` Atenção: ${openNow} ordem(ns) do ajuste anterior seguem no livro — saem por TP/stop ou no ZERAR da boleta.`
-
           : ''),
-
       timestamp: Date.now(),
-
     });
-
   };
 
   /**
-
    * Fase A (banco único): "aplicar perfil 1-clique", "restaurar padrões" e "importar JSON" carregam
-
    * um conjunto INTEIRO de números. Antes eles escreviam só no config (a biblioteca ficava defasada e
-
    * o Estúdio mostrava outra coisa). Agora o pacote vira estratégia no banco: atualiza a homônima se
-
    * já existir, senão cria uma nova — e o config ativo passa a ser a visão materializada dela, ativada
-
    * pelo mesmo funil de sempre. Nada sobrescreve em silêncio a estratégia que estava ativa: a anterior
-
    * continua inteira no Estúdio. Robô PAUSADO, como na ativação e no sync.
-
    */
 
-  const handleApplyConfigBundle = (cfg: AutomationConfig, name?: string) => {
-
+  const handleApplyConfigBundle = (cfg: AutomationConfig, name?: string, isRemoteSync?: boolean) => {
     const bundleName = (name || cfg.profileName || 'Estratégia ativa').trim();
-
     const merged: AutomationConfig = {
-
       ...mergeConfig(cfg),
-
       profileName: bundleName,
-
       // Desempara do id anterior: o vínculo abaixo é por nome (reusa) ou por criação.
-
       strategyId: null,
-
       active: false,
-
       lastSavedTimestamp: Date.now(),
-
     };
 
     const existing = StrategyLibraryService.list().find((s) => s.name === bundleName);
-
     const strategy = existing
-
       ? StrategyLibraryService.updateStrategyConfig(existing.id, merged) ?? existing
-
       : StrategyLibraryService.save(StrategyLibraryService.newFromConfig(merged, bundleName));
 
-    handleActivateStrategy(strategy);
-
+    handleActivateStrategy(strategy, isRemoteSync);
     refreshStrategyLibrary();
-
   };
 
   // Sincronização de terminal (Ciclo 12): o "Importar tudo" do Estúdio devolve o config ativo
@@ -4079,6 +4093,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const requireToken = Boolean(payload.data?.requireToken);
 
             setMt5State((prev) => ({ ...prev, bridgeAuthOk: ok, bridgeArmed: armed, bridgeLegacy: !requireToken }));
+            if (payload.data?.armed !== undefined) {
+              const serverArmed = Boolean(payload.data.armed);
+              setConfig((prev) => (prev.active === serverArmed ? prev : { ...prev, active: serverArmed, lastSavedTimestamp: Date.now() }));
+              setReplayOperates(serverArmed);
+            }
 
             if (!ok) {
 
@@ -4229,6 +4248,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const armed = Boolean(payload.data?.armed);
 
             setMt5State((prev) => ({ ...prev, bridgeArmed: armed }));
+            setConfig((prev) => (prev.active === armed ? prev : { ...prev, active: armed, lastSavedTimestamp: Date.now() }));
+            setReplayOperates(armed);
+            try {
+              saasChannelRef.current?.postMessage({ type: 'ROBOT_ARMED_SYNC', armed });
+            } catch {}
 
             setLatestToast({
 
@@ -4236,17 +4260,43 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               type: armed ? 'BUY' : 'INFO',
 
-              title: armed ? '🟢 PONTE ARMADA' : '🔒 PONTE EM SEGURO',
+              title: armed ? '🟢 ROBÔ ARMADO (SINCRONIZADO)' : '🔒 ROBÔ EM SEGURO (SINCRONIZADO)',
 
               description: armed
 
-                ? 'A ponte do MT5 liberou as ordens de entrada.'
+                ? 'A ponte do MT5 liberou as ordens de entrada em todos os dispositivos.'
 
-                : 'A ponte do MT5 vai recusar ordens de entrada. Saídas e "zerar terminal" seguem liberados.',
+                : 'A ponte do MT5 pausou as entradas em todos os dispositivos. Saídas e zeragem seguem liberadas.',
 
               timestamp: Date.now(),
 
             });
+
+          } else if (payload.type === 'STRATEGY_SYNC_BROADCAST') {
+
+            const stratName = payload.data?.profileName;
+            const remoteCfg = payload.data?.config;
+            if (stratName && stratName !== activeStrategyName) {
+              const library = StrategyLibraryService.list();
+              const existing = library.find((s) => s.name.toLowerCase() === stratName.toLowerCase());
+              if (existing) {
+                handleActivateStrategy(existing, true);
+              } else if (remoteCfg) {
+                handleApplyConfigBundle(remoteCfg, stratName, true);
+              } else {
+                const preset = builtInPresets.find((p) => p.name.toLowerCase() === stratName.toLowerCase());
+                if (preset) {
+                  handleApplyConfigBundle(preset.config, preset.name, true);
+                }
+              }
+              setLatestToast({
+                id: `strat-sync-${Date.now()}`,
+                type: 'INFO',
+                title: '🔄 ESTRATÉGIA SINCRONIZADA',
+                description: `Terminal sincronizado com o servidor: "${stratName}".`,
+                timestamp: Date.now(),
+              });
+            }
 
           } else if (payload.type === 'REPLAY_MODE_RESULT') {
 
@@ -8010,6 +8060,21 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           });
 
+          setReplayOperates(active);
+
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            try {
+              wsRef.current.send(JSON.stringify({ action: active ? 'ARM' : 'DISARM' }));
+            } catch {}
+          }
+
+          try {
+            saasChannelRef.current?.postMessage({
+              type: 'ROBOT_ARMED_SYNC',
+              armed: active
+            });
+          } catch {}
+
           // Ligar o Robô é um comando manual do operador — e sem ticks ele ficaria "ativo"
 
           // olhando tela congelada (a regra de boot parado abriu esse buraco): em simulação,
@@ -8080,7 +8145,26 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           <div className="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md border border-slate-700/80 bg-slate-900/95 shadow-sm">
             {/* Botão OPERA (Simulação Paper Trading com ticks reais) */}
             <button
-              onClick={() => setReplayOperates((v) => !v)}
+              onClick={() => {
+                const nextVal = !replayOperates;
+                setReplayOperates(nextVal);
+                setConfig((prev) => {
+                  const updated = { ...prev, active: nextVal, lastSavedTimestamp: Date.now() };
+                  EaConfigService.saveConfig(updated);
+                  return updated;
+                });
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  try {
+                    wsRef.current.send(JSON.stringify({ action: nextVal ? 'ARM' : 'DISARM' }));
+                  } catch {}
+                }
+                try {
+                  saasChannelRef.current?.postMessage({
+                    type: 'ROBOT_ARMED_SYNC',
+                    armed: nextVal
+                  });
+                } catch {}
+              }}
               className={`px-2 py-0.5 rounded text-[10.5px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
                 replayOperates
                   ? 'border-emerald-500 bg-emerald-950/90 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.25)]'
