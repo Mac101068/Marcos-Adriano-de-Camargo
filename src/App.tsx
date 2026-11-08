@@ -6517,32 +6517,34 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     if (isReplaying) return;
 
-    // Instala o marco de início desta corrida (relógio de parede): o ledger isola as ORDENS REAIS
-
-    // desta rodada por este piso. Sombra e coletor são zerados abaixo, então entram por snapshot.
-
+    // Instala o marco de início desta corrida: ledger e PnL da sessão zeram completamente
+    // para não carregar resultados anteriores nem mascarar a validação.
     roundStartTsRef.current = Date.now();
+    sessionStartRef.current = Date.now();
 
     // Tempo mínimo de uma corrida: 1 dia inteiro (nunca "só alguns minutos")
-
     const replayTargetDays = Math.max(1, Math.min(10, Math.round(days)));
-
     setReplayDays(replayTargetDays);
 
     // O replay derruba os gráficos e o coletor e começa um pregão DO ZERO: as ordens antigas
-
-    // ficariam flutuando sobre barras que não existem mais, então zeramos tudo junto (livro de
-
-    // auditoria + posições + PnL da sessão). Com o MT5 conectado NADA é apagado — lá a posição é
-
-    // real na corretora e o replay sintético não tem autoridade sobre ela.
-
-    if (replayOperates) {
-      OrderAuditService.clearIntradayAudit(asset.id);
-      setOrders([]);
-    }
+    // e o resultado financeiro da sessão são integralmente zerados em cada nova rodada.
+    OrderAuditService.clearIntradayAudit(asset.id);
+    setOrders([]);
     shadowRobotService.resetBook();
     seriesCollectorService.reset();
+    setRealBacktestResult(null);
+
+    // Limpa imediatamente o gráfico e séries na tela
+    setTicks([]);
+    setBoxes([]);
+    setSessionGaps([]);
+    setCurrentBox(null);
+    setCvd(0);
+    setRangeBoxes([]);
+    setRangeCurrentBox(null);
+    setTimeBoxes([]);
+    setTimeCurrentBox(null);
+    allTicksRef.current = [];
 
     // Modo OPERA agora sempre liberado no Replay em modo Paper Trading (sem envio à corretora)
     const operate = replayOperates;
@@ -7643,6 +7645,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // Limpeza de robôs em memória contra contaminação cruzada entre ativos (WIN vs WDO)
     shadowRobotService.resetBook();
     seriesCollectorService.reset();
+    sessionStartRef.current = Date.now();
 
     const live = orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT');
     if (live.length > 0) {
