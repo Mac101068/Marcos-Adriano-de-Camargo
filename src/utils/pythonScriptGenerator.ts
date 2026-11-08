@@ -1232,7 +1232,7 @@ async def ws_handler(websocket):
                 # último pregão — sem depender de tick novo (fim de semana, mercado fechado).
                 if REQUIRE_AUTH and not state["authenticated"]:
                     continue
-                await handle_backfill(websocket, str(data.get("symbol") or SYMBOL), data.get("days") or BACKFILL_DAYS)
+                await handle_backfill(websocket, str(data.get("symbol") or SYMBOL), data.get("days") or BACKFILL_DAYS, box_points_override=float(data.get("boxPoints") or 0))
                 continue
 
             if action == "LIST_LOCAL_PREGOES":
@@ -1533,7 +1533,15 @@ def _ultimo_pregao_janela(symbol=None):
     try:
         sym = symbol or SYMBOL
         tz_br = timezone(timedelta(hours=-3))
-        # 1. Consulta ultrarrápida da barra diária (em <1ms em vez de puxar milhões de ticks)
+        # 1. symbol_info_tick: timestamp do último tick real do contrato (ultra rápido e preciso)
+        last_tick = mt5.symbol_info_tick(sym)
+        if last_tick is not None and getattr(last_tick, 'time', 0) > 0:
+            dia = datetime.fromtimestamp(int(last_tick.time), tz_br).date()
+            start = datetime(dia.year, dia.month, dia.day, 9, 0, tzinfo=tz_br)
+            end = datetime(dia.year, dia.month, dia.day, 18, 0, tzinfo=tz_br)
+            return start, end, f"ultimo pregao tick {dia.isoformat()}"
+
+        # 2. Barra diária D1
         rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_D1, 0, 1)
         if rates is not None and len(rates) > 0:
             dia = datetime.fromtimestamp(int(rates[0]['time']), timezone.utc).astimezone(tz_br).date()
@@ -1541,15 +1549,7 @@ def _ultimo_pregao_janela(symbol=None):
             end = datetime(dia.year, dia.month, dia.day, 18, 0, tzinfo=tz_br)
             return start, end, f"ultimo pregao D1 {dia.isoformat()}"
 
-        # 2. Se não houver barra D1, pega o último tick via symbol_info_tick (instantâneo)
-        last_tick = mt5.symbol_info_tick(sym)
-        if last_tick is not None and getattr(last_tick, 'time', 0) > 0:
-            dia = datetime.fromtimestamp(int(last_tick.time), timezone.utc).astimezone(tz_br).date()
-            start = datetime(dia.year, dia.month, dia.day, 9, 0, tzinfo=tz_br)
-            end = datetime(dia.year, dia.month, dia.day, 18, 0, tzinfo=tz_br)
-            return start, end, f"ultimo pregao tick {dia.isoformat()}"
-
-        # 3. Fallback seguro: últimos 5 ticks (nunca range de 10 dias)
+        # 3. Fallback seguro: últimos 5 ticks
         now = datetime.now(timezone.utc)
         probe = mt5.copy_ticks_from(sym, now - timedelta(days=10), 5, mt5.COPY_TICKS_TRADE)
         if probe is not None and len(probe) > 0:
@@ -1565,11 +1565,10 @@ def _ultimo_pregao_janela(symbol=None):
         return None, None, str(exc)
 
 
-async def handle_backfill(websocket, symbol, days):
+async def handle_backfill(websocket, symbol, days, box_points_override=0):
     """Gráfico ao conectar: manda as barras do último pregão e os boxes Renko já formados.
-    É dado de MERCADO (nenhuma ordem), então a única trava é o token. Sem tick no período
-    (mercado fechado) responde com o que existe — e, se não houver nada, avisa em vez de
-    ficar em silêncio."""
+    Reconstrói com máxima fidelidade e velocidade (<50ms) usando as barras M1 do dia inteiro
+    para garantir histórico completo das 09:00 às 18:00 em WIN, WDO e BIT."""
     try:
         days = max(1, min(HISTORY_MAX_DAYS, int(days or BACKFILL_DAYS)))
     except (TypeError, ValueError):
@@ -1596,56 +1595,39 @@ async def handle_backfill(websocket, symbol, days):
                 "volume": int(b['tick_volume']),
             })
 
-    # Boxes Renko do ÚLTIMO PREGÃO INTEIRO (regra do operador: o gráfico abre com o dia completo,
-    # parado). Reconstrói pelo caminho real dos ticks do dia — mesma regra do loop vivo — e só cai
-    # nas barras de 1 min se o terminal não tiver tick desse dia.
     day_start, day_end, tick_source = await asyncio.to_thread(_ultimo_pregao_janela, symbol)
-    raw_day_ticks = None
-    if day_start is not None:
-        raw_day_ticks = await asyncio.to_thread(mt5.copy_ticks_range, symbol, day_start, day_end, mt5.COPY_TICKS_TRADE)
+    day_bars = None
+    if day_start is not None and day_end is not None:
+        day_bars = await asyncio.to_thread(mt5.copy_rates_range, symbol, mt5.TIMEFRAME_M1, day_start, day_end)
 
-    # ESCALA DO BOX POR ATIVO: 50 pts é o padrão do WIN. No WDO (tick 0,5) 50 pts nunca fecharia
-    # um tijolo e o gráfico abria vazio. Usa 10R do contrato (WIN 50, WDO 5).
-    box_pts = BOX_POINTS
+    # Box points: prioriza o que o operador pediu na tela (ex: 50 no WIN, 2.5 ou 5 no WDO)
+    box_pts = float(box_points_override) if box_points_override and float(box_points_override) > 0 else BOX_POINTS
     _info = mt5.symbol_info(symbol)
-    if _info is not None:
+    if box_pts <= 0 and _info is not None:
         _tick = float(_info.trade_tick_size or _info.point or 1)
         if _tick > 0:
-            _sugerido = _tick * 10
-            if _sugerido > 0 and (_sugerido < BOX_POINTS or BOX_POINTS > _tick * 200):
-                box_pts = _sugerido
+            box_pts = _tick * 10
+    if box_pts <= 0:
+        box_pts = 50.0
+
     engine = RenkoFlowEngine(box_points=box_pts)
-    print(f"[BACKFILL] motor Renko com box de {box_pts} pts para {symbol}")
+    print(f"[BACKFILL] motor Renko com box de {box_pts} pts para {symbol} ({tick_source})")
     seq = 0
-    boxes_fonte = "TICKS"
-    if raw_day_ticks is not None and len(raw_day_ticks) > 0:
-        prev_price = None
-        ticks_to_process = raw_day_ticks[-60000:] if len(raw_day_ticks) > 60000 else raw_day_ticks
-        for raw in ticks_to_process:
-            price = float(raw['last'] if 'last' in raw.dtype.names else raw[1])
-            if price <= 0:
-                price = float(raw['bid'] if 'bid' in raw.dtype.names else 0) or price
-            if price <= 0:
-                continue
-            vol = int(raw['volume']) if 'volume' in raw.dtype.names else 1
-            try:
-                bid = float(raw['bid']); ask = float(raw['ask'])
-            except Exception:
-                bid = ask = 0.0
-            flags = raw['flags'] if 'flags' in raw.dtype.names else 0
-            aggressor = classify_aggressor(price, bid, ask, flags, prev_price)
-            prev_price = price
-            seq += 1
-            engine.process_tick(price, max(1, vol), aggressor, int(raw['time_msc']))
-    else:
-        boxes_fonte = "BARS"
-        for b in bars_payload:
-            o, h, l, c = b["open"], b["high"], b["low"], b["close"]
+    boxes_fonte = "M1_PREGAO"
+    bars_source = day_bars if (day_bars is not None and len(day_bars) > 0) else bars
+    if bars_source is not None and len(bars_source) > 0:
+        for b in bars_source:
+            o = float(b['open']) if 'open' in b.dtype.names else float(b['open'])
+            h = float(b['high']) if 'high' in b.dtype.names else float(b['high'])
+            l = float(b['low']) if 'low' in b.dtype.names else float(b['low'])
+            c = float(b['close']) if 'close' in b.dtype.names else float(b['close'])
             up = c >= o
             path = [o, h, l, c] if up else [o, l, h, c]
+            vol = int(b['tick_volume']) if 'tick_volume' in b.dtype.names else 1
+            t_ms = int(b['time']) * 1000 if 'time' in b.dtype.names else 0
             for price in path:
                 seq += 1
-                engine.process_tick(price, max(1, b["volume"] // 4), "BUY" if up else "SELL", (b["time"] * 1000) + seq)
+                engine.process_tick(price, max(1, vol // 4), "BUY" if up else "SELL", t_ms + seq)
 
     boxes_payload = engine.boxes[-BACKFILL_MAX_BOXES:]
     current = engine.current_box

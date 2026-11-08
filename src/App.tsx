@@ -1656,7 +1656,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ action: 'SET_BOX_POINTS', boxPoints: config.boxPoints, symbol: chartSymbolFor(asset) }));
       if (hist.length === 0) {
-        wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset) }));
+        wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), boxPoints: config.boxPoints }));
       }
     }
   }, [config.boxPoints]);
@@ -4047,7 +4047,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         try {
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
           socket.send(EaConfigService.buildBridgeSyncMessage(config));
-          socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset) }));
+          socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), boxPoints: config.boxPoints }));
           socket.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(asset) }));
         } catch {}
 
@@ -7342,7 +7342,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       }));
       // O backfill é por contrato: ao trocar de ativo, o gráfico novo precisa do próprio pregão
       // (o Dólar não recebia nada porque o pedido saía com o símbolo do ativo anterior).
-      wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(next) }));
+      wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(next), boxPoints: (next.id === 'WDO' ? getAssetTradeParams('WDO').boxPoints : (next.id === 'WIN' ? getAssetTradeParams('WIN').boxPoints : config.boxPoints)) }));
       wsRef.current.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(next) }));
     }
 
