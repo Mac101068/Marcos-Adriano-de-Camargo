@@ -1,7 +1,7 @@
 import { TradeOrder } from '../types/trading';
 import { PaperTrade, SeriesKey } from '../utils/paperStrategyBot';
 import type { HistoryMeta, VolumeSource } from './marketHistoryService';
-import type { AssetId } from '../assets/assetRegistry';
+import { type AssetId, ASSETS } from '../assets/assetRegistry';
 
 /**
  * LEDGER DE RODADAS — auditoria por corrida de replay (Ciclo 15).
@@ -206,10 +206,19 @@ export function buildRound(input: BuildRoundInput): RoundRecord {
   // conectado as posições reais NÃO são zeradas na largada — só entram as abertas nesta corrida).
   const withinWallClock = (ts: number | undefined) => (ts ?? 0) >= roundStartTs;
 
+  // Sanitizador de coerência de preço: descarta trades órfãos contaminados de outro ativo
+  // (ex: trades de dólar ~5.000 pts entrando em rodada de WIN ~170.000 pts).
+  const spec = ASSETS[input.assetId];
+  const isPriceSane = (p?: number): boolean => {
+    if (p === undefined || !Number.isFinite(p) || p <= 0) return false;
+    if (!spec) return true;
+    return Math.abs(p - spec.basePrice) / spec.basePrice < 0.45;
+  };
+
   const actions: RoundAction[] = [];
 
   // ---- Livro REAL (Robô 1 EA + boleta manual + MT5) ------------------------------------------
-  const realThisRound = input.realOrders.filter((o) => withinWallClock(o.timestamp));
+  const realThisRound = input.realOrders.filter((o) => withinWallClock(o.timestamp) && isPriceSane(o.entryPrice));
   const counts: RoundCounts = { robot: 0, manual: 0, mt5: 0, shadow: 0, collector: 0, total: 0 };
   let bookWins = 0;
   let bookLosses = 0;
@@ -263,8 +272,8 @@ export function buildRound(input: BuildRoundInput): RoundRecord {
     });
   }
 
-  // ---- Robô 2 (sombra) — snapshot inteiro (o replay zerou o livro no clique) ----------------
-  const shadowThisRound = input.shadowTrades;
+  // ---- Robô 2 (sombra) — snapshot do replay (filtrado contra contaminação de outro ativo) ----
+  const shadowThisRound = input.shadowTrades.filter((t) => isPriceSane(t.entryPrice));
   counts.shadow = shadowThisRound.length;
   for (const t of shadowThisRound) {
     const closed = t.exitTime !== undefined;
@@ -286,10 +295,10 @@ export function buildRound(input: BuildRoundInput): RoundRecord {
     });
   }
 
-  // ---- Coletor (6 séries em papel) — snapshot inteiro (o replay zerou os contadores) ---------
+  // ---- Coletor (6 séries em papel) — snapshot do replay (filtrado contra contaminação) -------
   const collectorTradesAll: PaperTrade[] = [];
   for (const { series, trades } of input.collectorTrades) {
-    const inRound = trades;
+    const inRound = trades.filter((t) => isPriceSane(t.entryPrice));
     collectorTradesAll.push(...inRound);
     counts.collector += inRound.length;
     for (const t of inRound) {

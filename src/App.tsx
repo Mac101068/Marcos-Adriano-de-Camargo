@@ -6301,8 +6301,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       if (mt5State.status !== 'CONNECTED' || !socket || socket.readyState !== WebSocket.OPEN) {
 
         // Sem ponte, ainda assim podemos tocar REAL: o banco local guarda a fita dos pulls
-        // conectados anteriores. Só caímos no sintético se não houver NADA real capturado.
-        const bank = realTapeService.loadMostRecent(daysToRequest);
+        // conectados anteriores (isolado por ativo para nunca misturar WIN e WDO).
+        // Só caímos no sintético se não houver NADA real capturado deste ativo.
+        const bank = realTapeService.loadMostRecent(daysToRequest, asset.id);
 
         if (bank && bank.ticks.length > 0) {
 
@@ -6344,8 +6345,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           };
         }
 
-        // Banca a fita real: daqui pra frente o replay pode tocá-la mesmo sem ponte.
-        realTapeService.save(res.ticks, res.volumeSource);
+        // Banca a fita real: daqui pra frente o replay pode tocá-la mesmo sem ponte (particionado por ativo).
+        realTapeService.save(res.ticks, res.volumeSource, asset.id);
 
         const sufficiency = MarketHistoryService.assessSufficiency(res.ticks);
 
@@ -6541,6 +6542,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       setOrders([]);
     }
     shadowRobotService.resetBook();
+    seriesCollectorService.reset();
 
     // Modo OPERA agora sempre liberado no Replay em modo Paper Trading (sem envio à corretora)
     const operate = replayOperates;
@@ -7543,6 +7545,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       engine.setAsset(activeAsset);
       sim.setAsset(activeAsset);
       ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].setAsset(activeAsset));
+      shadowRobotService.resetBook();
+      seriesCollectorService.reset();
     }
 
     sim.setPrice(reference);
@@ -7635,6 +7639,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       currentState.allTicks = [...allTicksRef.current];
     }
     OrderAuditService.saveIntradayOrders(orders, asset.id);
+
+    // Limpeza de robôs em memória contra contaminação cruzada entre ativos (WIN vs WDO)
+    shadowRobotService.resetBook();
+    seriesCollectorService.reset();
 
     const live = orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT');
     if (live.length > 0) {
@@ -7774,12 +7782,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         assetId: id,
         symbol: chartSymbolFor(next),
         boxPoints: assetParams.boxPoints,
-        stopLossPoints: assetParams.stopLossPoints,
-        takeProfitPoints: assetParams.takeProfitPoints,
-        partialPoints: assetParams.partialPoints,
-        breakevenOffsetPoints: assetParams.breakevenOffsetPoints,
-        trailingDistancePoints: assetParams.trailingDistancePoints,
-        minDeltaThreshold: assetParams.minDeltaThreshold,
       });
     }
 

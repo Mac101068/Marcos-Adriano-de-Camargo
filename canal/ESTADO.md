@@ -10,8 +10,9 @@ código, fato do operador se registra, 15 min e assume).
 ```
 mac     · IDLE. Motor da C/V entregue e no main (1156eee). Aguardando o JSON do simulador
           do operador para ler o resultado do dólar.
-windows · App.tsx + AutomationPanel.tsx · desde 18:05 (trava escrita)
-          4 portas no caminho do simulador/replay; C/V lendo stopLossPoints
+windows · App.tsx + realTapeService.ts + roundAuditService.ts
+          Inconsistência WIN/WDO blindada: isolamento de banco de fita por ativo,
+          limpeza de robôs/coletor na troca de ativo e sanitizador de cotação no ledger.
 ```
 
 ## FEITO E NO MAIN (para não pedirmos de novo)
