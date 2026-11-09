@@ -4349,6 +4349,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               bridgeEnvLock: payload.data?.travaAmbiente ?? prev.bridgeEnvLock,
 
+              dayStats: payload.data?.dayStats ?? prev.dayStats,
+
               ...(!authResultSeen ? { bridgeAuthOk: true, bridgeLegacy: true } : {}),
 
             }));
@@ -7908,17 +7910,32 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
     );
 
-    const realizedProfit = closed.reduce((a, o) => a + Math.max(0, o.financialResult || 0), 0);
-    const realizedLoss = closed.reduce((a, o) => a + Math.min(0, o.financialResult || 0), 0);
+    const localRealizedProfit = closed.reduce((a, o) => a + Math.max(0, o.financialResult || 0), 0);
+    const localRealizedLoss = closed.reduce((a, o) => a + Math.min(0, o.financialResult || 0), 0);
     const buy = sideBook('BUY');
     const sell = sideBook('SELL');
 
     const traded = orders.filter((o) => o.status !== 'PENDING_LIMIT' && o.timestamp >= sessionStartRef.current);
 
-    const buyContractsToday = traded.filter((o) => o.type === 'BUY').reduce((a, o) => a + (o.contracts || 1), 0);
-    const sellContractsToday = traded.filter((o) => o.type === 'SELL').reduce((a, o) => a + (o.contracts || 1), 0);
+    const localBuyContractsToday = traded.filter((o) => o.type === 'BUY').reduce((a, o) => a + (o.contracts || 1), 0);
+    const localSellContractsToday = traded.filter((o) => o.type === 'SELL').reduce((a, o) => a + (o.contracts || 1), 0);
 
-    const dayPnl = realizedProfit + realizedLoss + buy.liveBRL + buy.partialBRL + sell.liveBRL + sell.partialBRL;
+    // Quando conectado ao MetaTrader 5, os contratos negociados e o resultado realizado
+    // são buscados DIRETAMENTE do MT5 (history_deals oficial da corretora), sem depender
+    // de registros locais na memória do navegador.
+    const isRealMT5 = mt5State.status === 'CONNECTED' && !isReplaying && !isSimulating;
+    const mt5Stats = isRealMT5 ? mt5State.dayStats : undefined;
+
+    const buyContractsToday = mt5Stats ? mt5Stats.buyContractsToday : localBuyContractsToday;
+    const sellContractsToday = mt5Stats ? mt5Stats.sellContractsToday : localSellContractsToday;
+    const contractsTodayTotal = mt5Stats ? mt5Stats.totalContractsToday : (buyContractsToday + sellContractsToday);
+    const realizedProfit = mt5Stats ? mt5Stats.realizedProfit : localRealizedProfit;
+    const realizedLoss = mt5Stats ? mt5Stats.realizedLoss : localRealizedLoss;
+
+    const floatingTotal = (buy.liveBRL + buy.partialBRL + sell.liveBRL + sell.partialBRL);
+    const dayPnl = mt5Stats
+      ? (mt5Stats.netRealized + (mt5State.floatingProfit !== undefined ? mt5State.floatingProfit : floatingTotal))
+      : (realizedProfit + realizedLoss + floatingTotal);
 
     return {
       buy,
@@ -7928,9 +7945,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       dayPnl,
       buyContractsToday,
       sellContractsToday,
-      contractsTodayTotal: buyContractsToday + sellContractsToday,
+      contractsTodayTotal,
     };
-  }, [orders, currentPrice, asset, mt5State.status, isReplaying, isSimulating]);
+  }, [orders, currentPrice, asset, mt5State.status, mt5State.dayStats, mt5State.floatingProfit, isReplaying, isSimulating]);
 
 
 

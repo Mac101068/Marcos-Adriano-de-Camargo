@@ -388,6 +388,15 @@ export interface MT5ConnectionState {
   marginFree?: number;
   deals?: MT5Deal[];
   positions?: MT5Position[];
+  dayStats?: {
+    buyContractsToday: number;
+    sellContractsToday: number;
+    totalContractsToday: number;
+    realizedProfit: number;
+    realizedLoss: number;
+    netRealized: number;
+    dealsCount: number;
+  };
   isHedgeAccount?: boolean;
   lastError?: string;
   /** A ponte aceitou o token no handshake AUTH? undefined = ainda sem resposta */
