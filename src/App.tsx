@@ -4185,6 +4185,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     };
   }, [mt5State.status]);
 
+  const handleIncomingTickRef = useRef(handleIncomingTick);
+  handleIncomingTickRef.current = handleIncomingTick;
+
   // Conexão WebSocket com o MetaTrader 5 (Local Bridge)
   const toggleMT5Connect = useCallback((manualAction?: 'CONNECT' | 'DISCONNECT', isRemoteSync?: boolean) => {
     // Quem ligar esta função direto em onClick (sem arrow) recebe o MouseEvent como primeiro
@@ -4192,24 +4195,53 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // "toggle", senão o botão de desconectar passa reto no ramo de CONNECT e abre outra ponte.
     const pedido = manualAction === 'CONNECT' || manualAction === 'DISCONNECT' ? manualAction : undefined;
 
-    if (!isRemoteSync) {
-      const actionToBroadcast = pedido ?? ((mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING') ? 'DISCONNECT' : 'CONNECT');
-      try {
-        saasChannelRef.current?.postMessage({
-          type: 'MT5_CONNECT_SYNC',
-          action: actionToBroadcast
-        });
-      } catch {}
-    }
-
     if (pedido === 'DISCONNECT' || (pedido === undefined && (mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING'))) {
       userDisconnectedRef.current = true;
+      if (!isRemoteSync) {
+        try {
+          saasChannelRef.current?.postMessage({
+            type: 'MT5_CONNECT_SYNC',
+            action: 'DISCONNECT'
+          });
+        } catch {}
+      }
       if (wsRef.current) {
-        wsRef.current.close();
+        const oldWs = wsRef.current;
+        wsRef.current = null;
+        oldWs.onopen = null;
+        oldWs.onmessage = null;
+        oldWs.onerror = null;
+        oldWs.onclose = null;
+        try { oldWs.close(1000, 'User disconnect'); } catch {}
       }
       setMt5State({ status: 'DISCONNECTED' });
       addConnectionLog('INFO', 'WEBSOCKET', 'Desconexão manual solicitada pelo operador.');
       return;
+    }
+
+    // Evita abrir conexões duplicadas/órfãs se já houver um socket ativo ou conectando
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    if (!isRemoteSync) {
+      try {
+        saasChannelRef.current?.postMessage({
+          type: 'MT5_CONNECT_SYNC',
+          action: 'CONNECT'
+        });
+      } catch {}
+    }
+
+    // Limpa qualquer socket residual antes de criar um novo
+    if (wsRef.current) {
+      const staleWs = wsRef.current;
+      wsRef.current = null;
+      staleWs.onopen = null;
+      staleWs.onmessage = null;
+      staleWs.onerror = null;
+      staleWs.onclose = null;
+      try { staleWs.close(); } catch {}
     }
 
     userDisconnectedRef.current = false;
@@ -4232,7 +4264,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       const socket = new WebSocket(wsUrl);
       wsRef.current = socket;
 
-        socket.onopen = () => {
+      socket.onopen = () => {
+        if (wsRef.current !== socket) return;
         addConnectionLog('SUCCESS', 'WEBSOCKET', `Conexão WebSocket aberta com sucesso em ${wsUrl}. Realizando autenticação e subscrição...`);
         try {
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
@@ -4274,6 +4307,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       let authResultSeen = false;
 
       socket.onmessage = (event) => {
+        if (wsRef.current !== socket) return;
         try {
           const payload = JSON.parse(event.data);
 
@@ -4821,7 +4855,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   allTicksRef.current = targetState.allTicks;
                 }
                 // Processa o tick no motor principal, fita, robô e ordens (sem chamada duplicada)
-                handleIncomingTick(rawTick);
+                handleIncomingTickRef.current(rawTick);
               } else if (targetState) {
                 // Ativo secundário em background: processa em memória silenciosamente com as regras e escala DELE
                 targetState.ticks = [rawTick, ...targetState.ticks.slice(0, 99)];
@@ -5057,6 +5091,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
       socket.onerror = () => {
+        if (wsRef.current !== socket) return;
         const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
         const msg = isHttps
           ? `Ambiente HTTPS (AI Studio / Nuvem): os navegadores bloqueiam comunicação direta com o MT5 local do seu computador (Mixed Content). No AI Studio, utilize o modo Replay ou acesse http://localhost:3000 no seu PC para feed ao vivo!`
@@ -5079,6 +5114,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       };
 
       socket.onclose = (event) => {
+        if (wsRef.current !== socket) return;
+        wsRef.current = null;
         marketHistoryService.dispose();
         setConnDisconnectCount((c) => c + 1);
         setCurrentLatency(null);
@@ -5118,7 +5155,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     }
 
-  }, [config.mt5Host, config.mt5Port, config.active, mt5State.status, handleIncomingTick, handleBackfillTicks]);
+  }, [config.mt5Host, config.mt5Port, config.active, mt5State.status]);
 
 
 
@@ -5158,7 +5195,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       if (!userDisconnectedRef.current && mt5State.status === 'DISCONNECTED') {
 
-        toggleMT5Connect('CONNECT');
+        toggleMT5ConnectRef.current?.('CONNECT', true);
 
       }
 
@@ -5168,7 +5205,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     return () => clearTimeout(timer);
 
-  }, [mt5State.status, toggleMT5Connect]);
+  }, [mt5State.status]);
 
 
 
