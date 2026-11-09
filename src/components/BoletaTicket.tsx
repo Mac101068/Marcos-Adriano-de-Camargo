@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronUp, Pin, PinOff, Eye } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronUp, Pin, PinOff, Eye, Focus } from 'lucide-react';
 import { TradeOrder } from '../types/trading';
 import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, formatPrice, pointsToBRL, snapToTick } from '../assets/assetRegistry';
 
@@ -128,6 +128,10 @@ interface BoletaTicketProps {
   onContractsChange?: (v: number) => void;
   /** Alteração do Risco em R$ (sincroniza com Stop Loss em pontos). */
   onRiskBRLChange?: (v: number) => void;
+  /** Auto-Fit / Centralizar gráfico no preço ao vivo */
+  onFitChart?: () => void;
+  /** Gráfico deslocado ou fora do centro do tempo real */
+  isChartShifted?: boolean;
 }
 
 const brl = (v: number) =>
@@ -320,6 +324,8 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
   onBreakevenTriggerChange,
   onBreakevenLockChange,
   onRiskBRLChange,
+  onFitChart,
+  isChartShifted = false,
 }) => {
   const [pinned, setPinned] = useState<boolean>(false);
   const [hovered, setHovered] = useState<boolean>(false);
@@ -386,6 +392,20 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
         className="absolute z-30 pointer-events-auto select-none flex items-center justify-end gap-1"
         style={{ right: rightOffset, top: BOLETA_TOP }}
       >
+        {onFitChart && (
+          <button
+            onClick={onFitChart}
+            className={`flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md border backdrop-blur-md shadow-xl pointer-events-auto cursor-pointer transition-colors ${
+              isChartShifted
+                ? 'bg-sky-500/25 text-sky-200 border-sky-500/60 shadow-[0_0_8px_rgba(56,189,248,0.3)]'
+                : 'bg-zinc-950/92 border-zinc-700/80 text-zinc-400 hover:text-white hover:border-zinc-600'
+            }`}
+            title="Auto-Fit: centralizar gráfico no preço e voltar ao tempo real"
+            aria-label="Centralizar gráfico no preço"
+          >
+            <Focus className="w-3.5 h-3.5" />
+          </button>
+        )}
         {onToggleChartTools && gearBtn}
         <button
           onClick={() => onOpenChange(true)}
@@ -433,11 +453,26 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           conexão do cabeçalho e nos títulos dos botões COMPRA/VENDA desta caixa. */}
       <div className="flex items-center gap-1.5 px-2 h-7 border-b border-zinc-800/80">
         <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">Boleta</span>
+        {/* Ícone de Auto-Fit / Centralizar Preço */}
+        {onFitChart && (
+          <button
+            onClick={onFitChart}
+            className={`ml-auto p-0.5 cursor-pointer transition-colors ${
+              isChartShifted
+                ? 'text-sky-400 hover:text-sky-200 animate-pulse'
+                : 'text-zinc-500 hover:text-zinc-200'
+            }`}
+            title="Auto-Fit: centralizar gráfico no preço e voltar ao tempo real"
+            aria-label="Centralizar gráfico no preço"
+          >
+            <Focus className="w-3 h-3" />
+          </button>
+        )}
         {/* Ícone de olho dos ajustes de visualização: colado na linha da boleta, à esquerda do sininho. */}
         {onToggleChartTools && (
           <button
             onClick={onToggleChartTools}
-            className={`ml-auto p-0.5 cursor-pointer transition-colors ${
+            className={`${onFitChart ? '' : 'ml-auto '}p-0.5 cursor-pointer transition-colors ${
               chartToolsOpen ? 'text-amber-300' : 'text-zinc-500 hover:text-zinc-200'
             }`}
             title="Ajustes de visualização do gráfico: tijolos, zoom, escala do fluxo e notificações"
