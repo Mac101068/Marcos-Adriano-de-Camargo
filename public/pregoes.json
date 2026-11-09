@@ -1,334 +1,80 @@
 {
-  "generatedAt": "2026-11-05T01:11:00",
+  "generatedAt": "2026-11-09T20:00:00",
   "symbols": {
     "WINZ26": [
       {
-        "path": "data/pregoes/winz26_ticks_20261104.csv.gz",
-        "date": "2026-11-04",
-        "weekday": "Quarta",
+        "path": "historico_pregoes/WIN_20261109.csv",
+        "date": "2026-11-09",
+        "weekday": "Segunda-feira",
         "symbol": "WINZ26",
-        "sizeMb": 9.7
+        "sizeMb": 0.03
       },
       {
-        "path": "data/pregoes/winz26_ticks_20261103.csv.gz",
+        "path": "historico_pregoes/WIN_20261106.csv",
+        "date": "2026-11-06",
+        "weekday": "Sexta-feira",
+        "symbol": "WINZ26",
+        "sizeMb": 0.03
+      },
+      {
+        "path": "historico_pregoes/WIN_20261105.csv",
+        "date": "2026-11-05",
+        "weekday": "Quinta-feira",
+        "symbol": "WINZ26",
+        "sizeMb": 0.02
+      },
+      {
+        "path": "historico_pregoes/WIN_20261104.csv",
+        "date": "2026-11-04",
+        "weekday": "Quarta-feira",
+        "symbol": "WINZ26",
+        "sizeMb": 0.02
+      },
+      {
+        "path": "historico_pregoes/WIN_20261103.csv",
         "date": "2026-11-03",
-        "weekday": "Terça",
+        "weekday": "Terça-feira",
         "symbol": "WINZ26",
-        "sizeMb": 10.1
+        "sizeMb": 0.02
       },
       {
-        "path": "data/pregoes/winz26_ticks_20261030.csv.gz",
+        "path": "historico_pregoes/WIN_20261030.csv",
         "date": "2026-10-30",
-        "weekday": "Sexta",
+        "weekday": "Sexta-feira",
         "symbol": "WINZ26",
-        "sizeMb": 10.3
+        "sizeMb": 0.03
       },
       {
-        "path": "data/pregoes/winz26_ticks_20261029.csv.gz",
+        "path": "historico_pregoes/WIN_20261029.csv",
         "date": "2026-10-29",
-        "weekday": "Quinta",
+        "weekday": "Quinta-feira",
         "symbol": "WINZ26",
-        "sizeMb": 10.7
+        "sizeMb": 0.02
       },
       {
-        "path": "data/pregoes/winz26_ticks_20261028.csv.gz",
+        "path": "historico_pregoes/WIN_20261028.csv",
         "date": "2026-10-28",
-        "weekday": "Quarta",
+        "weekday": "Quarta-feira",
         "symbol": "WINZ26",
-        "sizeMb": 12.3
+        "sizeMb": 0.02
       },
       {
-        "path": "data/pregoes/winz26_ticks_20261027.csv.gz",
+        "path": "historico_pregoes/WIN_20261027.csv",
         "date": "2026-10-27",
-        "weekday": "Terça",
+        "weekday": "Terça-feira",
         "symbol": "WINZ26",
-        "sizeMb": 10.9
+        "sizeMb": 0.02
       },
       {
-        "path": "data/pregoes/winz26_ticks_20261026.csv.gz",
+        "path": "historico_pregoes/WIN_20261026.csv",
         "date": "2026-10-26",
-        "weekday": "Segunda",
+        "weekday": "Segunda-feira",
         "symbol": "WINZ26",
-        "sizeMb": 12.3
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261023.csv.gz",
-        "date": "2026-10-23",
-        "weekday": "Sexta",
-        "symbol": "WINZ26",
-        "sizeMb": 9.9
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261022.csv.gz",
-        "date": "2026-10-22",
-        "weekday": "Quinta",
-        "symbol": "WINZ26",
-        "sizeMb": 9.3
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261021.csv.gz",
-        "date": "2026-10-21",
-        "weekday": "Quarta",
-        "symbol": "WINZ26",
-        "sizeMb": 9.0
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261020.csv.gz",
-        "date": "2026-10-20",
-        "weekday": "Terça",
-        "symbol": "WINZ26",
-        "sizeMb": 10.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261019.csv.gz",
-        "date": "2026-10-19",
-        "weekday": "Segunda",
-        "symbol": "WINZ26",
-        "sizeMb": 9.8
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261016.csv.gz",
-        "date": "2026-10-16",
-        "weekday": "Sexta",
-        "symbol": "WINZ26",
-        "sizeMb": 9.9
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261015.csv.gz",
-        "date": "2026-10-15",
-        "weekday": "Quinta",
-        "symbol": "WINZ26",
-        "sizeMb": 10.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261014.csv.gz",
-        "date": "2026-10-14",
-        "weekday": "Quarta",
-        "symbol": "WINZ26",
-        "sizeMb": 10.1
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261013.csv.gz",
-        "date": "2026-10-13",
-        "weekday": "Terça",
-        "symbol": "WINZ26",
-        "sizeMb": 1.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261009.csv.gz",
-        "date": "2026-10-09",
-        "weekday": "Sexta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.8
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261008.csv.gz",
-        "date": "2026-10-08",
-        "weekday": "Quinta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.6
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261007.csv.gz",
-        "date": "2026-10-07",
-        "weekday": "Quarta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261006.csv.gz",
-        "date": "2026-10-06",
-        "weekday": "Terça",
-        "symbol": "WINZ26",
-        "sizeMb": 0.7
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261005.csv.gz",
-        "date": "2026-10-05",
-        "weekday": "Segunda",
-        "symbol": "WINZ26",
-        "sizeMb": 0.7
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261002.csv.gz",
-        "date": "2026-10-02",
-        "weekday": "Sexta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.7
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20261001.csv.gz",
-        "date": "2026-10-01",
-        "weekday": "Quinta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260930.csv.gz",
-        "date": "2026-09-30",
-        "weekday": "Quarta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260929.csv.gz",
-        "date": "2026-09-29",
-        "weekday": "Terça",
-        "symbol": "WINZ26",
-        "sizeMb": 0.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260928.csv.gz",
-        "date": "2026-09-28",
-        "weekday": "Segunda",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260925.csv.gz",
-        "date": "2026-09-25",
-        "weekday": "Sexta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260924.csv.gz",
-        "date": "2026-09-24",
-        "weekday": "Quinta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260923.csv.gz",
-        "date": "2026-09-23",
-        "weekday": "Quarta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260922.csv.gz",
-        "date": "2026-09-22",
-        "weekday": "Terça",
-        "symbol": "WINZ26",
-        "sizeMb": 0.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260921.csv.gz",
-        "date": "2026-09-21",
-        "weekday": "Segunda",
-        "symbol": "WINZ26",
-        "sizeMb": 0.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260918.csv.gz",
-        "date": "2026-09-18",
-        "weekday": "Sexta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260917.csv.gz",
-        "date": "2026-09-17",
-        "weekday": "Quinta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260916.csv.gz",
-        "date": "2026-09-16",
-        "weekday": "Quarta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260915.csv.gz",
-        "date": "2026-09-15",
-        "weekday": "Terça",
-        "symbol": "WINZ26",
-        "sizeMb": 0.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260914.csv.gz",
-        "date": "2026-09-14",
-        "weekday": "Segunda",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260911.csv.gz",
-        "date": "2026-09-11",
-        "weekday": "Sexta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260910.csv.gz",
-        "date": "2026-09-10",
-        "weekday": "Quinta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.6
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260909.csv.gz",
-        "date": "2026-09-09",
-        "weekday": "Quarta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260908.csv.gz",
-        "date": "2026-09-08",
-        "weekday": "Terça",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260904.csv.gz",
-        "date": "2026-09-04",
-        "weekday": "Sexta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260903.csv.gz",
-        "date": "2026-09-03",
-        "weekday": "Quinta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260902.csv.gz",
-        "date": "2026-09-02",
-        "weekday": "Quarta",
-        "symbol": "WINZ26",
-        "sizeMb": 0.4
-      },
-      {
-        "path": "data/pregoes/winz26_ticks_20260901.csv.gz",
-        "date": "2026-09-01",
-        "weekday": "Terça",
-        "symbol": "WINZ26",
-        "sizeMb": 0.5
+        "sizeMb": 0.02
       }
     ],
-    "WDOZ26": [
-      {
-        "path": "data/pregoes/wdoz26_ticks_20261104.csv.gz",
-        "date": "2026-11-04",
-        "weekday": "Quarta",
-        "symbol": "WDOZ26",
-        "sizeMb": 0.74
-      }
-    ],
-    "BITX26": [
-      {
-        "path": "data/pregoes/bitx26_ticks_20261104.csv.gz",
-        "date": "2026-11-04",
-        "weekday": "Quarta",
-        "symbol": "BITX26",
-        "sizeMb": 0.81
-      }
-    ],
+    "WDOZ26": [],
+    "BITX26": [],
     "BIT$": []
   }
 }

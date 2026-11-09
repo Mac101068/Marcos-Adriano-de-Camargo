@@ -607,13 +607,23 @@ export default function App() {
       };
     }, [asset]);
 
-  const [selectedPregaoDate, setSelectedPregaoDate] = useState<string | null>(null);
-  const [selectedPregaoValue, setSelectedPregaoValue] = useState<string>('days:1');
-
   const currentAssetPregoes = useMemo(() => {
     const sym = chartSymbolFor(asset).toUpperCase();
-    return localPregoes.filter((p) => p.symbol.toUpperCase() === sym || sym.startsWith(p.symbol.toUpperCase().slice(0, 3)));
+    return localPregoes
+      .filter((p) => p.symbol.toUpperCase() === sym || sym.startsWith(p.symbol.toUpperCase().slice(0, 3)))
+      .slice(0, 10);
   }, [localPregoes, asset]);
+
+  const [selectedPregaoDate, setSelectedPregaoDate] = useState<string | null>(null);
+  const [selectedPregaoValue, setSelectedPregaoValue] = useState<string>('');
+
+  useEffect(() => {
+    if (currentAssetPregoes.length > 0 && !selectedPregaoDate) {
+      const first = currentAssetPregoes[0];
+      setSelectedPregaoDate(first.date);
+      setSelectedPregaoValue(`date:${first.date}`);
+    }
+  }, [currentAssetPregoes, selectedPregaoDate]);
 
   const getPregaoCompactCode = (val: string): string => {
     if (val.startsWith('date:')) {
@@ -623,11 +633,7 @@ export default function App() {
       const parts = d.split('-');
       return `Flow (${parts[2]}/${parts[1]})`;
     }
-    if (val.startsWith('days:')) {
-      const days = val.replace('days:', '');
-      return `Flow ${days}D`;
-    }
-    return 'Flow1';
+    return currentAssetPregoes.length > 0 ? 'Flow1' : 'Flow';
   };
 
   // "Replay opera": durante a reprodução cada tick passa pelo MESMO caminho do feed ao vivo
@@ -2434,7 +2440,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
           // =========================================================================
 
-          if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
+          if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE' || config.strategyMode === 'SIGNAL_STACK') {
 
             setOrders((prev) => {
 
@@ -2558,7 +2564,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               // Apenas se o robô estiver ativo e dentro do horário configurado
 
-              if (!config.active && !(isReplaying && replayOperates)) {
+              if (!config.active && !(isReplayingRef.current && replayOperates)) {
 
                 return updatedPrev;
 
@@ -3063,7 +3069,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 // nada: disparava ordem até com o Robô desligado ou fora da janela.
 
-                if (!config.active) return prev;
+                if (!config.active && !(isReplayingRef.current && replayOperates)) return prev;
 
                 if (!isWithinTradingWindow(tick.timestamp, config)) return prev;
 
@@ -4213,7 +4219,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     },
 
-    [config, mt5State.status, chartSeries, rangePoints, timeframeSec]
+    [config, mt5State.status, chartSeries, rangePoints, timeframeSec, replayOperates]
 
   );
 
@@ -8209,8 +8215,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // Ordens fechadas da sessão: DEVEM PERMANECER VISÍVEIS após o encerramento do replay
     // (para permitir a análise e auditoria na boleta), sendo zeradas apenas ao iniciar
     // um novo replay ou com o retorno do mercado real (MT5 conectado).
+    const isReplayOrPaper = isReplaying || isSimulating || orders.some((o) => !o.isRealMT5);
+
     const closed = orders.filter(
-      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
+      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (isReplayOrPaper || (o.exitTimestamp ?? 0) >= sessionStartRef.current)
     );
 
     const localRealizedProfit = closed.reduce((a, o) => a + Math.max(0, o.financialResult || 0), 0);
@@ -8218,15 +8226,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     const buy = sideBook('BUY');
     const sell = sideBook('SELL');
 
-    const traded = orders.filter((o) => o.status !== 'PENDING_LIMIT' && o.timestamp >= sessionStartRef.current);
+    const traded = orders.filter((o) => o.status !== 'PENDING_LIMIT' && (isReplayOrPaper || o.timestamp >= sessionStartRef.current));
 
     const localBuyContractsToday = traded.filter((o) => o.type === 'BUY').reduce((a, o) => a + (o.contracts || 1), 0);
     const localSellContractsToday = traded.filter((o) => o.type === 'SELL').reduce((a, o) => a + (o.contracts || 1), 0);
 
-    // Quando conectado ao MetaTrader 5, os contratos negociados e o resultado realizado
-    // são buscados DIRETAMENTE do MT5 (history_deals oficial da corretora), sem depender
-    // de registros locais na memória do navegador.
-    const isRealMT5 = mt5State.status === 'CONNECTED' && !isReplaying && !isSimulating;
+    // Quando conectado ao MetaTrader 5 SEM estar em replay e apenas com ordens reais de mercado:
+    // os contratos e o resultado são buscados do MT5. Caso contrário, usamos a auditoria local.
+    const isRealMT5 = mt5State.status === 'CONNECTED' && !isReplaying && !isSimulating && orders.every((o) => o.isRealMT5);
     const mt5Stats = isRealMT5 ? mt5State.dayStats : undefined;
 
     const buyContractsToday = mt5Stats ? mt5Stats.buyContractsToday : localBuyContractsToday;
@@ -8917,17 +8924,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     const d = val.replace('date:', '');
                     setSelectedPregaoDate(d);
                     changeReplayDays(1);
-                  } else {
-                    const d = Number(val.replace('days:', '')) || 1;
-                    setSelectedPregaoDate(null);
-                    changeReplayDays(d);
                   }
                 }}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                title="Escolha o pregão gravado da base ou período acumulado para o replay"
+                title="Escolha o pregão dos últimos 10 dias para o replay"
               >
                 {currentAssetPregoes.length > 0 && (
-                  <optgroup label={`── 📂 PREGÕES GRAVADOS (${chartSymbolFor(asset)}) ──`} className="bg-slate-950 font-bold text-emerald-400">
+                  <optgroup label={`── 📂 ÚLTIMOS 10 PREGÕES (${chartSymbolFor(asset)}) ──`} className="bg-slate-950 font-bold text-emerald-400">
                     {currentAssetPregoes.map((p, idx) => (
                       <option key={p.date} value={`date:${p.date}`} className="bg-slate-900 text-slate-100 font-normal">
                         Flow{idx + 1} · {p.date.split('-').reverse().join('/')} ({p.weekday}) · {p.sizeMb.toLocaleString('pt-BR')} MB
@@ -8935,13 +8938,6 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     ))}
                   </optgroup>
                 )}
-                <optgroup label="── ⏱️ PERÍODOS AGREGADOS ──" className="bg-slate-950 font-bold text-sky-400">
-                  <option value="days:1" className="bg-slate-900 text-slate-100">Flow 1D · Hoje (Mais recente)</option>
-                  <option value="days:2" className="bg-slate-900 text-slate-100">Flow 2D · Ontem (Penúltimo)</option>
-                  <option value="days:3" className="bg-slate-900 text-slate-100">Flow 3D · Últimos 3 pregões</option>
-                  <option value="days:5" className="bg-slate-900 text-slate-100">Flow 5D · Últimos 5 pregões</option>
-                  <option value="days:10" className="bg-slate-900 text-slate-100">Flow 10D · Últimos 10 pregões</option>
-                </optgroup>
               </select>
             </div>
           </div>
