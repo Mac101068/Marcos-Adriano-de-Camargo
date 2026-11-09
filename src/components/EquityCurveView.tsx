@@ -107,6 +107,10 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
     const sevenDaysMs = 7 * oneDayMs;
 
     return mt5State.deals.filter((d) => {
+      // Prioriza negócios com resultado financeiro (lucro/prejuízo de saída ou reversão)
+      const hasTradeResult = (d.profit !== undefined && d.profit !== 0) || (d as any).entry === 1 || (d as any).entry === 2;
+      if (!hasTradeResult) return false;
+
       if (mt5PeriodFilter === 'TODAY') {
         const dDate = new Date(d.time);
         const nowDate = new Date(now);
@@ -716,13 +720,13 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
               <div className="text-right">
                 <span className="text-[10px] uppercase text-slate-400 block">Saldo em Conta</span>
                 <span className="font-bold text-slate-100 text-sm">
-                  R$ {(mt5State?.balance ?? 1049074).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  R$ {(mt5State?.balance ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </span>
               </div>
               <div className="text-right">
                 <span className="text-[10px] uppercase text-slate-400 block">Patrimônio Líquido</span>
                 <span className="font-bold text-emerald-400 text-sm">
-                  R$ {(mt5State?.equity ?? 1049074).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  R$ {(mt5State?.equity ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </span>
               </div>
               <div className="text-right">
