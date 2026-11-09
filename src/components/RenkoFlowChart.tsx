@@ -27,10 +27,12 @@ import { DadosPanelWindow } from './DadosPanelWindow';
 import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
 import { DrawingToolbar } from './DrawingToolbar';
-import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff } from 'lucide-react';
+import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff, Activity } from 'lucide-react';
+import { calculateFlowCycles, getFlowCycleSummary } from '../utils/flowCycleOscillator';
 
 const getStorageKeyScales = (assetId?: string) => `fluxo_renko_chart_scales_${assetId || 'WIN'}_v3`;
-const STORAGE_KEY_FLOW_MODE = 'fluxo_renko_flow_mode_v1';
+const STORAGE_KEY_FLOW_MODE = 'fluxo_renko_flow_mode_v2';
+const STORAGE_KEY_SHOW_FLOW = 'fluxo_renko_show_flow_subwindow_v1';
 // v2: migra quem estava preso em 'compact' (meia tela) para o novo padrão 'fill' (tela inteira)
 const STORAGE_KEY_SPACING_MODE = 'fluxo_renko_spacing_mode_v2';
 // v3: janela inicial de ~1 dia COM folga (250) para o dia de contexto estático e a linha
@@ -459,17 +461,27 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     }
   }, [chartShift]);
 
-  // Modo de exibição do painel de fluxo: Heikin-Ashi (solicitado), Histograma Delta tradicional ou Híbrido
-  const [flowViewMode, setFlowViewMode] = useState<'heikin_ashi' | 'histogram' | 'hybrid'>(() => {
+  // Visibilidade da subjanela de fluxo (Oscilador de Ciclos / Heikin-Ashi / Delta)
+  const [showFlowPane, setShowFlowPane] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SHOW_FLOW);
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
+  // Modo de exibição da subjanela: Oscilador de Ciclos de Fluxo, Heikin-Ashi, Delta ou Híbrido
+  const [flowViewMode, setFlowViewMode] = useState<'cycles' | 'heikin_ashi' | 'histogram' | 'hybrid'>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_FLOW_MODE);
-      if (saved === 'histogram' || saved === 'hybrid' || saved === 'heikin_ashi') {
+      if (saved === 'cycles' || saved === 'histogram' || saved === 'hybrid' || saved === 'heikin_ashi') {
         return saved;
       }
     } catch (e) {
       // Ignora
     }
-    return 'heikin_ashi'; // Padrão Heikin-Ashi solicitado
+    return 'cycles'; // Padrão: Oscilador Quantitativo de Ciclos de Fluxo
   });
 
   // Estados de interação e arrasto
@@ -729,6 +741,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     return d > 0 ? 'UP' : 'DOWN';
   }, [activeBox, allBoxes, minDeltaThreshold]);
 
+  // Pontos quantitativos do Oscilador de Ciclos de Fluxo calculados para os boxes visíveis
+  const flowCyclePoints = useMemo(() => calculateFlowCycles(allBoxes), [allBoxes]);
+  const flowCycleSummary = useMemo(() => getFlowCycleSummary(flowCyclePoints), [flowCyclePoints]);
+
   // =========================================================================
   // RENDERIZAÇÃO DO CANVAS: RENKO (escala da config) & FLUXO HEIKIN-ASHI
   // =========================================================================
@@ -753,9 +769,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const isMobile = width < 640;
 
-    // Layout dos painéis: Preço (topo) e Janela de Fluxo (base com divisor ajustável)
-    const clampedFlowRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
-    const flowPaneHeight = height * clampedFlowRatio;
+    // Layout dos painéis: Preço (topo) e Janela de Fluxo (base com divisor ajustável, se ativa)
+    const clampedFlowRatio = showFlowPane ? Math.max(0.18, Math.min(0.55, flowPaneRatio)) : 0;
+    const flowPaneHeight = showFlowPane ? height * clampedFlowRatio : 0;
     const pricePaneHeight = height - flowPaneHeight;
     const rightAxisWidth = isMobile ? 46 : 64;
     const chartWidth = width - rightAxisWidth;
@@ -842,37 +858,39 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.restore();
     }
 
-    // Divisor interativo de painel (arrastável) — mesmo acabamento do divisor do histograma
-    const mainDividerActive =
-      dragMode === 'DIVIDER' ||
-      (mousePos !== null && Math.abs(mousePos.y - pricePaneHeight) <= 7 && mousePos.x < plotRight);
+    // Divisor interativo de painel (arrastável) — desenhado apenas se a subjanela estiver visível
+    if (showFlowPane && flowPaneHeight > 0) {
+      const mainDividerActive =
+        dragMode === 'DIVIDER' ||
+        (mousePos !== null && Math.abs(mousePos.y - pricePaneHeight) <= 7 && mousePos.x < plotRight);
 
-    ctx.strokeStyle = mainDividerActive ? 'rgba(52, 211, 153, 0.65)' : '#27272a';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, pricePaneHeight);
-    ctx.lineTo(width, pricePaneHeight);
-    ctx.stroke();
-
-    // Marcador central no divisor indicando que é redimensionável por arrasto
-    const handleW = isMobile ? 34 : 48;
-    const handleH = mainDividerActive ? 5 : 4;
-    const handleX = lineRight / 2 - handleW / 2;
-    const handleY = pricePaneHeight - handleH / 2;
-    ctx.fillStyle = mainDividerActive ? '#10b981' : '#27272a';
-    ctx.beginPath();
-    ctx.roundRect(handleX, handleY, handleW, handleH, 2.5);
-    ctx.fill();
-    ctx.strokeStyle = mainDividerActive ? 'rgba(16, 185, 129, 0.8)' : '#52525b';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // 3 pontos no puxador
-    ctx.fillStyle = mainDividerActive ? '#ecfdf5' : '#a1a1aa';
-    for (let d = -1; d <= 1; d++) {
+      ctx.strokeStyle = mainDividerActive ? 'rgba(52, 211, 153, 0.65)' : '#27272a';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(lineRight / 2 + d * (isMobile ? 7 : 10), pricePaneHeight, 1.1, 0, Math.PI * 2);
+      ctx.moveTo(0, pricePaneHeight);
+      ctx.lineTo(width, pricePaneHeight);
+      ctx.stroke();
+
+      // Marcador central no divisor indicando que é redimensionável por arrasto
+      const handleW = isMobile ? 34 : 48;
+      const handleH = mainDividerActive ? 5 : 4;
+      const handleX = lineRight / 2 - handleW / 2;
+      const handleY = pricePaneHeight - handleH / 2;
+      ctx.fillStyle = mainDividerActive ? '#10b981' : '#27272a';
+      ctx.beginPath();
+      ctx.roundRect(handleX, handleY, handleW, handleH, 2.5);
       ctx.fill();
+      ctx.strokeStyle = mainDividerActive ? 'rgba(16, 185, 129, 0.8)' : '#52525b';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // 3 pontos no puxador
+      ctx.fillStyle = mainDividerActive ? '#ecfdf5' : '#a1a1aa';
+      for (let d = -1; d <= 1; d++) {
+        ctx.beginPath();
+        ctx.arc(lineRight / 2 + d * (isMobile ? 7 : 10), pricePaneHeight, 1.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // Etiquetas dos painéis, no mesmo padrão das subfaixas de fluxo. A do preço sobe para logo acima
@@ -883,16 +901,29 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.fillStyle = '#d4d4d8';
       const pricePaneLabel =
         chartSeries === 'range' ? 'PREÇO · RANGE' : chartSeries === 'tempo' ? 'PREÇO · TEMPO' : 'PREÇO · RENKO';
-      ctx.fillText(pricePaneLabel, 53, pricePaneHeight - TIME_AXIS_BAND_H - 4);
-      // No Heikin-Ashi a própria subfaixa já vem rotulada logo abaixo, então só rotula o
-      // painel de fluxo nos modos onde ele ocupa a janela inteira. A etiqueta senta na folga do
-      // topo: a régua de tempo não mora mais aí, o indicador é dono da janela.
-      if (flowViewMode !== 'heikin_ashi') {
-        ctx.fillText(
-          flowViewMode === 'histogram' ? 'AGRESSÃO' : 'FLUXO · HÍBRIDO',
-          53,
-          pricePaneHeight + FLOW_TOP_PAD - 4
-        );
+      ctx.fillText(pricePaneLabel, 53, pricePaneHeight - (showFlowPane ? TIME_AXIS_BAND_H + 4 : 8));
+      
+      if (showFlowPane && flowPaneHeight > 0) {
+        if (flowViewMode === 'cycles') {
+          ctx.font = 'bold 9.5px "Plus Jakarta Sans", sans-serif';
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillText('🌊 CICLOS DE FLUXO', 53, pricePaneHeight + FLOW_TOP_PAD - 4);
+          if (flowCycleSummary) {
+            ctx.font = 'bold 9px "Plus Jakarta Sans", sans-serif';
+            ctx.fillStyle = flowCycleSummary.currentValue >= 0 ? '#34d399' : '#f87171';
+            ctx.fillText(
+              `· ${flowCycleSummary.phaseLabel} (${flowCycleSummary.currentValue > 0 ? '+' : ''}${flowCycleSummary.currentValue}%)`,
+              175,
+              pricePaneHeight + FLOW_TOP_PAD - 4
+            );
+          }
+        } else if (flowViewMode !== 'heikin_ashi') {
+          ctx.fillText(
+            flowViewMode === 'histogram' ? 'AGRESSÃO' : 'FLUXO · HÍBRIDO',
+            53,
+            pricePaneHeight + FLOW_TOP_PAD - 4
+          );
+        }
       }
     }
 
@@ -1322,6 +1353,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
     flowViewRef.current = { bandH: haBandHeight, range: effectiveHaRange };
 
+    // Mapeamento Y do Oscilador de Ciclos de Fluxo (-100 a +100%)
+    const cycleCenterY = flowTopMargin + usableFlowHeight / 2 + flowPanOffset * 0.1;
+    const cycleUsableH = Math.max(10, usableFlowHeight / 2 - 4);
+    const cycleToY = (val: number) => cycleCenterY - (val / 100) * cycleUsableH;
+
     // =======================================================================
     // GRADE DINÂMICA DE PREÇOS (EIXO Y ADAPTATIVO POR ATIVO)
     // =======================================================================
@@ -1430,6 +1466,51 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               ? `${lastHa.close > 0 ? '+' : ''}${(lastHa.close / 1000).toFixed(1)}k`
               : `${lastHa.close > 0 ? '+' : ''}${Math.round(lastHa.close)}`;
           ctx.fillText(valStr, chartWidth + rightAxisWidth / 2, lastHaY + 3.5);
+        }
+      }
+    }
+
+    if (showFlowPane && flowViewMode === 'cycles') {
+      const cycleLevels = [
+        { val: 50, label: '+50', color: 'rgba(52, 211, 153, 0.35)', textColor: '#34d399' },
+        { val: 0, label: '0', color: '#3f3f46', textColor: '#a1a1aa' },
+        { val: -50, label: '-50', color: 'rgba(244, 63, 94, 0.35)', textColor: '#f87171' },
+      ];
+
+      ctx.font = isMobile ? '7.5px "JetBrains Mono", monospace' : '8.5px "JetBrains Mono", monospace';
+
+      cycleLevels.forEach((lv) => {
+        const y = cycleToY(lv.val);
+        if (y >= flowTopMargin - 2 && y <= flowTopMargin + usableFlowHeight + 2) {
+          ctx.strokeStyle = lv.color;
+          ctx.setLineDash(lv.val === 0 ? [4, 4] : [2, 4]);
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(lineRight, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          ctx.fillStyle = lv.textColor;
+          ctx.textAlign = 'center';
+          ctx.fillText(lv.label, chartWidth + rightAxisWidth / 2, y + 3);
+        }
+      });
+
+      // Badge com o valor atual do ciclo na régua lateral
+      if (flowCycleSummary) {
+        const curY = cycleToY(flowCycleSummary.currentValue);
+        if (curY >= flowTopMargin && curY <= flowTopMargin + usableFlowHeight + 5) {
+          const isBuy = flowCycleSummary.currentValue >= 0;
+          ctx.fillStyle = isBuy ? '#059669' : '#dc2626';
+          ctx.beginPath();
+          ctx.roundRect(chartWidth + 1, curY - 7, rightAxisWidth - 2, 14, 2);
+          ctx.fill();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
+          ctx.textAlign = 'center';
+          const sign = flowCycleSummary.currentValue > 0 ? '+' : '';
+          ctx.fillText(`${sign}${flowCycleSummary.currentValue}%`, chartWidth + rightAxisWidth / 2, curY + 3.5);
         }
       }
     }
@@ -2017,12 +2098,95 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.roundRect(left, topY, boxWidth, candleH, 1.5);
           ctx.fill();
           ctx.stroke();
+        }
+      }
 
+      // 3. Oscilador de Ciclos de Fluxo: Histograma de aceleração da onda e marcadores de absorção
+      if (showFlowPane && flowViewMode === 'cycles') {
+        const cp = flowCyclePoints[i];
+        if (cp) {
+          const zeroY = cycleToY(0);
+          const histY = cycleToY(cp.histogram);
+          const barTop = Math.min(zeroY, histY);
+          const barHeight = Math.max(1.5, Math.abs(histY - zeroY));
+          const isPosHist = cp.histogram >= 0;
+
+          ctx.fillStyle = isPosHist ? 'rgba(16, 185, 129, 0.45)' : 'rgba(239, 68, 68, 0.45)';
+          const hWidth = Math.max(2, boxWidth * 0.45);
+          ctx.fillRect(centerX - hWidth / 2, barTop, hWidth, barHeight);
+
+          // Marcador de Divergência / Absorção no Extremo
+          if (cp.divergence === 'BEARISH_ABSORPTION') {
+            const dotY = cycleToY(cp.oscillator) - 6;
+            ctx.fillStyle = '#fbbf24'; // Dourado
+            ctx.beginPath();
+            ctx.arc(centerX, dotY, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (cp.divergence === 'BULLISH_ABSORPTION') {
+            const dotY = cycleToY(cp.oscillator) + 6;
+            ctx.fillStyle = '#38bdf8'; // Ciano
+            ctx.beginPath();
+            ctx.arc(centerX, dotY, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
       ctx.restore();
     });
     ctx.restore();
+
+    // Curva contínua do Oscilador de Ciclos de Fluxo e Linha de Sinal
+    if (showFlowPane && flowViewMode === 'cycles' && flowCyclePoints.length > 1) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, flowTopMargin, lineRight, usableFlowHeight + 10);
+      ctx.clip();
+
+      // Linha de Sinal (EMA-5 suave em violeta)
+      ctx.strokeStyle = 'rgba(167, 139, 250, 0.7)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      let startedSignal = false;
+      for (let i = 0; i < flowCyclePoints.length; i++) {
+        const x = xs[i];
+        if (x === undefined || x < -30 || x > lineRight + 30) continue;
+        const y = cycleToY(flowCyclePoints[i].signal);
+        if (!startedSignal) {
+          ctx.moveTo(x, y);
+          startedSignal = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+
+      // Curva Principal do Oscilador (segmentos coloridos dinâmicos)
+      ctx.lineWidth = 2.2;
+      for (let i = 1; i < flowCyclePoints.length; i++) {
+        const x0 = xs[i - 1];
+        const x1 = xs[i];
+        if (x0 === undefined || x1 === undefined) continue;
+        if (x1 < -30 || x0 > lineRight + 30) continue;
+
+        const pt = flowCyclePoints[i];
+        const y0 = cycleToY(flowCyclePoints[i - 1].oscillator);
+        const y1 = cycleToY(pt.oscillator);
+
+        ctx.strokeStyle = pt.divergence === 'BEARISH_ABSORPTION'
+          ? '#fbbf24'
+          : pt.divergence === 'BULLISH_ABSORPTION'
+          ? '#38bdf8'
+          : pt.oscillator >= 0
+          ? '#10b981'
+          : '#f43f5e';
+
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     boxPositionsRef.current = boxPositions;
 
@@ -2621,7 +2785,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           ctx.font = isMobile ? 'bold 7.5px "JetBrains Mono"' : 'bold 8.5px "JetBrains Mono"';
           ctx.textAlign = 'center';
 
-          if (flowViewMode === 'heikin_ashi' || flowViewMode === 'hybrid') {
+          if (flowViewMode === 'cycles') {
+            const hoveredVal = Math.round(-((mousePos.y - cycleCenterY) / cycleUsableH) * 100);
+            const clampedVal = Math.max(-100, Math.min(100, hoveredVal));
+            const sign = clampedVal > 0 ? '+' : '';
+            ctx.fillText(`${sign}${clampedVal}%`, chartWidth + rightAxisWidth / 2, mousePos.y + 3.5);
+          } else if (flowViewMode === 'heikin_ashi' || flowViewMode === 'hybrid') {
             const pct = (height - 14 - mousePos.y) / (flowPaneHeight - 28);
             const hoveredFlow = Math.round(effectiveMinFlowHa + pct * effectiveHaRange);
             const sign = hoveredFlow > 0 ? '+' : '';
@@ -2760,11 +2929,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     const isMobile = canvasW < 640;
     const rightAxisWidth = isMobile ? 46 : 64;
     const chartW = canvasW - rightAxisWidth;
-    const clampedRatio = Math.max(0.18, Math.min(0.55, flowPaneRatio));
-    const flowPaneH = canvasH * clampedRatio;
+    const clampedRatio = showFlowPane ? Math.max(0.18, Math.min(0.55, flowPaneRatio)) : 0;
+    const flowPaneH = showFlowPane ? canvasH * clampedRatio : 0;
     const pricePaneH = canvasH - flowPaneH;
     // Mesma conta do desenho: folga do topo do fluxo (etiqueta) + margem inferior 16
-    const usableFlowH = Math.max(40, flowPaneH - FLOW_TOP_PAD - 16);
+    const usableFlowH = showFlowPane ? Math.max(40, flowPaneH - FLOW_TOP_PAD - 16) : 0;
     const clampedSplit = Math.max(0.3, Math.min(0.85, haHistSplit));
     const haBandH = flowViewMode === 'heikin_ashi' ? usableFlowH * clampedSplit : usableFlowH;
     return {
@@ -3521,6 +3690,28 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               <span className="text-zinc-500 tabular-nums">{priceLevels.length}</span>
             </button>
           )}
+
+          {/* Botão de Controle da Subjanela de Ciclos / Fluxo */}
+          <button
+            type="button"
+            onClick={() => {
+              setShowFlowPane((prev) => {
+                const next = !prev;
+                try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, String(next)); } catch {}
+                return next;
+              });
+            }}
+            className={`flex items-center gap-1 px-2 h-[22px] rounded border font-sans text-[10px] font-bold cursor-pointer transition-all ${
+              showFlowPane
+                ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300 hover:bg-emerald-900/80 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
+                : 'bg-zinc-900 border-zinc-700/80 text-zinc-400 hover:text-zinc-200'
+            }`}
+            title={showFlowPane ? 'Subjanela de Ciclos ATIVA — clique para recolher (gráfico em tela cheia)' : 'Subjanela de Ciclos INATIVA — clique para abrir'}
+          >
+            <Activity className="w-3 h-3 text-emerald-400" />
+            <span>CICLOS</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${showFlowPane ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-zinc-600'}`} />
+          </button>
           {/* A contagem de posições ativas migrou para a boleta (painel Hedge). Aqui só sobra a
               dica de sinal — e APENAS quando não há posição aberta, senão a tira mentiria ao
               operador com posições vivas na tela. */}
@@ -3603,6 +3794,85 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           onUpdate={handleDrawingUpdate}
           onDelete={handleDrawingDelete}
         />
+
+        {/* ========================================================================= */}
+        {/* HUD FLUTUANTE DA SUBJANELA: Seletor de Modo (Ciclos/HA/Delta) + Diagnóstico */}
+        {/* ========================================================================= */}
+        {showFlowPane && canvasSize.h > 0 && (
+          <div
+            style={{
+              top: `${Math.round(canvasSize.h * (1 - Math.max(0.18, Math.min(0.55, flowPaneRatio)))) + 5}px`,
+            }}
+            className="absolute left-2 z-20 flex items-center gap-1.5 bg-zinc-950/85 backdrop-blur-md border border-zinc-800/90 rounded-md px-2 py-0.5 text-[10px] select-none shadow-md"
+          >
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setFlowViewMode('cycles')}
+                className={`px-1.5 py-0.5 rounded cursor-pointer transition-all font-bold ${
+                  flowViewMode === 'cycles'
+                    ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 shadow-[0_0_6px_rgba(56,189,248,0.2)]'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Oscilador Quantitativo de Ciclos de Fluxo (-100 a +100%)"
+              >
+                🌊 Ciclos
+              </button>
+              <button
+                type="button"
+                onClick={() => setFlowViewMode('heikin_ashi')}
+                className={`px-1.5 py-0.5 rounded cursor-pointer transition-all font-bold ${
+                  flowViewMode === 'heikin_ashi'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Candles Heikin-Ashi de Fluxo + Histograma"
+              >
+                🕯️ Heikin-Ashi
+              </button>
+              <button
+                type="button"
+                onClick={() => setFlowViewMode('histogram')}
+                className={`px-1.5 py-0.5 rounded cursor-pointer transition-all font-bold ${
+                  flowViewMode === 'histogram'
+                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Histograma de Agressão Bruta (Delta)"
+              >
+                📊 Delta
+              </button>
+            </div>
+
+            {flowViewMode === 'cycles' && flowCycleSummary && (
+              <div className="flex items-center gap-1.5 ml-1 pl-1.5 border-l border-zinc-800 font-mono text-[9.5px]">
+                <span
+                  className={`font-bold ${
+                    flowCycleSummary.currentValue >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {flowCycleSummary.currentValue > 0 ? '+' : ''}{flowCycleSummary.currentValue}%
+                </span>
+                <span className="text-zinc-400 hidden sm:inline">
+                  {flowCycleSummary.phaseLabel}
+                </span>
+              </div>
+            )}
+
+            {/* Botão de Fechar / Recolher a Subjanela */}
+            <button
+              type="button"
+              onClick={() => {
+                setShowFlowPane(false);
+                try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, 'false'); } catch {}
+              }}
+              className="ml-1 p-0.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded cursor-pointer"
+              title="Fechar Subjanela (Expandir Gráfico para Tela Inteira)"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* ========================================================================= */}
         {/* BARRA DE DESENHO LATERAL ESQUERDA (TradingView-like, clean & flutuante)    */}

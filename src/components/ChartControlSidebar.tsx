@@ -15,7 +15,7 @@ import {
 import { DrawingTool, DrawingColor } from '../types/drawing';
 import { DrawingToolbar } from './DrawingToolbar';
 
-export type FlowViewMode = 'heikin_ashi' | 'histogram' | 'hybrid';
+export type FlowViewMode = 'cycles' | 'heikin_ashi' | 'histogram' | 'hybrid';
 export type BoxThickness = 'thin' | 'ultrathin' | 'medium';
 export type SpacingMode = 'compact' | 'fill';
 
@@ -331,6 +331,12 @@ export const ChartControlSidebar: React.FC<ChartControlSidebarProps> = ({
                 current={flowViewMode}
                 onSelect={(v) => onFlowViewMode(v as FlowViewMode)}
                 options={[
+                  {
+                    value: 'cycles',
+                    label: 'Ciclos',
+                    icon: Activity,
+                    title: 'Oscilador Quantitativo de Ciclos de Fluxo e Absorção (-100 a +100)',
+                  },
                   {
                     value: 'heikin_ashi',
                     label: 'Heikin-Ashi',
