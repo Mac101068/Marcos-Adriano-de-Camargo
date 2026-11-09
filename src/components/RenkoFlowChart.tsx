@@ -27,7 +27,7 @@ import { DadosPanelWindow } from './DadosPanelWindow';
 import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
 import { DrawingToolbar } from './DrawingToolbar';
-import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff, Activity } from 'lucide-react';
+import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff, Activity, ChevronDown, Check, Layers } from 'lucide-react';
 import { calculateFlowCycles, getFlowCycleSummary } from '../utils/flowCycleOscillator';
 
 const getStorageKeyScales = (assetId?: string) => `fluxo_renko_chart_scales_${assetId || 'WIN'}_v3`;
@@ -509,6 +509,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Painel de ajustes de exibição do gráfico (aberto pela engrenagem na linha da boleta).
   // Concentra tijolos/zoom/modo/escala do fluxo + legenda, tirando a tarima miúda sempre-visível.
   const [chartToolsOpen, setChartToolsOpen] = useState<boolean>(false);
+
+  // Menu Dropdown unificado de Indicadores no topo do gráfico
+  const [indicatorsMenuOpen, setIndicatorsMenuOpen] = useState<boolean>(false);
 
   // Preferências visuais
   const [showOrderLines, setShowOrderLines] = useState<boolean>(true);
@@ -3699,8 +3702,190 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
         <div className="flex items-center gap-1.5 shrink-0">
           {rightContent}
-          {/* Níveis do pregão: ficam ligados por padrão e este chip serve para sumir com eles
-              quando a tela estiver cheia demais. No hover, a lista completa com os preços. */}
+
+          {/* ===================================================================== */}
+          {/* PAINEL CENTRALIZADO DE INDICADORES (Dropdown Popover)                 */}
+          {/* ===================================================================== */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIndicatorsMenuOpen((prev) => !prev)}
+              className={`flex items-center gap-1 px-2 h-[22px] rounded border font-sans text-[10px] font-bold cursor-pointer transition-all ${
+                indicatorsMenuOpen
+                  ? 'bg-emerald-950 border-emerald-400 text-emerald-200 shadow-[0_0_8px_rgba(16,185,129,0.35)]'
+                  : showFlowPane || showPriceLevels
+                  ? 'bg-zinc-800/90 border-emerald-500/50 text-emerald-300 hover:text-white hover:border-emerald-400'
+                  : 'bg-zinc-900 border-zinc-700/80 text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Gerenciar Indicadores do Gráfico (Ciclos de Fluxo, Heikin-Ashi, Delta, Níveis, Linhas de Ordens)"
+            >
+              <Sliders className="w-3 h-3 text-emerald-400" />
+              <span>INDICADORES</span>
+              <span className="px-1 py-0.2 rounded-full text-[8.5px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                {(showFlowPane ? 1 : 0) + (showPriceLevels ? 1 : 0) + (showOrderLines ? 1 : 0)}
+              </span>
+              <ChevronDown className={`w-2.5 h-2.5 text-zinc-400 transition-transform ${indicatorsMenuOpen ? 'rotate-180 text-emerald-400' : ''}`} />
+            </button>
+
+            {indicatorsMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIndicatorsMenuOpen(false)}
+                />
+                <div className="absolute right-0 top-full mt-1.5 z-50 w-72 rounded-lg bg-zinc-950/95 backdrop-blur-md border border-zinc-700/90 p-3 shadow-2xl space-y-2.5 font-sans pointer-events-auto">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-zinc-800">
+                    <span className="text-xs font-bold text-zinc-100 flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                      Indicadores & Camadas
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIndicatorsMenuOpen(false)}
+                      className="p-1 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* 1. Subjanela de Fluxo / Ciclos */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Activity className="w-3.5 h-3.5 text-sky-400" />
+                        <span className="text-[11px] font-bold text-zinc-200">Subjanela de Fluxo</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowFlowPane((prev) => {
+                            const next = !prev;
+                            try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, String(next)); } catch {}
+                            return next;
+                          });
+                        }}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
+                          showFlowPane
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : 'bg-zinc-900 text-zinc-500 border-zinc-700 hover:text-zinc-300'
+                        }`}
+                      >
+                        {showFlowPane ? 'LIGADA' : 'FECHADA'}
+                      </button>
+                    </div>
+
+                    {/* Modos da Subjanela */}
+                    {showFlowPane && (
+                      <div className="grid grid-cols-3 gap-1 pl-1">
+                        <button
+                          type="button"
+                          onClick={() => setFlowViewMode('cycles')}
+                          className={`px-1.5 py-1 rounded text-[9.5px] font-bold border cursor-pointer transition-all ${
+                            flowViewMode === 'cycles'
+                              ? 'bg-sky-500/20 text-sky-300 border-sky-500/50 shadow-[0_0_6px_rgba(56,189,248,0.2)]'
+                              : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                          }`}
+                        >
+                          🌊 Ciclos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFlowViewMode('heikin_ashi')}
+                          className={`px-1.5 py-1 rounded text-[9.5px] font-bold border cursor-pointer transition-all ${
+                            flowViewMode === 'heikin_ashi'
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                              : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                          }`}
+                        >
+                          🕯️ Heikin
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFlowViewMode('histogram')}
+                          className={`px-1.5 py-1 rounded text-[9.5px] font-bold border cursor-pointer transition-all ${
+                            flowViewMode === 'histogram'
+                              ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/50'
+                              : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                          }`}
+                        >
+                          📊 Delta
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-t border-zinc-800/80 pt-2 space-y-2">
+                    {/* 2. Níveis Relevantes do Pregão */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10.5px] font-medium text-zinc-300 flex items-center gap-1.5">
+                        <span className="w-2.5 border-t border-dashed border-slate-400" />
+                        Níveis do Pregão (VWAP/Máx/Mín)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={togglePriceLevels}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
+                          showPriceLevels
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : 'bg-zinc-900 text-zinc-500 border-zinc-700'
+                        }`}
+                      >
+                        {showPriceLevels ? 'VISÍVEIS' : 'OCULTOS'}
+                      </button>
+                    </div>
+
+                    {/* 3. Linhas de Posições (SL / TP / Breakeven) */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10.5px] font-medium text-zinc-300">Linhas de Posições (SL/TP)</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowOrderLines((v) => !v)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
+                          showOrderLines
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : 'bg-zinc-900 text-zinc-500 border-zinc-700'
+                        }`}
+                      >
+                        {showOrderLines ? 'VISÍVEIS' : 'OCULTAS'}
+                      </button>
+                    </div>
+
+                    {/* 4. Marca d'Água do Ativo */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10.5px] font-medium text-zinc-300">Marca d'Água do Ativo</span>
+                      <button
+                        type="button"
+                        onClick={toggleAssetWatermark}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
+                          assetWatermark
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : 'bg-zinc-900 text-zinc-500 border-zinc-700'
+                        }`}
+                      >
+                        {assetWatermark ? 'ANEXADA' : 'OCULTA'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Atalho de Reset de Escalas (Auto-Fit) */}
+                  <div className="border-t border-zinc-800/80 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleResetAllScales();
+                        setIndicatorsMenuOpen(false);
+                      }}
+                      className="w-full h-6 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[10px] font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <span>🎯 Auto-Fit (Centralizar Gráfico e Zoom)</span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Níveis do pregão: atalho rápido na barra */}
           {priceLevels.length > 0 && (
             <button
               onClick={togglePriceLevels}
@@ -3726,7 +3911,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             </button>
           )}
 
-          {/* Botão de Controle da Subjanela de Ciclos / Fluxo */}
+          {/* Atalho rápido da Subjanela de Ciclos / Fluxo na barra */}
           <button
             type="button"
             onClick={() => {
@@ -3747,9 +3932,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             <span>CICLOS</span>
             <span className={`w-1.5 h-1.5 rounded-full ${showFlowPane ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-zinc-600'}`} />
           </button>
-          {/* A contagem de posições ativas migrou para a boleta (painel Hedge). Aqui só sobra a
-              dica de sinal — e APENAS quando não há posição aberta, senão a tira mentiria ao
-              operador com posições vivas na tela. */}
+
+          {/* Dica de sinal */}
           {openOrders.length === 0 && (
             <span className="text-zinc-500 text-[10px] hidden sm:inline">Aguardando Sinal</span>
           )}
@@ -3902,11 +4086,33 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, 'false'); } catch {}
               }}
               className="ml-1 p-0.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded cursor-pointer"
-              title="Fechar Subjanela (Expandir Gráfico para Tela Inteira)"
+              title="Fechar Subjanela de Fluxo (Você pode reabrir a qualquer momento pelo botão no rodapé ou no menu Indicadores)"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* BOTÃO RESTAURADOR: exibido no rodapé do gráfico quando a subjanela de fluxo */}
+        {/* estiver fechada, permitindo ao usuário reabri-la com 1 clique imediato.    */}
+        {/* ========================================================================= */}
+        {!showFlowPane && (
+          <button
+            type="button"
+            onClick={() => {
+              setShowFlowPane(true);
+              try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, 'true'); } catch {}
+            }}
+            className="absolute bottom-2 left-3 z-20 flex items-center gap-2 px-3 py-1.5 rounded-md bg-zinc-950/90 hover:bg-zinc-900 border border-emerald-500/60 hover:border-emerald-400 text-emerald-300 hover:text-white text-[11px] font-bold shadow-xl shadow-black/80 transition-all cursor-pointer select-none group"
+            title="Clique para reabrir a subjanela inferior de indicadores (Oscilador de Ciclos / Heikin-Ashi / Delta)"
+          >
+            <Activity className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform animate-pulse" />
+            <span>+ RESTAURAR INDICADORES (CICLOS / FLUXO)</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono uppercase">
+              {flowViewMode === 'cycles' ? 'Ciclos' : flowViewMode === 'heikin_ashi' ? 'Heikin-Ashi' : 'Delta'}
+            </span>
+          </button>
         )}
 
         {/* ========================================================================= */}
@@ -4107,6 +4313,107 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               </button>
             )}
 
+            {/* Indicadores do Gráfico & Subjanela */}
+            <div className="pt-2 border-t border-zinc-800 space-y-2">
+              <span className="text-[10px] font-bold text-zinc-300 flex items-center gap-1.5 uppercase tracking-wide">
+                <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                Indicadores do Gráfico
+              </span>
+
+              {/* Subjanela de Fluxo / Ciclos */}
+              <div className="space-y-1 bg-zinc-950/60 p-1.5 rounded border border-zinc-800/80">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold text-zinc-300">Subjanela de Ciclos / Fluxo</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowFlowPane((prev) => {
+                        const next = !prev;
+                        try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, String(next)); } catch {}
+                        return next;
+                      });
+                    }}
+                    className={`px-2 py-0.5 rounded text-[9.5px] font-bold border cursor-pointer transition-colors ${
+                      showFlowPane
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                    }`}
+                  >
+                    {showFlowPane ? 'LIGADA' : 'FECHADA'}
+                  </button>
+                </div>
+                {showFlowPane && (
+                  <div className="grid grid-cols-3 gap-1 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setFlowViewMode('cycles')}
+                      className={`py-0.5 rounded text-[9px] font-bold border cursor-pointer ${
+                        flowViewMode === 'cycles'
+                          ? 'bg-sky-500/20 text-sky-300 border-sky-500/50'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800'
+                      }`}
+                    >
+                      🌊 Ciclos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFlowViewMode('heikin_ashi')}
+                      className={`py-0.5 rounded text-[9px] font-bold border cursor-pointer ${
+                        flowViewMode === 'heikin_ashi'
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800'
+                      }`}
+                    >
+                      🕯️ Heikin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFlowViewMode('histogram')}
+                      className={`py-0.5 rounded text-[9px] font-bold border cursor-pointer ${
+                        flowViewMode === 'histogram'
+                          ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/50'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800'
+                      }`}
+                    >
+                      📊 Delta
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Níveis do Pregão */}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-semibold text-zinc-400">Níveis do Pregão (VWAP/Máx/Mín)</span>
+                <button
+                  type="button"
+                  onClick={togglePriceLevels}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
+                    showPriceLevels
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                  }`}
+                >
+                  {showPriceLevels ? 'VISÍVEIS' : 'OCULTOS'}
+                </button>
+              </div>
+
+              {/* Linhas de Ordens (SL/TP) no Gráfico */}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-semibold text-zinc-400">Linhas de Posições (SL/TP)</span>
+                <button
+                  onClick={() => setShowOrderLines((v) => !v)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
+                    showOrderLines
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                  }`}
+                  title="Exibir ou ocultar linhas de posições abertas no gráfico"
+                >
+                  {showOrderLines ? 'VISÍVEIS' : 'OCULTAS'}
+                </button>
+              </div>
+            </div>
+
             {/* Escala do fluxo (reset) */}
             <button
               onClick={() => {
@@ -4119,8 +4426,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               Escala do fluxo: {Math.round(scaleFlow * 100)}% · resetar
             </button>
 
-            {/* Marca-d'água do ativo: anexo opcional. A assinatura (sigla + série + vigente) mora
-                atrás dos tijolos; quem quer a tela limpa desanexa e a escolha fica guardada. */}
+            {/* Marca-d'água do ativo */}
             <button
               onClick={toggleAssetWatermark}
               className={`w-full h-7 rounded text-[10px] font-semibold border cursor-pointer transition-colors ${
@@ -4128,7 +4434,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                   ? 'bg-zinc-800 text-zinc-100 border-zinc-600'
                   : 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:text-zinc-300'
               }`}
-              title="Marca d'água do ativo aberto, desenhada atrás dos tijolos no painel de preço: sigla, produto e os dois códigos que definem o gráfico (série contínua e contrato vigente). Desligue para ficar só o gráfico cru."
+              title="Marca d'água do ativo aberto, desenhada atrás dos tijolos no painel de preço"
             >
               Marca d'água: {assetWatermark ? `${asset.id} anexada` : 'desanexada'}
             </button>
@@ -4162,22 +4468,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                     {orderNotifsMuted ? 'TRAVADA' : 'LIBERADA'}
                   </button>
                 )}
-              </div>
-
-              {/* Linhas de Ordens (SL/TP) no Gráfico */}
-              <div className="flex items-center justify-between pt-1 border-t border-zinc-800/60">
-                <span className="text-[10px] font-semibold text-zinc-400">Linhas de Posições (SL/TP)</span>
-                <button
-                  onClick={() => setShowOrderLines((v) => !v)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
-                    showOrderLines
-                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                      : 'bg-zinc-800 text-zinc-500 border-zinc-700'
-                  }`}
-                  title="Exibir ou ocultar linhas de posições abertas no gráfico"
-                >
-                  {showOrderLines ? 'VISÍVEIS' : 'OCULTAS'}
-                </button>
               </div>
             </div>
 
