@@ -4801,31 +4801,23 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
       socket.onerror = () => {
+        const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+        const msg = isHttps
+          ? `Ambiente HTTPS (AI Studio / Nuvem): os navegadores bloqueiam comunicação direta com o MT5 local do seu computador (Mixed Content). No AI Studio, utilize o modo Replay ou acesse http://localhost:3000 no seu PC para feed ao vivo!`
+          : `Não foi possível conectar em ${wsUrl}. Certifique-se de executar 'iniciar_ponte.bat' no seu PC.`;
 
         setMt5State({
-
           status: 'ERROR',
-
-          lastError: `Não foi possível conectar em ${wsUrl}. Certifique-se de executar 'python bot_mt5_convergencia_10r.py'`,
-
+          lastError: msg,
         });
 
         setLatestToast({
-
           id: `mt5-err-${Date.now()}`,
-
           type: 'SELL',
-
-          title: 'FALHA NA CONEXÃO COM O MT5',
-
-          description: `Execute o script 'python bot_mt5_convergencia_10r.py' no seu PC para habilitar o servidor local em ${wsUrl}.`,
-
+          title: isHttps ? 'MT5 LOCAL INDISPONÍVEL NA NUVEM' : 'FALHA NA CONEXÃO COM O MT5',
+          description: msg,
           timestamp: Date.now(),
-
         });
-
-        // Sem ponte, sem feed automático (Ciclo 12): quem quiser tela viva aperta ▶ SIM.
-
       };
 
 
