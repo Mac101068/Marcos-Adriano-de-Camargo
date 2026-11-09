@@ -5010,7 +5010,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const bfSym = String(payload.symbol || '').toUpperCase();
             const bfAssetSpec = resolveAsset(bfSym);
             const bfAssetId = bfAssetSpec.id;
-            const bfBoxPoints = Number(payload.data?.boxPoints) || config.boxPoints;
+            const bfBoxPointsRaw = Number(payload.data?.boxPoints) || (bfAssetId === 'WIN' ? 50 : config.boxPoints);
+            const bfBoxPoints = (bfAssetId === 'WIN' && bfBoxPointsRaw > 120) ? 50 : bfBoxPointsRaw;
 
             // A ponte manda os boxes do ÚLTIMO PREGÃO já formados (reconstruídos do tick real).
             // Converte o formato do Python para o RenkoBox do app e adota como estado do ativo.
@@ -5044,9 +5045,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               bfBoxes.push(bx);
             }
 
-            // Diagnóstico visível: se a ponte mandou algo e a tela não desenha, o toast diz o porquê
-            // (antes o descarte era silencioso e o operador via só "ponte conectada, gráfico vazio").
-            if (bfBoxes.length === 0) {
+            // Diagnóstico visível apenas se a ponte mandou dados corrompidos (> 0 recebidos mas 0 válidos)
+            if (bfBoxes.length === 0 && bfRecebidos > 0 && !isReplayingRef.current) {
               setBfDiag(`PONTE → ${bfSym}: ${bfRecebidos} box(es) recebido(s), NENHUM válido · box em uso ${bfBoxPoints} pts`);
             }
 
