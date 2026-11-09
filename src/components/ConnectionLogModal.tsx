@@ -373,3 +373,4 @@ export const ConnectionLogModal: React.FC<ConnectionLogModalProps> = ({
     </div>
   );
 };
+

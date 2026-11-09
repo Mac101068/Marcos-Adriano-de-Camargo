@@ -1364,8 +1364,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     flowViewRef.current = { bandH: haBandHeight, range: effectiveHaRange };
 
     // Mapeamento Y do Oscilador de Ciclos de Fluxo (-100 a +100%)
-    const cycleCenterY = flowTopMargin + usableFlowHeight / 2 + flowPanOffset * 0.1;
-    const cycleUsableH = Math.max(10, usableFlowHeight / 2 - 4);
+    // Zoom (scaleFlow) e deslocamento vertical (flowPanOffset) valem para TODAS as curvas do ciclo
+    // (principal, sinal, níveis ±50 e selo da régua), pois todas passam por cycleToY.
+    const cycleCenterY = flowTopMargin + usableFlowHeight / 2 + flowPanOffset * 0.25;
+    const cycleUsableH = Math.max(10, (usableFlowHeight / 2 - 4) * Math.max(0.2, scaleFlow));
     const cycleToY = (val: number) => cycleCenterY - (val / 100) * cycleUsableH;
 
     // =======================================================================

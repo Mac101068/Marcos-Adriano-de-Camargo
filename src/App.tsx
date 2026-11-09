@@ -1038,6 +1038,7 @@ export default function App() {
 
   // Canal de sincronização entre abas e dispositivos (SaaS Multi-Tela em tempo real)
   const saasChannelRef = useRef<BroadcastChannel | null>(null);
+  const strategyConnectAtRef = useRef<number>(0);
 
   useEffect(() => {
     if (typeof BroadcastChannel !== 'undefined') {
@@ -4235,7 +4236,18 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         addConnectionLog('SUCCESS', 'WEBSOCKET', `Conexão WebSocket aberta com sucesso em ${wsUrl}. Realizando autenticação e subscrição...`);
         try {
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
-          socket.send(EaConfigService.buildBridgeSyncMessage(config));
+          // Informa à ponte QUAL estratégia está ativa neste navegador. Sem o profileName a ponte
+          // mantinha o default dela ("Janela de Fluxo & Agressão") e o devolvia em broadcast,
+          // trocando a estratégia do operador a cada F5.
+          strategyConnectAtRef.current = Date.now();
+          try {
+            const syncMsg = JSON.parse(EaConfigService.buildBridgeSyncMessage(config));
+            const localName = activeStrategyNameRef.current;
+            if (localName) syncMsg.profileName = localName;
+            socket.send(JSON.stringify(syncMsg));
+          } catch {
+            socket.send(EaConfigService.buildBridgeSyncMessage(config));
+          }
           socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), boxPoints: config.boxPoints }));
           socket.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(asset) }));
         } catch {}
@@ -4605,7 +4617,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             const stratName = payload.data?.profileName;
             const remoteCfg = payload.data?.config;
-            if (stratName && stratName !== activeStrategyName) {
+            // Logo após (re)conectar, o broadcast da ponte pode ser só o estado padrão dela (sem
+            // config enviada por nenhum cliente): não pode sobrescrever a estratégia local.
+            const justConnected = Date.now() - strategyConnectAtRef.current < 5000;
+            if (justConnected && !remoteCfg) {
+              return;
+            }
+            if (stratName && stratName !== activeStrategyNameRef.current) {
               const library = StrategyLibraryService.list();
               const existing = library.find((s) => s.name.toLowerCase() === stratName.toLowerCase());
               if (existing) {
