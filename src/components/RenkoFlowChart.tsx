@@ -1172,6 +1172,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     let minPrice = boxMin;
     let maxPrice = boxMax;
 
+    // Se o preço atual for válido e estivermos acompanhando o pregão recente, garante que o preço atual
+    // permaneça sempre dentro da área visível do eixo Y (nunca escapando para fora da tela)
+    if (isPriceSane(currentPrice) && effectiveScroll <= Math.max(2, viewCount * 0.25)) {
+      minPrice = Math.min(minPrice, currentPrice);
+      maxPrice = Math.max(maxPrice, currentPrice);
+    }
+
     // Apenas expande a escala para ordens abertas se estiverem a até a distância máxima permitida E compatíveis com o ativo
     const maxAllowedOrderDist = asset?.id === 'WDO' ? 25 : (asset?.id === 'BTCBR' ? 1500 : 350);
     openOrders.forEach((o) => {
@@ -3794,6 +3801,21 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           onUpdate={handleDrawingUpdate}
           onDelete={handleDrawingDelete}
         />
+
+        {/* ========================================================================= */}
+        {/* BOTÃO FLUTUANTE DE SEGUIR PREÇO / CENTRALIZAR (QUANDO DESLOCADO OU HISTÓRICO) */}
+        {/* ========================================================================= */}
+        {(scrollOffset > 0.5 || Math.abs(pricePanOffset) > 10 || scaleY !== 1.0) && (
+          <button
+            type="button"
+            onClick={handleResetAllScales}
+            className="absolute right-24 top-2 z-30 flex items-center gap-1.5 px-3 py-1 rounded-full bg-sky-500/25 hover:bg-sky-500/40 text-sky-200 border border-sky-400/60 shadow-[0_0_15px_rgba(56,189,248,0.4)] backdrop-blur-md cursor-pointer transition-all text-[11px] font-bold select-none"
+            title="Clique para voltar ao tempo real e centralizar no preço atual (ou dê duplo clique no gráfico)"
+          >
+            <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping inline-block" />
+            <span className="tracking-wide">⟳ SEGUIR PREÇO AO VIVO</span>
+          </button>
+        )}
 
         {/* ========================================================================= */}
         {/* HUD FLUTUANTE DA SUBJANELA: Seletor de Modo (Ciclos/HA/Delta) + Diagnóstico */}

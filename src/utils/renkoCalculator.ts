@@ -1,7 +1,7 @@
 import { Tick, RenkoBox, AutomationConfig, SessionGap } from '../types/trading';
 import { evaluateBoxConvergence } from './convergenceEvaluator';
 import { SessionRegimeMeter } from './sessionRegime';
-import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, renkoScaleLabel, snapToTick } from '../assets/assetRegistry';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, renkoScaleLabel, snapToTick, clampBoxPoints } from '../assets/assetRegistry';
 
 /**
  * Calculador de Gráficos Atemporais:
@@ -51,7 +51,8 @@ export class RenkoFlowEngine {
   }
 
   public setBoxPoints(points: number) {
-    this.boxPoints = points;
+    const clamped = clampBoxPoints(points, this.asset);
+    this.boxPoints = clamped > 0 ? clamped : Math.max(this.asset.tickSize * 2, points);
   }
 
   /** Escala atual do motor (usada pelo Robô 2 para conferir se o motor acompanhou a escala). */

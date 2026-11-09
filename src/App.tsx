@@ -43,6 +43,7 @@ import {
   renkoScaleLabel,
 
   boxPointsForR,
+  clampBoxPoints,
 
   isStaleOrderPrice,
 
@@ -4453,8 +4454,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           } else if (payload.type === 'GLOBAL_BOX_POINTS_SYNC') {
 
             const bPts = Number(payload.data?.boxPoints);
-            if (bPts > 0) {
-              handleBoletaConfigPatchRef.current?.({ boxPoints: bPts }, true);
+            const rawSym = String(payload.data?.symbol || '').toUpperCase().trim();
+            const currSym = chartSymbolFor(asset).toUpperCase().trim();
+            // Só aplica se for para o mesmo ativo/símbolo (evita contaminação entre WIN e WDO)
+            const isMatching = !rawSym || rawSym === currSym || rawSym.startsWith(asset.id);
+            if (bPts > 0 && isMatching) {
+              const clamped = clampBoxPoints(bPts, asset);
+              handleBoletaConfigPatchRef.current?.({ boxPoints: clamped }, true);
             }
 
           } else if (payload.type === 'REPLAY_MODE_RESULT') {
@@ -4953,7 +4959,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       } catch {}
     }
 
-    if (patch.boxPoints !== undefined && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    if (!isRemoteSync && patch.boxPoints !== undefined && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ action: 'SET_BOX_POINTS', boxPoints: patch.boxPoints, symbol: chartSymbolFor(asset) }));
     }
 
