@@ -1039,6 +1039,7 @@ export default function App() {
   // Canal de sincronização entre abas e dispositivos (SaaS Multi-Tela em tempo real)
   const saasChannelRef = useRef<BroadcastChannel | null>(null);
   const strategyConnectAtRef = useRef<number>(0);
+  const isRemoteArmSyncRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (typeof BroadcastChannel !== 'undefined') {
@@ -1052,7 +1053,11 @@ export default function App() {
         if (data.type === 'ROBOT_ARMED_SYNC') {
           const armed = Boolean(data.armed);
           setMt5State((prev) => ({ ...prev, bridgeArmed: armed }));
-          setConfig((prev) => (prev.active === armed ? prev : { ...prev, active: armed, lastSavedTimestamp: Date.now() }));
+          setConfig((prev) => {
+            if (prev.active === armed) return prev;
+            isRemoteArmSyncRef.current = true;
+            return { ...prev, active: armed, lastSavedTimestamp: Date.now() };
+          });
           setReplayOperates(armed);
         } else if (data.type === 'STRATEGY_SYNC') {
           const profileName = data.profileName;
@@ -4355,9 +4360,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             );
 
             setMt5State((prev) => ({ ...prev, bridgeAuthOk: ok, bridgeArmed: armed, bridgeLegacy: !requireToken }));
-            if (payload.data?.armed !== undefined) {
+            if (payload.data?.armed !== undefined && Date.now() - strategyConnectAtRef.current >= 5000) {
               const serverArmed = Boolean(payload.data.armed);
-              setConfig((prev) => (prev.active === serverArmed ? prev : { ...prev, active: serverArmed, lastSavedTimestamp: Date.now() }));
+              setConfig((prev) => {
+                if (prev.active === serverArmed) return prev;
+                isRemoteArmSyncRef.current = true;
+                return { ...prev, active: serverArmed, lastSavedTimestamp: Date.now() };
+              });
               setReplayOperates(serverArmed);
             }
 
@@ -4623,7 +4632,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const armed = Boolean(payload.data?.armed);
 
             setMt5State((prev) => ({ ...prev, bridgeArmed: armed }));
-            setConfig((prev) => (prev.active === armed ? prev : { ...prev, active: armed, lastSavedTimestamp: Date.now() }));
+            setConfig((prev) => {
+              if (prev.active === armed) return prev;
+              isRemoteArmSyncRef.current = true;
+              return { ...prev, active: armed, lastSavedTimestamp: Date.now() };
+            });
             setReplayOperates(armed);
             try {
               saasChannelRef.current?.postMessage({ type: 'ROBOT_ARMED_SYNC', armed });
@@ -5216,6 +5229,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   useEffect(() => {
 
     if (mt5State.status !== 'CONNECTED' || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    if (isRemoteArmSyncRef.current) {
+      isRemoteArmSyncRef.current = false;
+      return;
+    }
 
     try {
 
