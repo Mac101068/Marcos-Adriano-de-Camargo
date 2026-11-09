@@ -163,6 +163,7 @@ import { SubscriptionPaywall } from './components/SubscriptionPaywall';
 import { AdminPanel } from './components/AdminPanel';
 
 import { EquityCurveView } from './components/EquityCurveView';
+import { ConnectionLogModal, ConnectionLogEntry } from './components/ConnectionLogModal';
 
 import { UserProfile } from './types/auth';
 
@@ -4131,6 +4132,58 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
+  // =========================================================================
+  // SISTEMA DE AUDITORIA & LOG DE CONEXÃO MT5 (DETECÇÃO DE QUEDAS & DIAGNÓSTICO)
+  // =========================================================================
+  const [connectionLogs, setConnectionLogs] = useState<ConnectionLogEntry[]>([]);
+  const [isConnLogModalOpen, setIsConnLogModalOpen] = useState<boolean>(false);
+  const [connDisconnectCount, setConnDisconnectCount] = useState<number>(0);
+  const [currentLatency, setCurrentLatency] = useState<number | null>(null);
+  const [terminalConnected, setTerminalConnected] = useState<boolean>(true);
+  const [sessionUptimeSeconds, setSessionUptimeSeconds] = useState<number>(0);
+
+  const addConnectionLog = useCallback((
+    type: 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR',
+    category: 'WEBSOCKET' | 'MT5_TERMINAL' | 'PING_LATENCY' | 'RECONNECT',
+    message: string,
+    extra?: { details?: string; code?: number; reason?: string; latencyMs?: number }
+  ) => {
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+    const entry: ConnectionLogEntry = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: Date.now(),
+      timeStr,
+      type,
+      category,
+      message,
+      ...extra,
+    };
+    setConnectionLogs((prev) => [entry, ...prev].slice(0, 200));
+  }, []);
+
+  // Heartbeat PING e contagem de Uptime ativo
+  useEffect(() => {
+    if (mt5State.status !== 'CONNECTED') return;
+
+    const uptimeTimer = setInterval(() => {
+      setSessionUptimeSeconds((s) => s + 1);
+    }, 1000);
+
+    const pingTimer = setInterval(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({ action: 'PING', timestamp: Date.now() }));
+        } catch {}
+      }
+    }, 4000);
+
+    return () => {
+      clearInterval(uptimeTimer);
+      clearInterval(pingTimer);
+    };
+  }, [mt5State.status]);
+
   // Conexão WebSocket com o MetaTrader 5 (Local Bridge)
   const toggleMT5Connect = useCallback((manualAction?: 'CONNECT' | 'DISCONNECT', isRemoteSync?: boolean) => {
     // Quem ligar esta função direto em onClick (sem arrow) recebe o MouseEvent como primeiro
@@ -4154,6 +4207,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         wsRef.current.close();
       }
       setMt5State({ status: 'DISCONNECTED' });
+      addConnectionLog('INFO', 'WEBSOCKET', 'Desconexão manual solicitada pelo operador.');
       return;
     }
 
@@ -4170,6 +4224,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     }
     const port = config.mt5Port || 8765;
     const wsUrl = `ws://${host}:${port}`;
+    addConnectionLog('INFO', 'WEBSOCKET', `Iniciando conexão WebSocket com ${wsUrl}...`);
 
     try {
       syncBridgeTokenWithServer().catch(() => {});
@@ -4177,6 +4232,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       wsRef.current = socket;
 
         socket.onopen = () => {
+        addConnectionLog('SUCCESS', 'WEBSOCKET', `Conexão WebSocket aberta com sucesso em ${wsUrl}. Realizando autenticação e subscrição...`);
         try {
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
           socket.send(EaConfigService.buildBridgeSyncMessage(config));
@@ -4202,29 +4258,55 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         });
       };
 
-
-
       // esta conexão respondeu ao handshake AUTH? se não, é script antigo (modo legado)
-
       let authResultSeen = false;
 
-
-
       socket.onmessage = (event) => {
-
         try {
-
           const payload = JSON.parse(event.data);
 
+          // Resposta do Heartbeat PING / Diagnóstico de Latência
+          if (payload.type === 'PONG') {
+            const rtt = Math.max(0, Date.now() - (payload.clientTimestamp || Date.now()));
+            setCurrentLatency(rtt);
+            if (payload.terminalConnected !== undefined) {
+              setTerminalConnected(payload.terminalConnected);
+              if (!payload.terminalConnected) {
+                addConnectionLog('WARN', 'MT5_TERMINAL', 'Alerta: Terminal MT5 reporta estar SEM SINAL com a corretora XP (queda de internet ou servidor XP offline).');
+              }
+            }
+            if (rtt > 120) {
+              addConnectionLog('WARN', 'PING_LATENCY', `Latência local alta detectada: ${rtt}ms (Processador da máquina sob carga).`, { latencyMs: rtt });
+            }
+            return;
+          }
+
+          // Alerta direto da ponte quando a conexão MT5 ↔ XP muda
+          if (payload.type === 'BROKER_CONNECTION_STATUS') {
+            setTerminalConnected(payload.connected);
+            addConnectionLog(
+              payload.connected ? 'SUCCESS' : 'ERROR',
+              'MT5_TERMINAL',
+              payload.connected
+                ? `Sinal do MT5 com a corretora XP restabelecido (${payload.server || 'XP Live'}).`
+                : `Alerta Crítico: Terminal MT5 perdeu sinal com os servidores da corretora XP!`,
+              { details: payload.broker ? `Corretora: ${payload.broker}` : undefined }
+            );
+            return;
+          }
+
           if (payload.type === 'AUTH_RESULT') {
-
             authResultSeen = true;
-
             const ok = Boolean(payload.data?.ok);
-
             const armed = Boolean(payload.data?.armed);
-
             const requireToken = Boolean(payload.data?.requireToken);
+
+            addConnectionLog(
+              ok ? 'SUCCESS' : 'ERROR',
+              'WEBSOCKET',
+              ok ? `Autenticação AUTH aprovada pelo servidor. Robô: ${armed ? 'ARMADO' : 'EM SEGURO'}` : 'Autenticação RECUSADA: Token incorreto.',
+              { details: `requireToken: ${requireToken}, maxOrdersPerMin: ${payload.data?.maxOrdersPerMinute ?? 'N/A'}` }
+            );
 
             setMt5State((prev) => ({ ...prev, bridgeAuthOk: ok, bridgeArmed: armed, bridgeLegacy: !requireToken }));
             if (payload.data?.armed !== undefined) {
@@ -4937,6 +5019,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           ? `Ambiente HTTPS (AI Studio / Nuvem): os navegadores bloqueiam comunicação direta com o MT5 local do seu computador (Mixed Content). No AI Studio, utilize o modo Replay ou acesse http://localhost:3000 no seu PC para feed ao vivo!`
           : `Não foi possível conectar em ${wsUrl}. Certifique-se de executar 'iniciar_ponte.bat' no seu PC.`;
 
+        addConnectionLog('ERROR', 'WEBSOCKET', `Falha de conexão com ${wsUrl}`, { details: msg });
+
         setMt5State({
           status: 'ERROR',
           lastError: msg,
@@ -4951,10 +5035,31 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         });
       };
 
-
-
       socket.onclose = (event) => {
         marketHistoryService.dispose();
+        setConnDisconnectCount((c) => c + 1);
+        setCurrentLatency(null);
+
+        const codeMap: Record<number, string> = {
+          1000: 'Normal Closure (Fechamento Normal)',
+          1001: 'Going Away (Navegador Fechou ou Atualizou)',
+          1006: 'Abnormal Closure (Fechamento Anormal - timeout TCP, processo Python caiu ou conexão abortada pela rede/firewall)',
+          1011: 'Internal Server Error (Erro Interno no Python)',
+          4001: 'Token Recusado',
+        };
+        const friendlyDesc = codeMap[event.code] || 'Código não documentado';
+
+        addConnectionLog(
+          'ERROR',
+          'WEBSOCKET',
+          `Conexão WebSocket com o MT5 encerrada! Código: ${event.code} (${friendlyDesc})`,
+          {
+            code: event.code,
+            reason: event.reason || friendlyDesc,
+            details: `A ponte em ${wsUrl} foi desconectada. A reconexão automática tentará restabelecer em instantes.`,
+          }
+        );
+
         if (event && event.code === 4001) {
           clearBridgeToken();
           syncBridgeTokenWithServer().catch(() => {});
@@ -8744,6 +8849,30 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             </span>
 
+            {/* BOTÃO AUDITORIA & LOG DE CONEXÃO MT5 COM MEDIÇÃO DE LATÊNCIA E QUEDAS */}
+            <button
+              onClick={() => setIsConnLogModalOpen(true)}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all ml-1 ${
+                connDisconnectCount > 0
+                  ? 'bg-rose-950/60 text-rose-300 border border-rose-800'
+                  : mt5State.status === 'CONNECTED'
+                  ? 'bg-slate-900 text-emerald-400 border border-slate-800 hover:border-emerald-600'
+                  : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-slate-200'
+              }`}
+              title="Abrir Auditoria e Log de Conexão com Diagnóstico de Quedas"
+            >
+              <Activity className="w-3 h-3 text-emerald-400" />
+              <span>LOG CONEXÃO</span>
+              {currentLatency !== null && mt5State.status === 'CONNECTED' && (
+                <span className="text-emerald-400 font-semibold">{currentLatency}ms</span>
+              )}
+              {connDisconnectCount > 0 && (
+                <span className="px-1 py-0.2 rounded bg-rose-600 text-white text-[9px] font-bold">
+                  {connDisconnectCount} {connDisconnectCount === 1 ? 'queda' : 'quedas'}
+                </span>
+              )}
+            </button>
+
           </div>
 
         </div>
@@ -10072,6 +10201,22 @@ ${
         </div>
 
       )}
+
+      {/* MODAL AUDITORIA & DIAGNÓSTICO DE CONEXÃO MT5 */}
+      <ConnectionLogModal
+        isOpen={isConnLogModalOpen}
+        onClose={() => setIsConnLogModalOpen(false)}
+        logs={connectionLogs}
+        onClearLogs={() => setConnectionLogs([])}
+        connectionStatus={mt5State.status}
+        currentLatency={currentLatency}
+        disconnectCount={connDisconnectCount}
+        sessionUptimeSeconds={sessionUptimeSeconds}
+        wsUrl={`ws://${config.mt5Host || '127.0.0.1'}:${config.mt5Port || 8765}`}
+        brokerCompany={mt5State.brokerCompany}
+        accountLogin={mt5State.accountLogin}
+        terminalConnected={terminalConnected}
+      />
 
     </div>
 

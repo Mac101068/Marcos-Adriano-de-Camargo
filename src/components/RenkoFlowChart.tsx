@@ -2113,7 +2113,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
       // 3. Oscilador de Ciclos de Fluxo: Histograma de aceleração da onda e marcadores de absorção
       if (showFlowPane && flowViewMode === 'cycles') {
-        const cp = flowCyclePoints[i];
+        const globalIdx = startIdx + i;
+        const cp = flowCyclePoints[globalIdx];
         if (cp) {
           const zeroY = cycleToY(0);
           const histY = cycleToY(cp.histogram);
@@ -2121,7 +2122,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           const barHeight = Math.max(1.5, Math.abs(histY - zeroY));
           const isPosHist = cp.histogram >= 0;
 
-          ctx.fillStyle = isPosHist ? 'rgba(16, 185, 129, 0.45)' : 'rgba(239, 68, 68, 0.45)';
+          // Histograma sutil ao fundo
+          ctx.fillStyle = isPosHist ? 'rgba(56, 189, 248, 0.22)' : 'rgba(251, 146, 60, 0.22)';
           const hWidth = Math.max(2, boxWidth * 0.45);
           ctx.fillRect(centerX - hWidth / 2, barTop, hWidth, barHeight);
 
@@ -2146,21 +2148,25 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
     ctx.restore();
 
     // Curva contínua do Oscilador de Ciclos de Fluxo e Linha de Sinal
-    if (showFlowPane && flowViewMode === 'cycles' && flowCyclePoints.length > 1) {
+    if (showFlowPane && flowViewMode === 'cycles' && flowCyclePoints.length > 0 && displayedBoxes.length > 0) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(0, flowTopMargin, lineRight, usableFlowHeight + 10);
       ctx.clip();
 
-      // Linha de Sinal (EMA-5 suave em violeta)
-      ctx.strokeStyle = 'rgba(167, 139, 250, 0.7)';
-      ctx.lineWidth = 1.2;
+      // 1. Linha de Sinal (EMA do Ciclo): COR ÚNICA FIXA - Laranja Âmbar (#fb923c)
+      ctx.strokeStyle = '#fb923c';
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([3, 2]); // Levemente tracejada para contraste perfeito
       ctx.beginPath();
       let startedSignal = false;
-      for (let i = 0; i < flowCyclePoints.length; i++) {
+      for (let i = 0; i < displayedBoxes.length; i++) {
         const x = xs[i];
         if (x === undefined || x < -30 || x > lineRight + 30) continue;
-        const y = cycleToY(flowCyclePoints[i].signal);
+        const globalIdx = startIdx + i;
+        const pt = flowCyclePoints[globalIdx];
+        if (!pt) continue;
+        const y = cycleToY(pt.signal);
         if (!startedSignal) {
           ctx.moveTo(x, y);
           startedSignal = true;
@@ -2169,32 +2175,45 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         }
       }
       ctx.stroke();
+      ctx.setLineDash([]); // Restaura traço contínuo
 
-      // Curva Principal do Oscilador (segmentos coloridos dinâmicos)
-      ctx.lineWidth = 2.2;
-      for (let i = 1; i < flowCyclePoints.length; i++) {
-        const x0 = xs[i - 1];
-        const x1 = xs[i];
-        if (x0 === undefined || x1 === undefined) continue;
-        if (x1 < -30 || x0 > lineRight + 30) continue;
+      // 2. Curva Principal do Oscilador de Ciclo: COR ÚNICA FIXA - Ciano Celeste (#38bdf8)
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      let startedOsc = false;
+      let lastPointX = -999;
+      let lastPointY = -999;
 
-        const pt = flowCyclePoints[i];
-        const y0 = cycleToY(flowCyclePoints[i - 1].oscillator);
-        const y1 = cycleToY(pt.oscillator);
+      for (let i = 0; i < displayedBoxes.length; i++) {
+        const x = xs[i];
+        if (x === undefined || x < -30 || x > lineRight + 30) continue;
+        const globalIdx = startIdx + i;
+        const pt = flowCyclePoints[globalIdx];
+        if (!pt) continue;
+        const y = cycleToY(pt.oscillator);
+        if (!startedOsc) {
+          ctx.moveTo(x, y);
+          startedOsc = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+        lastPointX = x;
+        lastPointY = y;
+      }
+      ctx.stroke();
 
-        ctx.strokeStyle = pt.divergence === 'BEARISH_ABSORPTION'
-          ? '#fbbf24'
-          : pt.divergence === 'BULLISH_ABSORPTION'
-          ? '#38bdf8'
-          : pt.oscillator >= 0
-          ? '#10b981'
-          : '#f43f5e';
-
+      // Ponto na ponta do preço atual (box em formação / último box)
+      if (startedOsc && lastPointX > -10 && lastPointX <= lineRight + 10) {
+        ctx.fillStyle = '#38bdf8';
         ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
+        ctx.arc(lastPointX, lastPointY, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
         ctx.stroke();
       }
+
       ctx.restore();
     }
 
