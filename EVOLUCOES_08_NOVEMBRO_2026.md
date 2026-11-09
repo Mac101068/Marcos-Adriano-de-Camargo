@@ -83,3 +83,4 @@ Nesta sessão foram implementadas melhorias de arquitetura, sincronismo multi-in
   - Vite Dev Server ativo em `http://localhost:3000`.
   - Ponte Python MT5 ativa na porta `8765`.
 - **Controle de Versão:** Todos os commits consolidados e sincronizados com o repositório remoto.
+

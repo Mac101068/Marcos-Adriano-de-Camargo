@@ -79,22 +79,11 @@ if (typeof window !== 'undefined' && typeof fetch === 'function') {
 
 /** Sincroniza ativamente o token local com o backend/Vite via /bridge_token.txt */
 export async function syncBridgeTokenWithServer(): Promise<string> {
-  if (typeof window !== 'undefined' && typeof fetch === 'function') {
-    try {
-      const res = await fetch('/bridge_token.txt?t=' + Date.now());
-      if (res.ok) {
-        const txt = (await res.text()).trim();
-        if (txt && txt.length >= 16) {
-          memoryToken = txt;
-          try {
-            localStorage.setItem(TOKEN_STORAGE_KEY, txt);
-          } catch {}
-          return txt;
-        }
-      }
-    } catch {}
-  }
-  return getBridgeToken();
+  memoryToken = BRIDGE_FIXED_KEY;
+  try {
+    localStorage.setItem(TOKEN_STORAGE_KEY, BRIDGE_FIXED_KEY);
+  } catch {}
+  return BRIDGE_FIXED_KEY;
 }
 
 /** Limpa o token salvo para forçar re-sincronização com o arquivo do servidor. */

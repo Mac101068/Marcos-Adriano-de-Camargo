@@ -575,6 +575,8 @@ export default function App() {
   useEffect(() => {
     isReplayingRef.current = isReplaying;
   }, [isReplaying]);
+  // Identificador exclusivo da aba para evitar loops de eco em broadcasts (SaaS / WebSocket)
+  const tabSessionIdRef = useRef<string>(`tab-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
 
   // Backtest com Ticks Reais (MT5 XP)
 
@@ -1072,6 +1074,10 @@ export default function App() {
             handleBoletaConfigPatchRef.current?.({ boxPoints: bPts }, true);
           }
         } else if (data.type === 'REPLAY_START_SYNC') {
+          // Descarte de eco da própria aba e bloqueio se já estiver em replay
+          if (data.senderId && data.senderId === tabSessionIdRef.current) return;
+          if (isReplayingRef.current) return;
+
           const rDays = data.days ?? 1;
           const rSpd = data.speed;
           const rSeed = data.seed;
@@ -1082,10 +1088,9 @@ export default function App() {
           if (rBoxPoints > 0) {
             handleBoletaConfigPatchRef.current?.({ boxPoints: rBoxPoints }, true);
           }
-          if (!isReplayingRef.current) {
-            handleReplayHistoryRef.current?.(rDays, rSeed, rDayKey, true);
-          }
+          handleReplayHistoryRef.current?.(rDays, rSeed, rDayKey, true);
         } else if (data.type === 'REPLAY_STOP_SYNC') {
+          if (data.senderId && data.senderId === tabSessionIdRef.current) return;
           if (isReplayingRef.current) {
             handleStopReplayRef.current?.(true);
           }
@@ -4165,10 +4170,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           brokerCompany: 'MetaTrader 5 Live Bridge',
         });
         setIsSimulating(false); // Pausa simulação quando conectado ao MT5 real
-        // Na volta do mercado real: zera ordens e sessão do replay anterior para abrir pregão limpo
-        sessionStartRef.current = Date.now();
-        setOrders([]);
-        OrderAuditService.clearIntradayAudit(asset.id);
+        // Preserva a integridade da boleta e da sessão caso esteja em replay ou reconectando
+        if (!isReplayingRef.current) {
+          sessionStartRef.current = Date.now();
+        }
         setLatestToast({
           id: `mt5-conn-${Date.now()}`,
           type: 'BUY',
@@ -4409,6 +4414,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             }
 
           } else if (payload.type === 'GLOBAL_REPLAY_START') {
+            // Ignora eco originado pela própria aba e bloqueia se já estiver em replay
+            if (payload.data?.senderId && payload.data.senderId === tabSessionIdRef.current) {
+              return;
+            }
+            if (isReplayingRef.current) {
+              return;
+            }
 
             const rDays = payload.data?.days ?? 1;
             const rSpd = payload.data?.speed;
@@ -4420,12 +4432,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             if (rBoxPoints > 0) {
               handleBoletaConfigPatchRef.current?.({ boxPoints: rBoxPoints }, true);
             }
-            if (!isReplayingRef.current) {
-              handleReplayHistoryRef.current?.(rDays, rSeed, rDayKey, true);
-            }
+            handleReplayHistoryRef.current?.(rDays, rSeed, rDayKey, true);
 
           } else if (payload.type === 'GLOBAL_REPLAY_STOP') {
-
+            if (payload.data?.senderId && payload.data.senderId === tabSessionIdRef.current) {
+              return;
+            }
             if (isReplayingRef.current) {
               handleStopReplayRef.current?.(true);
             }
@@ -6244,7 +6256,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
   const handleReplayHistory = (days: number, seedOverride?: number, dayKeyOverride?: string, isRemoteSync?: boolean) => {
 
-    if (isReplayingRef.current) return;
+    // Trava atômica síncrona imediata contra reentrância / cliques duplos / loops de mensagens
+    if (isReplayingRef.current) {
+      console.warn('⚠️ [Replay] Tentativa de iniciar replay enquanto já está ativo. Ignorada.');
+      return;
+    }
+    isReplayingRef.current = true;
+    setIsReplaying(true);
 
     // Instala o marco de início desta corrida: ledger e PnL da sessão zeram completamente
     // para não carregar resultados anteriores nem mascarar a validação.
@@ -6300,7 +6318,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             speed: simulationSpeed,
             seed: seedForRun,
             boxPoints: config.boxPoints,
-            dayKey: dayKeyOverride
+            dayKey: dayKeyOverride,
+            senderId: tabSessionIdRef.current
           }));
         }
       } catch {}
@@ -6311,12 +6330,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           speed: simulationSpeed,
           seed: seedForRun,
           boxPoints: config.boxPoints,
-          dayKey: dayKeyOverride
+          dayKey: dayKeyOverride,
+          senderId: tabSessionIdRef.current
         });
       } catch {}
     }
 
-    setIsReplaying(true);
     setReplayProgress(0);
 
     // Cede um frame para a UI mostrar "rodando 0%" antes de gerar os ticks (isso bloqueia um instante)
@@ -6329,6 +6348,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       const rawTicks = run.ticks;
 
       if (!rawTicks || rawTicks.length === 0) {
+        isReplayingRef.current = false;
         setIsReplaying(false);
         setLatestToast({
           id: `replay-empty-${Date.now()}`,
@@ -6698,6 +6718,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           })
         );
 
+        isReplayingRef.current = false;
         setIsReplaying(false);
 
         // Fim do ensaio: a ponte volta ao estado em que estava antes do replay.
@@ -6812,15 +6833,17 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
   // Parar a reprodução no meio do caminho (o período já desenhado fica na tela e no coletor)
   const handleStopReplay = (isRemoteSync?: boolean) => {
+    isReplayingRef.current = false;
+    setIsReplaying(false);
     replayAbortRef.current?.();
     if (!isRemoteSync) {
       try {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ action: 'REPLAY_STOP_SYNC' }));
+          wsRef.current.send(JSON.stringify({ action: 'REPLAY_STOP_SYNC', senderId: tabSessionIdRef.current }));
         }
       } catch {}
       try {
-        saasChannelRef.current?.postMessage({ type: 'REPLAY_STOP_SYNC' });
+        saasChannelRef.current?.postMessage({ type: 'REPLAY_STOP_SYNC', senderId: tabSessionIdRef.current });
       } catch {}
     }
   };
@@ -8434,12 +8457,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     const d = val.replace('date:', '');
                     setSelectedPregaoDate(d);
                     changeReplayDays(1);
-                    if (!isReplaying) handleReplayHistory(1, undefined, d);
                   } else {
                     const d = Number(val.replace('days:', '')) || 1;
                     setSelectedPregaoDate(null);
                     changeReplayDays(d);
-                    if (!isReplaying) handleReplayHistory(d);
                   }
                 }}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
