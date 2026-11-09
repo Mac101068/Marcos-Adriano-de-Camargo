@@ -1071,8 +1071,18 @@ export default function App() {
           }
         } else if (data.type === 'BOX_POINTS_SYNC') {
           const bPts = Number(data.boxPoints);
-          if (bPts > 0) {
-            handleBoletaConfigPatchRef.current?.({ boxPoints: bPts }, true);
+          const targetAssetId = (data.assetId || (data.symbol ? resolveAsset(data.symbol).id : null)) as AssetId | null;
+          if (bPts > 0 && targetAssetId) {
+            // Salva de forma estritamente isolada no storage do ativo específico
+            saveAssetTradeParams(targetAssetId, { boxPoints: bPts });
+            if (assetStateRef.current[targetAssetId]) {
+              assetStateRef.current[targetAssetId].engine.setBoxPoints(bPts);
+            }
+            // SÓ atualiza a tela se a sincronização for para o ativo em exibição
+            if (targetAssetId === activeAssetIdRef.current) {
+              const clamped = clampBoxPoints(bPts, asset);
+              handleBoletaConfigPatchRef.current?.({ boxPoints: clamped }, true);
+            }
           }
         } else if (data.type === 'REPLAY_START_SYNC') {
           // Descarte de eco da própria aba e bloqueio se já estiver em replay
@@ -1084,10 +1094,18 @@ export default function App() {
           const rSeed = data.seed;
           const rDayKey = data.dayKey;
           const rBoxPoints = Number(data.boxPoints);
+          const rTargetAssetId = (data.assetId || (data.symbol ? resolveAsset(data.symbol).id : null)) as AssetId | null;
+          if (rBoxPoints > 0 && rTargetAssetId) {
+            saveAssetTradeParams(rTargetAssetId, { boxPoints: rBoxPoints });
+            if (assetStateRef.current[rTargetAssetId]) {
+              assetStateRef.current[rTargetAssetId].engine.setBoxPoints(rBoxPoints);
+            }
+          }
           if (rSpd) setSimulationSpeed(rSpd);
           setReplayDays(rDays);
-          if (rBoxPoints > 0) {
-            handleBoletaConfigPatchRef.current?.({ boxPoints: rBoxPoints }, true);
+          if (rBoxPoints > 0 && (!rTargetAssetId || rTargetAssetId === activeAssetIdRef.current)) {
+            const clamped = clampBoxPoints(rBoxPoints, asset);
+            handleBoletaConfigPatchRef.current?.({ boxPoints: clamped }, true);
           }
           handleReplayHistoryRef.current?.(rDays, rSeed, rDayKey, true);
         } else if (data.type === 'REPLAY_STOP_SYNC') {
@@ -4428,10 +4446,20 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const rSeed = payload.data?.seed;
             const rDayKey = payload.data?.dayKey;
             const rBoxPoints = Number(payload.data?.boxPoints);
+            const rTargetAssetSpec = (payload.data?.symbol || payload.data?.assetId)
+              ? resolveAsset(payload.data?.symbol, payload.data?.assetId)
+              : null;
+            if (rBoxPoints > 0 && rTargetAssetSpec) {
+              saveAssetTradeParams(rTargetAssetSpec.id, { boxPoints: rBoxPoints });
+              if (assetStateRef.current[rTargetAssetSpec.id]) {
+                assetStateRef.current[rTargetAssetSpec.id].engine.setBoxPoints(rBoxPoints);
+              }
+            }
             if (rSpd) setSimulationSpeed(rSpd);
             setReplayDays(rDays);
-            if (rBoxPoints > 0) {
-              handleBoletaConfigPatchRef.current?.({ boxPoints: rBoxPoints }, true);
+            if (rBoxPoints > 0 && (!rTargetAssetSpec || rTargetAssetSpec.id === activeAssetIdRef.current)) {
+              const clamped = clampBoxPoints(rBoxPoints, asset);
+              handleBoletaConfigPatchRef.current?.({ boxPoints: clamped }, true);
             }
             handleReplayHistoryRef.current?.(rDays, rSeed, rDayKey, true);
 
@@ -4454,13 +4482,19 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           } else if (payload.type === 'GLOBAL_BOX_POINTS_SYNC') {
 
             const bPts = Number(payload.data?.boxPoints);
-            const rawSym = String(payload.data?.symbol || '').toUpperCase().trim();
-            const currSym = chartSymbolFor(asset).toUpperCase().trim();
-            // Só aplica se for para o mesmo ativo/símbolo (evita contaminação entre WIN e WDO)
-            const isMatching = !rawSym || rawSym === currSym || rawSym.startsWith(asset.id);
-            if (bPts > 0 && isMatching) {
-              const clamped = clampBoxPoints(bPts, asset);
-              handleBoletaConfigPatchRef.current?.({ boxPoints: clamped }, true);
+            const targetAssetSpec = resolveAsset(payload.data?.symbol, payload.data?.assetId);
+            const targetAssetId = targetAssetSpec.id;
+            if (bPts > 0 && targetAssetId) {
+              // Salva isolado no storage do ativo específico
+              saveAssetTradeParams(targetAssetId, { boxPoints: bPts });
+              if (assetStateRef.current[targetAssetId]) {
+                assetStateRef.current[targetAssetId].engine.setBoxPoints(bPts);
+              }
+              // Só atualiza a tela se a sincronização for para o ativo atualmente selecionado
+              if (targetAssetId === activeAssetIdRef.current) {
+                const clamped = clampBoxPoints(bPts, asset);
+                handleBoletaConfigPatchRef.current?.({ boxPoints: clamped }, true);
+              }
             }
 
           } else if (payload.type === 'REPLAY_MODE_RESULT') {
@@ -4957,13 +4991,19 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         saasChannelRef.current?.postMessage({
           type: 'BOX_POINTS_SYNC',
           boxPoints: patch.boxPoints,
-          assetId: asset.id
+          assetId: asset.id,
+          symbol: chartSymbolFor(asset),
         });
       } catch {}
     }
 
     if (!isRemoteSync && patch.boxPoints !== undefined && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: 'SET_BOX_POINTS', boxPoints: patch.boxPoints, symbol: chartSymbolFor(asset) }));
+      wsRef.current.send(JSON.stringify({
+        action: 'SET_BOX_POINTS',
+        boxPoints: patch.boxPoints,
+        assetId: asset.id,
+        symbol: chartSymbolFor(asset),
+      }));
     }
 
     setConfig((prev) => {

@@ -3514,6 +3514,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // sempre encaixada na variação mínima do ativo (WIN: 1R = 5 pts).
   const renkoR = renkoRFromBoxPoints(renkoBoxPoints, asset);
   const boxScaleLabel = renkoScaleLabel(renkoBoxPoints, asset);
+  const [localRText, setLocalRText] = useState<string>(() => String(renkoR));
+  useEffect(() => {
+    setLocalRText(String(renkoR));
+  }, [renkoR]);
+
   const applyRenkoR = (r: number) => {
     const clamped = clampRenkoR(r);
     onRenkoBoxPointsChange?.(boxPointsForR(clamped, asset));
@@ -3593,10 +3598,33 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                   type="number"
                   min={1}
                   max={100}
-                  value={renkoR}
+                  value={localRText}
                   onChange={(e) => {
-                    const v = parseInt(e.target.value, 10);
-                    if (!isNaN(v) && v > 0) applyRenkoR(v);
+                    const raw = e.target.value;
+                    setLocalRText(raw);
+                    const v = parseInt(raw, 10);
+                    if (!isNaN(v) && v >= 1 && v <= 100) {
+                      applyRenkoR(v);
+                    }
+                  }}
+                  onBlur={() => {
+                    const v = parseInt(localRText, 10);
+                    if (!isNaN(v) && v >= 1 && v <= 100) {
+                      applyRenkoR(v);
+                    } else {
+                      setLocalRText(String(renkoR));
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const v = parseInt(localRText, 10);
+                      if (!isNaN(v) && v >= 1 && v <= 100) {
+                        applyRenkoR(v);
+                      } else {
+                        setLocalRText(String(renkoR));
+                      }
+                      (e.target as HTMLInputElement).blur();
+                    }
                   }}
                   className="w-9 h-4 bg-black/60 border border-zinc-700 rounded text-center text-[10.5px] font-mono font-bold text-emerald-300 focus:outline-none focus:border-emerald-500 tabular-nums p-0"
                   title={`Digite o valor em R (1R = ${asset.tickSize} pts -> ${formatPrice(renkoBoxPoints, asset)} pts). Clique para digitar.`}
