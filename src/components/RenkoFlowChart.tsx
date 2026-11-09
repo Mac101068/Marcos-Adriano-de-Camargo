@@ -2607,7 +2607,11 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
     // Linhas de Posições (Entrada, Reteste, Parcial, Trailing SL e TP)
     if (showOrderLines && openOrders.length > 0) {
-      openOrders.forEach((o) => {
+      const stableOrders = [...openOrders].sort((a, b) => {
+        if (a.ticket && b.ticket) return a.ticket - b.ticket;
+        return a.timestamp - b.timestamp;
+      });
+      stableOrders.forEach((o) => {
         const isPending = o.status === 'PENDING_LIMIT';
         const targetPrice = isPending && o.limitPrice ? o.limitPrice : o.entryPrice;
         const entryY = priceToY(targetPrice);

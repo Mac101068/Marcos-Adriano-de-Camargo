@@ -4462,9 +4462,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 const liveTicketSet = new Set(relevantLive.map((p) => p.ticket));
 
-                // Ordens que estavam abertas com source MT5_LIVE e não estão mais no MT5: fecham
+                // 1. Fecha ordens locais com ticket MT5 que não existem mais na lista de posições reais
                 let updated = prev.map((o) => {
-                  if (o.status === 'OPEN' && o.source === 'MT5_LIVE' && o.ticket && !liveTicketSet.has(o.ticket)) {
+                  if (o.status === 'OPEN' && o.ticket && !liveTicketSet.has(o.ticket)) {
                     const isWin = (o.pointsResult ?? 0) >= 0;
                     return {
                       ...o,
@@ -4475,17 +4475,42 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                       exitReason: 'FLIP_REVERSAL' as const,
                     };
                   }
+                  // Descarta ordens locais abertas sem ticket que já tenham mais de 6 segundos sem confirmação do MT5
+                  if (o.status === 'OPEN' && !o.ticket && (Date.now() - o.timestamp > 6000)) {
+                    return {
+                      ...o,
+                      status: 'CLOSED_LOSS' as TradeOrder['status'],
+                      exitPrice: currentPrice,
+                      exitTimestamp: Date.now(),
+                      exitTimeStr: new Date().toLocaleTimeString(),
+                      exitReason: 'FLIP_REVERSAL' as const,
+                    };
+                  }
                   return o;
                 });
 
-                // Atualiza ou insere as ordens vivas vindas do terminal MT5
+                // 2. Atualiza ou vincula ordens vivas vindas do terminal MT5 (sem duplicatas)
                 for (const pos of relevantLive) {
-                  const existingIdx = updated.findIndex((o) => o.ticket === pos.ticket);
+                  // Procura primeiro pelo ticket exato
+                  let existingIdx = updated.findIndex((o) => o.ticket === pos.ticket);
+
+                  // Se não achou pelo ticket, vincula a ordem local recente aberta do mesmo tipo
+                  if (existingIdx < 0) {
+                    existingIdx = updated.findIndex(
+                      (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') &&
+                             !o.ticket &&
+                             o.type === pos.type
+                    );
+                  }
+
                   const isBuy = pos.type === 'BUY';
                   const pnlPts = isBuy ? (currentPrice - pos.price_open) : (pos.price_open - currentPrice);
                   if (existingIdx >= 0) {
                     updated[existingIdx] = {
                       ...updated[existingIdx],
+                      ticket: pos.ticket,
+                      source: 'MT5_LIVE',
+                      isRealMT5: true,
                       entryPrice: pos.price_open,
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
@@ -8103,7 +8128,20 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     if (mt5State.status !== 'CONNECTED' && !isReplaying && !isSimulating) {
       return [];
     }
-    return orders.filter((o) => o.status === 'OPEN' || o.status === 'PENDING_LIMIT');
+    const seenTickets = new Set<number>();
+    const list = orders.filter((o) => {
+      if (o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT') return false;
+      if (o.ticket) {
+        if (seenTickets.has(o.ticket)) return false;
+        seenTickets.add(o.ticket);
+      }
+      return true;
+    });
+    // Ordenação estável e determinística para evitar pulo/piscar de tags no canvas
+    return list.sort((a, b) => {
+      if (a.ticket && b.ticket) return a.ticket - b.ticket;
+      return a.timestamp - b.timestamp;
+    });
   }, [orders, mt5State.status, isReplaying, isSimulating]);
 
 
