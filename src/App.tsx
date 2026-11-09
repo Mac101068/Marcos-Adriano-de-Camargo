@@ -4353,6 +4353,92 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             }));
 
+            // Sincroniza posições reais do MetaTrader 5 diretamente na boleta e no gráfico
+            if (Array.isArray(payload.data?.positions)) {
+              setOrders((prev) => {
+                const livePositions: Array<{
+                  ticket: number;
+                  symbol: string;
+                  type: 'BUY' | 'SELL';
+                  volume: number;
+                  price_open: number;
+                  sl: number;
+                  tp: number;
+                  profit: number;
+                  comment?: string;
+                  magic?: number;
+                  time?: number;
+                }> = payload.data.positions;
+
+                const activeSym = chartSymbolFor(asset).toUpperCase().trim();
+                const relevantLive = livePositions.filter((p) => {
+                  const s = String(p.symbol || '').toUpperCase().trim();
+                  return s === activeSym || s.startsWith(asset.id);
+                });
+
+                const liveTicketSet = new Set(relevantLive.map((p) => p.ticket));
+
+                // Ordens que estavam abertas com source MT5_LIVE e não estão mais no MT5: fecham
+                let updated = prev.map((o) => {
+                  if (o.status === 'OPEN' && o.source === 'MT5_LIVE' && o.ticket && !liveTicketSet.has(o.ticket)) {
+                    const isWin = (o.pointsResult ?? 0) >= 0;
+                    return {
+                      ...o,
+                      status: (isWin ? 'CLOSED_PROFIT' : 'CLOSED_LOSS') as TradeOrder['status'],
+                      exitPrice: currentPrice,
+                      exitTimestamp: Date.now(),
+                      exitTimeStr: new Date().toLocaleTimeString(),
+                      exitReason: 'FLIP_REVERSAL' as const,
+                    };
+                  }
+                  return o;
+                });
+
+                // Atualiza ou insere as ordens vivas vindas do terminal MT5
+                for (const pos of relevantLive) {
+                  const existingIdx = updated.findIndex((o) => o.ticket === pos.ticket);
+                  const isBuy = pos.type === 'BUY';
+                  const pnlPts = isBuy ? (currentPrice - pos.price_open) : (pos.price_open - currentPrice);
+                  if (existingIdx >= 0) {
+                    updated[existingIdx] = {
+                      ...updated[existingIdx],
+                      entryPrice: pos.price_open,
+                      contracts: pos.volume,
+                      remainingContracts: pos.volume,
+                      status: 'OPEN',
+                      stopLoss: pos.sl > 0 ? pos.sl : updated[existingIdx].stopLoss,
+                      takeProfit: pos.tp > 0 ? pos.tp : updated[existingIdx].takeProfit,
+                      pointsResult: pnlPts,
+                      financialResult: pos.profit,
+                    };
+                  } else {
+                    const newOrd: TradeOrder = {
+                      id: `mt5-${pos.ticket}`,
+                      ticket: pos.ticket,
+                      timestamp: pos.time ? pos.time * 1000 : Date.now(),
+                      timeStr: new Date(pos.time ? pos.time * 1000 : Date.now()).toLocaleTimeString(),
+                      type: pos.type,
+                      role: String(pos.comment || '').toLowerCase().includes('pyr') ? 'PYRAMID' : 'MAIN',
+                      entryPrice: pos.price_open,
+                      contracts: pos.volume,
+                      remainingContracts: pos.volume,
+                      status: 'OPEN',
+                      source: 'MT5_LIVE',
+                      magicNumber: pos.magic,
+                      stopLoss: pos.sl || 0,
+                      takeProfit: pos.tp || 0,
+                      triggerReason: 'Execução MT5 Terminal',
+                      isRealMT5: true,
+                      pointsResult: pnlPts,
+                      financialResult: pos.profit,
+                    };
+                    updated = [newOrd, ...updated];
+                  }
+                }
+                return updated;
+              });
+            }
+
             if (
 
               typeof payload.data?.robotMagic === 'number' &&
