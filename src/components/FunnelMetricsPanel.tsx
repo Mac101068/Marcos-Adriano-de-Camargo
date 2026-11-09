@@ -50,9 +50,11 @@ interface FunnelMetricsPanelProps {
   metrics: FunnelMetricsSnapshot;
   /** Escrita pelo funil da estratégia ativa (App: `patchActiveStrategy`). Ausente = só leitura. */
   onPatchConfig?: (patch: Partial<AutomationConfig>) => void;
+  /** Conteúdo extra na linha-resumo (ex.: seletor de indicadores do gráfico). */
+  leading?: React.ReactNode;
 }
 
-export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics, onPatchConfig }) => {
+export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics, onPatchConfig, leading }) => {
   const [open, setOpen] = useState<boolean>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_OPEN);
@@ -92,6 +94,8 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
           <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-zinc-400">Funil</span>
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
         </button>
+
+        {leading}
 
         {/* Modo: AUTO é o estado "ligado" (acentos azul); FIXO some no chrome. */}
         <span

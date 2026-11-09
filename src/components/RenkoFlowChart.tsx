@@ -27,7 +27,7 @@ import { DadosPanelWindow } from './DadosPanelWindow';
 import { ShadowRobotPanel } from './ShadowRobotPanel';
 import { RenkoBoxCard } from './RenkoBoxCard';
 import { DrawingToolbar } from './DrawingToolbar';
-import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff, Activity, ChevronDown, Check, Layers } from 'lucide-react';
+import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff, Activity, ChevronDown, Check, Layers, CandlestickChart, BarChart3 } from 'lucide-react';
 import { calculateFlowCycles, getFlowCycleSummary } from '../utils/flowCycleOscillator';
 
 const getStorageKeyScales = (assetId?: string) => `fluxo_renko_chart_scales_${assetId || 'WIN'}_v3`;
@@ -204,6 +204,48 @@ function formatTimeframe(sec: number): string {
 // perdendo força, pó de reversão. Ajuste aqui (menor = só exaustão grave fica cinza; maior =
 // mais sensível, mas pode acender cinza em pullback saudável).
 const EXHAUST_DECAY_RATIO = 0.7;
+
+type FlowViewModeKey = 'cycles' | 'heikin_ashi' | 'histogram' | 'hybrid';
+
+/**
+ * Seletor do indicador da subjanela (Ciclos / Heikin-Ashi / Delta) para a caixa do Funil.
+ * Só ícones, para caber na faixa. Ligar/desligar a subjanela é só no menu INDICADORES da barra superior.
+ */
+const FlowModeSwitcher: React.FC<{
+  mode: FlowViewModeKey;
+  onMode: (m: FlowViewModeKey) => void;
+  enabled: boolean;
+  cycleValue?: number;
+  cyclePhase?: string;
+}> = ({ mode, onMode, enabled, cycleValue, cyclePhase }) => {
+  const btn = (key: FlowViewModeKey, title: string, active: string, icon: React.ReactNode) => (
+    <button
+      type="button"
+      onClick={() => onMode(key)}
+      title={enabled ? title : `${title} (subjanela desligada: ative em INDICADORES, na barra superior)`}
+      className={`flex items-center justify-center w-[22px] h-[18px] rounded border cursor-pointer transition-all ${
+        enabled && mode === key ? active : 'bg-zinc-950/60 border-zinc-700/70 text-zinc-500 hover:text-zinc-200'
+      } ${enabled ? '' : 'opacity-60'}`}
+    >
+      {icon}
+    </button>
+  );
+  return (
+    <span className="inline-flex items-center gap-1 shrink-0">
+      {btn('cycles', 'Oscilador de Ciclos de Fluxo (-100 a +100%)', 'bg-sky-500/20 border-sky-500/50 text-sky-300', <Activity className="w-3 h-3" />)}
+      {btn('heikin_ashi', 'Candles Heikin-Ashi de Fluxo + Histograma', 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300', <CandlestickChart className="w-3 h-3" />)}
+      {btn('histogram', 'Histograma de Agressão Bruta (Delta)', 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300', <BarChart3 className="w-3 h-3" />)}
+      {enabled && mode === 'cycles' && cycleValue !== undefined && (
+        <span
+          className={`font-mono text-[10px] font-bold ${cycleValue >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}
+          title={cyclePhase}
+        >
+          {cycleValue > 0 ? '+' : ''}{cycleValue}%
+        </span>
+      )}
+    </span>
+  );
+};
 
 export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   boxes,
@@ -4040,107 +4082,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         />
 
         {/* ========================================================================= */}
-        {/* HUD FLUTUANTE DA SUBJANELA: Seletor de Modo (Ciclos/HA/Delta) + Diagnóstico */}
-        {/* ========================================================================= */}
-        {showFlowPane && canvasSize.h > 0 && (
-          <div
-            style={{
-              top: `${Math.round(canvasSize.h * (1 - Math.max(0.18, Math.min(0.55, flowPaneRatio)))) + 5}px`,
-            }}
-            className="absolute left-2 z-20 flex items-center gap-1.5 bg-zinc-950/85 backdrop-blur-md border border-zinc-800/90 rounded-md px-2 py-0.5 text-[10px] select-none shadow-md"
-          >
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setFlowViewMode('cycles')}
-                className={`px-1.5 py-0.5 rounded cursor-pointer transition-all font-bold ${
-                  flowViewMode === 'cycles'
-                    ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 shadow-[0_0_6px_rgba(56,189,248,0.2)]'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-                title="Oscilador Quantitativo de Ciclos de Fluxo (-100 a +100%)"
-              >
-                🌊 Ciclos
-              </button>
-              <button
-                type="button"
-                onClick={() => setFlowViewMode('heikin_ashi')}
-                className={`px-1.5 py-0.5 rounded cursor-pointer transition-all font-bold ${
-                  flowViewMode === 'heikin_ashi'
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-                title="Candles Heikin-Ashi de Fluxo + Histograma"
-              >
-                🕯️ Heikin-Ashi
-              </button>
-              <button
-                type="button"
-                onClick={() => setFlowViewMode('histogram')}
-                className={`px-1.5 py-0.5 rounded cursor-pointer transition-all font-bold ${
-                  flowViewMode === 'histogram'
-                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-                title="Histograma de Agressão Bruta (Delta)"
-              >
-                📊 Delta
-              </button>
-            </div>
-
-            {flowViewMode === 'cycles' && flowCycleSummary && (
-              <div className="flex items-center gap-1.5 ml-1 pl-1.5 border-l border-zinc-800 font-mono text-[9.5px]">
-                <span
-                  className={`font-bold ${
-                    flowCycleSummary.currentValue >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
-                >
-                  {flowCycleSummary.currentValue > 0 ? '+' : ''}{flowCycleSummary.currentValue}%
-                </span>
-                <span className="text-zinc-400 hidden sm:inline">
-                  {flowCycleSummary.phaseLabel}
-                </span>
-              </div>
-            )}
-
-            {/* Botão de Fechar / Recolher a Subjanela */}
-            <button
-              type="button"
-              onClick={() => {
-                setShowFlowPane(false);
-                try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, 'false'); } catch {}
-              }}
-              className="ml-1 p-0.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded cursor-pointer"
-              title="Fechar Subjanela de Fluxo (Você pode reabrir a qualquer momento pelo botão no rodapé ou no menu Indicadores)"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* BOTÃO RESTAURADOR: exibido no rodapé do gráfico quando a subjanela de fluxo */}
-        {/* estiver fechada, permitindo ao usuário reabri-la com 1 clique imediato.    */}
-        {/* ========================================================================= */}
-        {!showFlowPane && (
-          <button
-            type="button"
-            onClick={() => {
-              setShowFlowPane(true);
-              try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, 'true'); } catch {}
-            }}
-            className="absolute bottom-2 left-3 z-20 flex items-center gap-2 px-3 py-1.5 rounded-md bg-zinc-950/90 hover:bg-zinc-900 border border-emerald-500/60 hover:border-emerald-400 text-emerald-300 hover:text-white text-[11px] font-bold shadow-xl shadow-black/80 transition-all cursor-pointer select-none group"
-            title="Clique para reabrir a subjanela inferior de indicadores (Oscilador de Ciclos / Heikin-Ashi / Delta)"
-          >
-            <Activity className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform animate-pulse" />
-            <span>+ RESTAURAR INDICADORES (CICLOS / FLUXO)</span>
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono uppercase">
-              {flowViewMode === 'cycles' ? 'Ciclos' : flowViewMode === 'heikin_ashi' ? 'Heikin-Ashi' : 'Delta'}
-            </span>
-          </button>
-        )}
-
-        {/* ========================================================================= */}
         {/* BARRA DE DESENHO LATERAL ESQUERDA (TradingView-like, clean & flutuante)    */}
         {/* ========================================================================= */}
         <DrawingToolbar
@@ -4558,7 +4499,25 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* espaço livre abaixo do canvas. Só aparece com métricas (renko/range); na    */}
       {/* série Tempo (sem robô) o App não entrega e a faixa some.                    */}
       {/* ========================================================================= */}
-      {funnelMetrics && <FunnelMetricsPanel metrics={funnelMetrics} onPatchConfig={onFunnelPatch} />}
+      {(() => {
+        const switcherNode = (
+          <FlowModeSwitcher
+            mode={flowViewMode}
+            onMode={setFlowViewMode}
+            enabled={showFlowPane}
+            cycleValue={flowCycleSummary?.currentValue}
+            cyclePhase={flowCycleSummary?.phaseLabel}
+          />
+        );
+        return funnelMetrics ? (
+          <FunnelMetricsPanel metrics={funnelMetrics} onPatchConfig={onFunnelPatch} leading={switcherNode} />
+        ) : (
+          <div className="shrink-0 bg-zinc-900/95 border-t border-zinc-800 flex items-center gap-2 px-2.5 sm:px-4 h-7">
+            <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-zinc-400">Indicadores</span>
+            {switcherNode}
+          </div>
+        );
+      })()}
 
       {/* ========================================================================= */}
       {/* RODAPÉ ENXUTO: só a dica de interação (a legenda migrou para a engrenagem)  */}
