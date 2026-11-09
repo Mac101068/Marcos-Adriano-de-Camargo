@@ -1733,6 +1733,45 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     timeEngineRef.current.initialize(reference);
 
+    // Restaura cache imediato da sessão atual (evita sumir o histórico no F5 ou HMR do Vite)
+    try {
+      const rawCache = sessionStorage.getItem(`fluxo_chart_cache_v1_${asset.id}`);
+      if (rawCache) {
+        const parsed = JSON.parse(rawCache);
+        if (Array.isArray(parsed?.boxes) && parsed.boxes.length > 0) {
+          const cachedBoxes: RenkoBox[] = parsed.boxes;
+          const lastCached = cachedBoxes[cachedBoxes.length - 1];
+          const cachedPrice = Number(parsed.currentPrice) || lastCached.close || reference;
+          const cachedCvd = Number(parsed.cvd) || lastCached.cvdAtClose || 0;
+          engineRef.current.setBoxPoints(Number(parsed.boxPoints) || config.boxPoints);
+          engineRef.current.loadBackfillBoxes(cachedBoxes, cachedPrice, cachedCvd);
+          setBoxes(cachedBoxes);
+          setCurrentPrice(cachedPrice);
+          setCurrentBox(engineRef.current.getCurrentBox());
+          setCvd(cachedCvd);
+          const synth = synthesizeTicksFromBoxes(cachedBoxes);
+          if (synth.length > 0) {
+            allTicksRef.current = synth;
+            const curState = assetStateRef.current[asset.id];
+            if (curState) {
+              curState.boxes = cachedBoxes;
+              curState.currentPrice = cachedPrice;
+              curState.cvd = cachedCvd;
+              curState.allTicks = [...synth];
+              curState.engine.setBoxPoints(Number(parsed.boxPoints) || config.boxPoints);
+              curState.engine.loadBackfillBoxes(cachedBoxes, cachedPrice, cachedCvd);
+            }
+            rangeEngineRef.current.initialize(synth[0].price, synth[0].timestamp);
+            for (const st of synth) rangeEngineRef.current.processTick(st);
+            setRangeBoxes([...rangeEngineRef.current.getBoxes()]);
+            setRangeCurrentBox(rangeEngineRef.current.getCurrentBox());
+          }
+        }
+      }
+    } catch {
+      // ignora falha de sessionStorage
+    }
+
     // Escalas paralelas 15R/20R/25R começam sincronizadas com o mercado (só o coletor usa)
 
     ALT_RENKO_SCALES.forEach((alt) => altEnginesRef.current[alt.key].initialize(reference));
@@ -1760,6 +1799,25 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Salva o histórico visível na sessão do navegador para nunca sumir em edições, HMR ou F5
+  useEffect(() => {
+    if (boxes.length === 0) return;
+    try {
+      sessionStorage.setItem(
+        `fluxo_chart_cache_v1_${asset.id}`,
+        JSON.stringify({
+          boxes: boxes.slice(-1500),
+          currentPrice,
+          cvd,
+          boxPoints: config.boxPoints,
+          updatedAt: Date.now(),
+        })
+      );
+    } catch {
+      // ignora quota
+    }
+  }, [boxes, currentPrice, cvd, asset.id, config.boxPoints]);
+
 
 
   // Escala do box (R) editável no gráfico: além de informar o motor, recalcula TODA a história
@@ -1770,32 +1828,51 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
   // mantém a MESMA referência de objeto, então o registro no coletor continua valendo.
 
+  const prevBoxPointsRef = useRef<number>(config.boxPoints);
   useEffect(() => {
+    const boxPointsChanged = prevBoxPointsRef.current !== config.boxPoints;
+    prevBoxPointsRef.current = config.boxPoints;
+
     const eng = engineRef.current;
+    // Se a escala não mudou e já temos boxes carregados na tela, não reinicializa nem apaga nada
+    if (!boxPointsChanged && eng.getBoxes().length > 0) {
+      return;
+    }
+
     eng.setBoxPoints(config.boxPoints);
-    const hist = allTicksRef.current;
+    let hist = allTicksRef.current;
+    if (hist.length < boxes.length * 2 && boxes.length > 0) {
+      hist = synthesizeTicksFromBoxes(boxes);
+      allTicksRef.current = hist;
+      const curState = assetStateRef.current[asset.id];
+      if (curState) curState.allTicks = [...hist];
+    }
+
     if (hist.length > 0) {
       const isHistSane = hist[0] && hist[0].price > 0 && Math.abs(hist[0].price - asset.basePrice) / asset.basePrice < 0.4;
       if (isHistSane) {
         eng.initialize(hist[0].price, hist[0].timestamp);
         for (const t of hist) eng.processTick(t, config);
-        setBoxes([...eng.getBoxes()]);
-        setCurrentBox(eng.getCurrentBox());
-        setCvd(eng.getCvd());
+        const rebuilt = eng.getBoxes();
+        if (rebuilt.length > 0) {
+          setBoxes([...rebuilt]);
+          setCurrentBox(eng.getCurrentBox());
+          setCvd(eng.getCvd());
 
-        // Sincroniza o repositório do ativo em memória
-        const curState = assetStateRef.current[asset.id];
-        if (curState) {
-          curState.boxes = [...eng.getBoxes()];
-          curState.currentBox = eng.getCurrentBox();
-          curState.cvd = eng.getCvd();
+          // Sincroniza o repositório do ativo em memória
+          const curState = assetStateRef.current[asset.id];
+          if (curState) {
+            curState.boxes = [...rebuilt];
+            curState.currentBox = eng.getCurrentBox();
+            curState.cvd = eng.getCvd();
+          }
         }
       }
     }
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ action: 'SET_BOX_POINTS', boxPoints: config.boxPoints, symbol: chartSymbolFor(asset) }));
-      if (hist.length === 0) {
+      if (boxPointsChanged || boxes.length === 0) {
         wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), boxPoints: config.boxPoints }));
       }
     }
@@ -4951,11 +5028,19 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               // filtro. Sem isso o descarte era silencioso ("aguardando ticks" eterno).
               setBfDiag(`PONTE → ${bfSym}: ${bfRecebidos} box(es) recebido(s), ${bfBoxes.length} válido(s) · ativo=${bfAssetId} · série=${chartSeries}`);
 
+              const synthTicks = synthesizeTicksFromBoxes(bfBoxes);
+
               if (targetState) {
                 targetState.boxes = bfBoxes;
                 targetState.currentPrice = lastPrice;
                 targetState.cvd = Number(payload.data?.cvd) || lastBf.cvdAtClose;
                 targetState.engine.loadBackfillBoxes(bfBoxes, lastPrice, targetState.cvd);
+                if (synthTicks.length > 0) {
+                  // Preserva ticks ao vivo que já tenham chegado após o fim do último box do backfill
+                  const lastBfTs = lastBf.timeEnd || lastBf.timeStart || 0;
+                  const recentLive = targetState.allTicks.filter((t) => !String(t.id).startsWith('synth-') && t.timestamp > lastBfTs);
+                  targetState.allTicks = [...synthTicks, ...recentLive];
+                }
               }
 
               const isCurrent = bfAssetId === activeAssetIdRef.current;
@@ -4968,13 +5053,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 if (Number.isFinite(Number(payload.data?.cvd))) setCvd(Number(payload.data.cvd));
 
                 // Sintetiza e popula imediatamente o motor de Range e o buffer de ticks
-                const synthTicks = synthesizeTicksFromBoxes(bfBoxes);
                 if (synthTicks.length > 0) {
-                  allTicksRef.current = synthTicks;
+                  allTicksRef.current = targetState ? targetState.allTicks : synthTicks;
                   const rEng = rangeEngineRef.current;
                   rEng.setRangePoints(rangePoints);
                   rEng.initialize(synthTicks[0].price, synthTicks[0].timestamp);
-                  for (const st of synthTicks) rEng.processTick(st);
+                  for (const st of allTicksRef.current) rEng.processTick(st);
                   setRangeBoxes([...rEng.getBoxes()]);
                   setRangeCurrentBox(rEng.getCurrentBox());
                 }
