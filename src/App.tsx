@@ -1746,6 +1746,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           engineRef.current.setBoxPoints(Number(parsed.boxPoints) || config.boxPoints);
           engineRef.current.loadBackfillBoxes(cachedBoxes, cachedPrice, cachedCvd);
           setBoxes(cachedBoxes);
+          setSessionGaps([...engineRef.current.getSessionGaps()]);
           setCurrentPrice(cachedPrice);
           setCurrentBox(engineRef.current.getCurrentBox());
           setCvd(cachedCvd);
@@ -1760,6 +1761,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               curState.allTicks = [...synth];
               curState.engine.setBoxPoints(Number(parsed.boxPoints) || config.boxPoints);
               curState.engine.loadBackfillBoxes(cachedBoxes, cachedPrice, cachedCvd);
+              curState.sessionGaps = [...curState.engine.getSessionGaps()];
             }
             rangeEngineRef.current.initialize(synth[0].price, synth[0].timestamp);
             for (const st of synth) rangeEngineRef.current.processTick(st);
@@ -1806,7 +1808,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       sessionStorage.setItem(
         `fluxo_chart_cache_v1_${asset.id}`,
         JSON.stringify({
-          boxes: boxes.slice(-1500),
+          boxes: boxes.slice(-4000),
           currentPrice,
           cvd,
           boxPoints: config.boxPoints,
@@ -1856,6 +1858,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         const rebuilt = eng.getBoxes();
         if (rebuilt.length > 0) {
           setBoxes([...rebuilt]);
+          setSessionGaps([...eng.getSessionGaps()]);
           setCurrentBox(eng.getCurrentBox());
           setCvd(eng.getCvd());
 
@@ -1863,6 +1866,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           const curState = assetStateRef.current[asset.id];
           if (curState) {
             curState.boxes = [...rebuilt];
+            curState.sessionGaps = [...eng.getSessionGaps()];
             curState.currentBox = eng.getCurrentBox();
             curState.cvd = eng.getCvd();
           }
@@ -1873,7 +1877,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ action: 'SET_BOX_POINTS', boxPoints: config.boxPoints, symbol: chartSymbolFor(asset) }));
       if (boxPointsChanged || boxes.length === 0) {
-        wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), boxPoints: config.boxPoints }));
+        wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), days: 5, boxPoints: config.boxPoints }));
       }
     }
   }, [config.boxPoints]);
@@ -4363,7 +4367,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           } catch {
             socket.send(EaConfigService.buildBridgeSyncMessage(config));
           }
-          socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), boxPoints: config.boxPoints }));
+          socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), days: 5, boxPoints: config.boxPoints }));
           socket.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(asset) }));
         } catch {}
 
@@ -4535,7 +4539,20 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               marginFree: payload.data.marginFree ?? prev.marginFree,
 
-              deals: payload.data.deals ?? prev.deals,
+              deals: (() => {
+                const incoming = Array.isArray(payload.data.deals) ? payload.data.deals : [];
+                const existing = Array.isArray(prev.deals) ? prev.deals : [];
+                if (incoming.length === 0) return existing;
+                if (existing.length === 0) return incoming;
+                const byTicket = new Map<number, any>();
+                for (const d of existing) {
+                  if (d && d.ticket !== undefined) byTicket.set(Number(d.ticket), d);
+                }
+                for (const d of incoming) {
+                  if (d && d.ticket !== undefined) byTicket.set(Number(d.ticket), d);
+                }
+                return Array.from(byTicket.values()).sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
+              })(),
 
               positions: payload.data.positions ?? prev.positions,
 
@@ -4992,7 +5009,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             // A ponte manda os boxes do ÚLTIMO PREGÃO já formados (reconstruídos do tick real).
             // Converte o formato do Python para o RenkoBox do app e adota como estado do ativo.
             const bfRecebidos = (payload.data?.boxes || []).length;
-            const bfBoxes: RenkoBox[] = (payload.data?.boxes || [])
+            const rawBfBoxes: RenkoBox[] = (payload.data?.boxes || [])
               .map((b: any, i: number) => ({
                 index: Number(b?.index ?? i),
                 direction: b?.direction === 'UP' ? 'UP' : 'DOWN',
@@ -5000,7 +5017,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 close: Number(b?.close),
                 high: Number(b?.high),
                 low: Number(b?.low),
-                timeStart: Number(b?.timestamp) || 0,
+                timeStart: Number(b?.time_start || b?.timestamp) || 0,
                 timeEnd: Number(b?.timestamp) || 0,
                 ticksCount: Number(b?.ticks_count) || 0,
                 totalVolume: (Number(b?.buy_volume) || 0) + (Number(b?.sell_volume) || 0),
@@ -5012,6 +5029,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 regimeFactor: Number(b?.regime_factor) || undefined,
               }))
               .filter((b: RenkoBox) => Number.isFinite(b.close) && b.close > 0 && Number.isFinite(b.open) && b.open > 0);
+
+            const bfBoxes: RenkoBox[] = [];
+            const bfPriceLbl = renkoScaleLabel(bfBoxPoints, bfAssetSpec);
+            for (let i = 0; i < rawBfBoxes.length; i++) {
+              const bx = { ...rawBfBoxes[i], index: i };
+              annotateActiveBar(bx, bfBoxes, config, bfPriceLbl);
+              bfBoxes.push(bx);
+            }
 
             // Diagnóstico visível: se a ponte mandou algo e a tela não desenha, o toast diz o porquê
             // (antes o descarte era silencioso e o operador via só "ponte conectada, gráfico vazio").
@@ -5035,6 +5060,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 targetState.currentPrice = lastPrice;
                 targetState.cvd = Number(payload.data?.cvd) || lastBf.cvdAtClose;
                 targetState.engine.loadBackfillBoxes(bfBoxes, lastPrice, targetState.cvd);
+                targetState.sessionGaps = [...targetState.engine.getSessionGaps()];
                 if (synthTicks.length > 0) {
                   // Preserva ticks ao vivo que já tenham chegado após o fim do último box do backfill
                   const lastBfTs = lastBf.timeEnd || lastBf.timeStart || 0;
@@ -5048,6 +5074,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               if (isCurrent) {
                 engineRef.current.loadBackfillBoxes(bfBoxes, lastPrice, Number(payload.data?.cvd) || lastBf.cvdAtClose);
                 setBoxes(bfBoxes);
+                setSessionGaps([...engineRef.current.getSessionGaps()]);
                 setCurrentPrice(lastPrice);
                 setCurrentBox(engineRef.current.getCurrentBox());
                 if (Number.isFinite(Number(payload.data?.cvd))) setCvd(Number(payload.data.cvd));
@@ -5092,7 +5119,20 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               marginFree: payload.data.marginFree ?? prev.marginFree,
 
-              deals: payload.data.deals ?? prev.deals,
+              deals: (() => {
+                const incoming = Array.isArray(payload.data.deals) ? payload.data.deals : [];
+                const existing = Array.isArray(prev.deals) ? prev.deals : [];
+                if (incoming.length === 0) return existing;
+                if (existing.length === 0) return incoming;
+                const byTicket = new Map<number, any>();
+                for (const d of existing) {
+                  if (d && d.ticket !== undefined) byTicket.set(Number(d.ticket), d);
+                }
+                for (const d of incoming) {
+                  if (d && d.ticket !== undefined) byTicket.set(Number(d.ticket), d);
+                }
+                return Array.from(byTicket.values()).sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
+              })(),
 
               positions: payload.data.positions ?? prev.positions,
 
@@ -8049,7 +8089,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       }));
       // O backfill é por contrato: ao trocar de ativo, o gráfico novo precisa do próprio pregão
       // (o Dólar não recebia nada porque o pedido saía com o símbolo do ativo anterior).
-      wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(next), boxPoints: (next.id === 'WDO' ? getAssetTradeParams('WDO').boxPoints : (next.id === 'WIN' ? getAssetTradeParams('WIN').boxPoints : config.boxPoints)) }));
+      wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(next), days: 5, boxPoints: (next.id === 'WDO' ? getAssetTradeParams('WDO').boxPoints : (next.id === 'WIN' ? getAssetTradeParams('WIN').boxPoints : config.boxPoints)) }));
       wsRef.current.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(next) }));
     }
 

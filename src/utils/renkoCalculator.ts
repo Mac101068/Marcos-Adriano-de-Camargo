@@ -93,6 +93,28 @@ export class RenkoFlowEngine {
   public loadBackfillBoxes(boxes: RenkoBox[], currentPrice: number, cvd: number = 0) {
     if (!boxes || boxes.length === 0) return;
     this.boxes = [...boxes];
+    this.sessionGaps = [];
+    for (let i = 1; i < this.boxes.length; i++) {
+      const prev = this.boxes[i - 1];
+      const curr = this.boxes[i];
+      const prevTs = prev.timeEnd || prev.timeStart || 0;
+      const currTs = curr.timeStart || curr.timeEnd || 0;
+      if (prevTs > 0 && currTs > 0) {
+        const prevKey = this.sessionKey(prevTs);
+        const currKey = this.sessionKey(currTs);
+        if (prevKey !== currKey) {
+          this.sessionGaps.push({
+            fromDate: prevKey,
+            toDate: currKey,
+            fromPrice: prev.close,
+            toPrice: curr.open,
+            gapPoints: curr.open - prev.close,
+            boxIndex: i,
+            timestamp: currTs,
+          });
+        }
+      }
+    }
     this.currentCvd = cvd;
     const lastBox = boxes[boxes.length - 1];
     this.lastPrice = currentPrice;
