@@ -90,6 +90,32 @@ export class RenkoFlowEngine {
     return this.regimeMeter;
   }
 
+  public loadBackfillBoxes(boxes: RenkoBox[], currentPrice: number, cvd: number = 0) {
+    if (!boxes || boxes.length === 0) return;
+    this.boxes = [...boxes];
+    this.currentCvd = cvd;
+    const lastBox = boxes[boxes.length - 1];
+    this.lastPrice = currentPrice;
+    this.lastSessionKey = this.sessionKey(lastBox.timeEnd || Date.now());
+    this.currentBox = {
+      index: boxes.length,
+      direction: currentPrice >= lastBox.close ? 'UP' : 'DOWN',
+      open: lastBox.close,
+      close: currentPrice,
+      high: Math.max(lastBox.close, currentPrice),
+      low: Math.min(lastBox.close, currentPrice),
+      timeStart: lastBox.timeEnd || Date.now(),
+      timeEnd: Date.now(),
+      ticksCount: 0,
+      totalVolume: 0,
+      buyVolume: 0,
+      sellVolume: 0,
+      delta: 0,
+      cvdAtClose: cvd,
+      isConvergence: false,
+    };
+  }
+
   /**
    * Inicializa com um preço base
    */

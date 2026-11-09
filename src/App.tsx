@@ -4661,13 +4661,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 targetState.boxes = bfBoxes;
                 targetState.currentPrice = lastPrice;
                 targetState.cvd = Number(payload.data?.cvd) || lastBf.cvdAtClose;
+                targetState.engine.loadBackfillBoxes(bfBoxes, lastPrice, targetState.cvd);
               }
 
               const isCurrent = bfAssetId === activeAssetIdRef.current;
 
               if (isCurrent) {
+                engineRef.current.loadBackfillBoxes(bfBoxes, lastPrice, Number(payload.data?.cvd) || lastBf.cvdAtClose);
                 setBoxes(bfBoxes);
                 setCurrentPrice(lastPrice);
+                setCurrentBox(engineRef.current.getCurrentBox());
                 if (Number.isFinite(Number(payload.data?.cvd))) setCvd(Number(payload.data.cvd));
 
                 // Sintetiza e popula imediatamente o motor de Range e o buffer de ticks
