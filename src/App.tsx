@@ -5139,18 +5139,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             }));
 
           } else if (payload.type === 'LOCAL_PREGOES_LIST') {
-
-            const listaPonte = Array.isArray(payload.data) ? payload.data : [];
-
-            // Catálogo da ponte tem precedência, mas nunca apaga o que o arquivo
-            // estático já entregou (a ponte só sobe com o MT5 no ar).
+            const raw = payload.data;
+            const listaPonte: LocalPregao[] = Array.isArray(raw)
+              ? raw
+              : (raw?.symbols && raw.symbols[chartSymbolFor(asset)])
+              ? raw.symbols[chartSymbolFor(asset)]
+              : (raw?.symbols ? (Object.values(raw.symbols).flat() as LocalPregao[]) : []);
 
             if (listaPonte.length > 0) {
-
               setLocalPregoes((atual) => mesclarPregoes(atual, listaPonte));
-
             }
-
           } else if (payload.type === 'BACKTEST_RESULT') {
 
             setIsBacktestingReal(false);
@@ -6436,64 +6434,40 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
    */
 
   const resolveReplayTicks = useCallback(
-
     async (
-
       targetDays: number,
-
-      seed: number
-
+      seed: number,
+      targetDate?: string
     ): Promise<{
-
       ticks: Tick[];
-
       source: 'REAL' | 'SYNTHETIC';
-
       volumeSource?: VolumeSource;
-
       origin?: 'LIVE' | 'BANK';
-
       fonte?: HistoryMeta;
-
       note?: string;
-
     }> => {
-
       // Pede targetDays para carregar exatamente os dias solicitados sem mascarar o ensaio
       const daysToRequest = Math.max(1, Math.min(10, targetDays));
-
       const synthetic = () =>
         generateHistoricalTicks(daysToRequest, referencePrice(asset), seed, asset);
 
       const socket = wsRef.current;
 
       if (mt5State.status !== 'CONNECTED' || !socket || socket.readyState !== WebSocket.OPEN) {
-
         // Sem ponte, ainda assim podemos tocar REAL: o banco local guarda a fita dos pulls
         // conectados anteriores (isolado por ativo para nunca misturar WIN e WDO).
         // Só caímos no sintético se não houver NADA real capturado deste ativo.
         const bank = realTapeService.loadMostRecent(daysToRequest, asset.id);
-
         if (bank && bank.ticks.length > 0) {
-
           return {
-
             ticks: bank.ticks,
-
             source: 'REAL' as const,
-
             volumeSource: bank.volumeSource,
-
             origin: 'BANK' as const,
-
             note: `Origem: fita REAL CAPTURADA (banco local deste navegador, ${bank.days} dia(s)).${bank.truncated ? ' Obs.: algum dia foi recortado pelo teto de armazenamento.' : ''}`,
-
           };
-
         }
-
         return { ticks: synthetic(), source: 'SYNTHETIC' as const };
-
       }
 
       try {
@@ -6501,6 +6475,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
           reqId: `hist-${Date.now()}`,
           symbol: chartSymbolFor(asset),
           days: daysToRequest,
+          date: targetDate,
           asset,
           send: (payload) => socket.send(payload),
           timeoutMs: 30000,
@@ -6800,7 +6775,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       const rangeEng = rangeEngineRef.current;
       const timeEng = timeEngineRef.current;
 
-      const run = await resolveReplayTicks(replayTargetDays, seedForRun);
+      const targetDate = dayKeyOverride || selectedPregaoDate || undefined;
+      const run = await resolveReplayTicks(replayTargetDays, seedForRun, targetDate);
       const rawTicks = run.ticks;
 
       if (!rawTicks || rawTicks.length === 0) {
@@ -10449,7 +10425,7 @@ ${
         sessionUptimeSeconds={sessionUptimeSeconds}
         wsUrl={`ws://${config.mt5Host || '127.0.0.1'}:${config.mt5Port || 8765}`}
         brokerCompany={mt5State.brokerCompany}
-        accountLogin={mt5State.accountLogin}
+        accountLogin={mt5State.accountLogin != null ? String(mt5State.accountLogin) : undefined}
         terminalConnected={terminalConnected}
       />
 

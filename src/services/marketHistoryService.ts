@@ -116,13 +116,14 @@ export class MarketHistoryService {
       reqId: string;
       symbol: string;
       days: number;
+      date?: string;
       asset: AssetSpec;
       send: (payload: string) => void;
       onProgress?: (received: number) => void;
       timeoutMs?: number;
     }
   ): Promise<HistoryResult> {
-    const { reqId, symbol, days, asset, send, onProgress } = opts;
+    const { reqId, symbol, days, date, asset, send, onProgress } = opts;
     // Um pedido por vez por reqId: recomeçar o replay com o mesmo id não pode deixar duas
     // promessas vivas disputando o mesmo buffer.
     this.drop(reqId);
@@ -159,7 +160,7 @@ export class MarketHistoryService {
       this.pending.set(reqId, entry);
 
       try {
-        send(JSON.stringify({ action: 'REQUEST_HISTORY', reqId, symbol, days }));
+        send(JSON.stringify({ action: 'REQUEST_HISTORY', reqId, symbol, days, date }));
       } catch (e) {
         this.drop(reqId);
         reject(new Error(`Não foi possível pedir histórico à ponte: ${String(e)}`));
