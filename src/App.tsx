@@ -9513,25 +9513,16 @@ ${
 
 
         <button
-
           onClick={() => setActiveTab('equity')}
-
           className={`flex flex-col items-center justify-center py-1 px-2 rounded-lg text-[10px] font-medium transition-all ${
-
             activeTab === 'equity'
-
               ? 'text-neutral-400 bg-neutral-950/40 font-semibold'
-
               : 'text-slate-400 hover:text-slate-200'
-
           }`}
-
+          title="Curva de Patrimônio & Gráfico Subaquático de Exposição (Drawdown)"
         >
-
           <LineChart className="w-4 h-4 mb-0.5" />
-
-          <span>Curva</span>
-
+          <span>Patrimônio</span>
         </button>
 
 
