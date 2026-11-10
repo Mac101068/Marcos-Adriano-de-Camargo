@@ -3602,8 +3602,8 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* TIRA DE STATUS DA SÉRIE / CONTROLES COLADA NO GRÁFICO (LINHA 4)          */}
       {/* ========================================================================= */}
       <div className="flex items-center justify-between gap-2 pl-0 sm:pl-0 pr-1.5 sm:pr-2 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
-        <div className="flex items-center gap-2 min-w-0">
-          {/* DADOS DO ATIVO E VALOR ATUAL (INVERTIDOS PARA ESTA LINHA MAIS PRÓXIMA DO GRÁFICO) */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          {/* DADOS DO ATIVO (SOMENTE O SÍMBOLO) */}
           <div className="flex items-center gap-1.5 shrink-0 rounded bg-zinc-950 border border-zinc-700/80 px-2 h-[22px]">
             <span
               className={`w-2 h-2 rounded-full ${
@@ -3617,12 +3617,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             <span className="font-bold text-zinc-100 text-[11px] tracking-tight">
               {asset.activeContract || asset.primarySymbol}
             </span>
-            <span className="text-zinc-600">|</span>
-            <span className="text-[9.5px] text-zinc-400 uppercase">Preço:</span>
-            <span className="text-[11.5px] font-bold text-emerald-300 tabular-nums">
-              {formatPrice(currentPrice, asset)}
-            </span>
-            <span className="text-[9.5px] text-zinc-500">pts</span>
           </div>
 
           {/* Seletor da série: Pontos (Renko) x Range, com escala editável */}
@@ -3728,7 +3722,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           {onOpenShadowWindow && (
             <button
               onClick={() => onOpenShadowWindow()}
-              className="flex items-center gap-1 px-1.5 h-[22px] rounded border font-sans text-[10px] cursor-pointer transition-colors whitespace-nowrap max-w-[190px] overflow-hidden text-ellipsis"
+              className="flex items-center gap-1 px-1.5 h-[22px] rounded border font-sans text-[10px] cursor-pointer transition-colors whitespace-nowrap max-w-[190px] overflow-hidden text-ellipsis shrink-0"
               title={shadowDetail || 'Robô 2 (sombra) — segundo robô em papel, com estratégia e escala próprias'}
             >
               <span className={shadowEnabled ? 'text-zinc-200' : 'text-zinc-500'}>
