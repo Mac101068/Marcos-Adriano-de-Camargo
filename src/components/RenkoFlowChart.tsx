@@ -3685,14 +3685,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 >
                   +
                 </button>
-                <button
-                  type="button"
-                  onClick={() => onOpenRenkoParam?.()}
-                  className="text-[9.5px] text-zinc-500 hover:text-zinc-300 cursor-pointer ml-0.5 tabular-nums"
-                  title="Abrir no painel de Parâmetros"
-                >
-                  ({formatPrice(renkoBoxPoints, asset)}p)
-                </button>
               </div>
             )}
             {chartSeries === 'range' && (
@@ -3715,7 +3707,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               </select>
             )}
           </div>
-          <span className="text-emerald-400 font-semibold tabular-nums">{boxes.length} blk</span>
 
           {/* ROBÔ 2 (sombra): atalho para a janela do segundo robô de papel. Sem sombra ligada,
               o chip é só o "+" — clicar abre a janela, onde se escolhe estratégia e escala. */}
