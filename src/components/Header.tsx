@@ -117,7 +117,7 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
     <div ref={rootRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
+        className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${
           groupActive ? 'bg-slate-800/70 text-slate-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
         }`}
       >
@@ -273,7 +273,7 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
           `A série contínua ${asset.primarySymbol} é símbolo dos testes longos de histórico, não do gráfico.` +
           (syms.offPattern ? `\nATENÇÃO: aberto em ${syms.live} (${shownRole}).` : '')
         }
-        className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-lg border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer"
+        className="flex items-center gap-1 sm:gap-1.5 h-6 px-1.5 sm:px-2 rounded-md border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer"
       >
         <Layers className="w-3 h-3 text-slate-400 shrink-0" />
         <SymbolChip sym={shownSym} role={syms.offPattern ? shownRole : undefined} off={syms.offPattern} />
@@ -407,11 +407,11 @@ const StrategySeal: React.FC<{
           ? `Estratégia ativa: ${name || '—'} · AO VIVO (banco único) — editar na Boleta ou no Estúdio grava nela. Clique para abrir o Estúdio.`
           : `Config atual solto da biblioteca (${name || 'sem nome'}). Edite e salve como estratégia no Estúdio para vinculá-la ao banco único. Clique para abrir o Estúdio.`
       }
-      className="flex items-center gap-1.5 px-1.5 sm:px-2 py-0.5 rounded-lg border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer max-w-[180px]"
+      className="flex items-center gap-1.5 h-6 px-1.5 sm:px-2 rounded-md border border-slate-700 bg-slate-900 hover:border-slate-600 transition-colors cursor-pointer max-w-[180px]"
     >
       <Palette className="w-3.5 h-3.5 text-slate-400 shrink-0" />
       <span className="hidden sm:inline text-[9px] uppercase tracking-wider text-slate-500 shrink-0">EA</span>
-      <span className="text-[11px] font-semibold text-slate-100 truncate">{name || '— sem estratégia —'}</span>
+      <span className="text-[10px] font-semibold text-slate-100 truncate">{name || '— sem estratégia —'}</span>
       {shortId && <span className="hidden md:inline text-[9px] font-mono text-slate-500 shrink-0">#{shortId}</span>}
       <span className={`w-2 h-2 rounded-full shrink-0 ${live ? 'bg-emerald-400' : 'bg-amber-400'}`} />
     </button>
@@ -472,7 +472,7 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   return (
-    <header className="flex items-center justify-between gap-2 px-3 sm:px-4 md:px-5 py-0.5 bg-slate-950 border-b border-slate-800/80 shrink-0">
+    <header className="flex items-center justify-between gap-2 px-3 sm:px-4 md:px-5 h-8 bg-slate-950 border-b border-slate-800/80 shrink-0">
       {/* Zone 1: Brand Title & EA Registered Status. Vão apertado e fonte miúda: cabeçalho, tira de
           métricas e barra do gráfico são três faixas empilhadas — cada pixel vertical aqui é tela de
           gráfico ganha embaixo. */}
@@ -505,7 +505,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleDadosPanel}
           title="Abrir/fechar a janela de controles do painel Renko (Sinal, Exibição, Escalas, Desenho, Ordem rápida)"
-          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${
             dadosPanelOpen
               ? 'bg-slate-800/70 text-slate-300 font-semibold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
@@ -520,7 +520,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleBoxWindow}
           title="Abrir/fechar a janela do Box Renko (OHLC, fluxo Heikin-Ashi, CVD e convergência do box ativo)"
-          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] leading-4 font-medium transition-colors whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${
             boxWindowOpen
               ? 'bg-slate-800/70 text-slate-300 font-semibold'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
@@ -537,7 +537,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Botão de Conexão MT5 Live Bridge */}
         <button
           onClick={() => onToggleMT5Connect()}
-          className={`hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
+          className={`hidden sm:flex items-center gap-1.5 h-6 px-2 text-[10px] leading-none font-semibold rounded-md border transition-all whitespace-nowrap cursor-pointer ${
             mt5State.status === 'CONNECTED'
               ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
               : mt5State.status === 'CONNECTING'
@@ -587,14 +587,14 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Toggle do Robô Automático — clean: chrome neutro, cor só no ponto de status */}
         <button
           onClick={() => setRobotActive(!robotActive)}
-          className={`flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg border transition-all whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 h-6 px-2 text-[10px] leading-none font-semibold rounded-md border transition-all whitespace-nowrap cursor-pointer ${
             robotActive
               ? 'border-emerald-600/70 bg-emerald-950/40 text-emerald-200'
               : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600'
           }`}
           title="Ativar/Pausar Envio Automático de Ordens (sincronizado em todos os dispositivos)"
         >
-          <span className={`w-2 h-2 rounded-full ${robotActive ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-rose-400'}`} />
+          <span className={`w-1.5 h-1.5 rounded-full ${robotActive ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-rose-400'}`} />
           <span className="hidden md:inline">{robotActive ? 'On' : 'Off'}</span>
         </button>
 
@@ -602,7 +602,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={() => setIsSimulating(!isSimulating)}
           title="Ligar/desligar apenas o feed de ticks ao vivo. O período de histórico roda no replay da tira de status."
-          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-0.5 text-[11px] leading-4 font-medium rounded-lg border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap cursor-pointer"
+          className="flex items-center gap-1.5 h-6 px-2 text-[10px] leading-none font-medium rounded-md border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap cursor-pointer"
         >
           {isSimulating ? (
             <>
@@ -620,7 +620,7 @@ export const Header: React.FC<HeaderProps> = ({
         {onOpenPdfModal && (
           <button
             onClick={onOpenPdfModal}
-            className="hidden xl:flex items-center gap-1.5 px-2.5 py-0.5 text-[11px] leading-4 font-semibold rounded-lg bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+            className="hidden xl:flex items-center gap-1.5 h-6 px-2 text-[10px] leading-none font-semibold rounded-md bg-slate-900 border border-slate-700 text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
             title="Visualizar e exportar o Dossiê Técnico do Projeto em PDF"
           >
             <FileText className="w-3.5 h-3.5 text-slate-400" />

@@ -47,27 +47,27 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
         {/* Tarja compacta e proporcional posicionada no canto superior direito */}
         <button
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-[11px] leading-4 transition-all cursor-pointer whitespace-nowrap shadow-xs ${getStatusStyle()}`}
+          className={`flex items-center gap-1.5 h-6 px-2 rounded-md border text-[10px] leading-none transition-all cursor-pointer whitespace-nowrap shadow-xs ${getStatusStyle()}`}
           title="Clique para gerenciar usuário ou ver detalhes da licença"
         >
           {currentUser.role === 'ADMIN' ? (
             <>
               <ShieldCheck className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
-              <span className="font-semibold text-yellow-100 text-[11px] tracking-tight">Adm</span>
+              <span className="font-semibold text-yellow-100 text-[10px] tracking-tight">Adm</span>
               <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
               <ChevronDown className="w-3 h-3 text-yellow-400/80 ml-0.5 shrink-0" />
             </>
           ) : (
             <>
               <span
-                className={`w-2 h-2 rounded-full shrink-0 ${
+                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                   !isActive ? 'bg-rose-400' : currentUser.status === 'TRIAL' ? 'bg-amber-400' : 'bg-emerald-400'
                 }`}
               />
-              <span className="font-medium text-slate-200 text-[11px] truncate max-w-[85px]">
+              <span className="font-medium text-slate-200 text-[10px] truncate max-w-[85px]">
                 {currentUser.name.split(' ')[0]}
               </span>
-              <span className="text-[10px] font-mono opacity-80 font-semibold">
+              <span className="text-[9px] font-mono opacity-80 font-semibold">
                 {!isActive ? 'Exp' : `${remainingDays}d`}
               </span>
               <ChevronDown className="w-3 h-3 opacity-60 ml-0.5 shrink-0" />
@@ -79,7 +79,7 @@ export const SubscriptionStatusBadge: React.FC<SubscriptionStatusBadgeProps> = (
         {currentUser.role !== 'ADMIN' && (!isActive || remainingDays <= 7) && onOpenRenewModal && (
           <button
             onClick={onOpenRenewModal}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold shadow-xs transition-all cursor-pointer"
+            className="flex items-center gap-1 h-6 px-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold shadow-xs transition-all cursor-pointer"
           >
             <Sparkles className="w-3 h-3" />
             <span className="hidden sm:inline">Renovar</span>
