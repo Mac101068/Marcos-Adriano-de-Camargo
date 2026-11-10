@@ -139,11 +139,21 @@ git push origin main
 
 ---
 
-## 6. Próximos Passos Sugeridos para "Configuração do Robô"
-1. **Configuração de Parâmetros da Estratégia**:
-   - Ajuste dos gatilhos do robô (Take Profit, Stop Loss, Breakeven e Piramidação no Renko 10R).
-   - Validação da Boleta e sincronização em tempo real com o Estúdio de Estratégias.
-2. **Implantação do Robô 2 (Sombra)**:
-   - Finalização da janela flutuante do segundo robô de papel (`shadowWindowOpen`) com estratégia independente de validação cruzada.
-3. **Testes de Execução em Pregão Ao Vivo**:
-   - Ativação do robô com a ponte armada durante o horário de negociação da B3 (09:00 às 17:55).
+## 6. Evolução Multi-Robôs & Modo Copiloto (10 de Novembro de 2026)
+
+### Arquitetura Multi-Ativos (Índice, Dólar e Bitcoin)
+1. **Ponte & Backend (`bot_mt5_ciclo15.py`):**
+   - Suporte a modos operacionais dedicados por ativo: `ROBOT_MODES = {"WIN": "COPILOT", "WDO": "COPILOT", "BIT": "COPILOT"}`.
+   - O EA principal processa Times & Trades e Renko dos 3 ativos em paralelo (`WINZ26`, `WDOZ26`, `BITX26`).
+   - Quando um sinal de confluência é gerado, se o ativo estiver no modo `COPILOT`, a ordem **não é enviada cegamente a mercado**: o sinal é transmitido via WebSocket (`SIGNAL_GENERATED`) e fica pronto para admissão/execução pelo operador.
+   - Sincronização via evento `SET_ROBOT_MODE` entre frontend e backend.
+
+2. **Interface Visual 1 — Tira / Mini-cards Compactos (`MultiAssetRobotsBar.tsx`):**
+   - Integrada na barra de ferramentas do gráfico Renko.
+   - Exibe os 3 ativos (`WIN`, `WDO`, `BIT`) com LED de status, modo (`COP`, `AUT`, `SOM`), PnL ao vivo em R$ e botão de disparo imediato `[⚡ BUY / SELL]` ao surgir sinal de confluência.
+
+3. **Interface Visual 2 — Janela Flutuante com Abas por Ativo (`MultiAssetRobotsPanel.tsx`):**
+   - Janela flutuante (`DadosPanelWindow`) com abas `[WIN]`, `[WDO]` e `[BIT]`.
+   - Alternância de modo (`Copiloto` / `Automático` / `Sombra`), visualização do último sinal do EA com motivo e horário, PnL e posições abertas no MT5 com botão de zeragem, além de ajuste de contratos e stops por ativo.
+
+

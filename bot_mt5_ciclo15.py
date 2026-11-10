@@ -191,6 +191,13 @@ STRATEGY_MODE = "PYRAMID_FLOW_CONFLUENCE"
 
 MAX_POSITIONS = 10
 
+# Modos Operacionais dos Robôs por Ativo: "COPILOT" (Operador administra entradas), "AUTO" (Execução automática) ou "SHADOW"
+ROBOT_MODES = {
+    "WIN": "COPILOT",
+    "WDO": "COPILOT",
+    "BIT": "COPILOT",
+}
+
 
 
 # Offset do servidor XP MT5 (que grava horário BRT diretamente como epoch UTC):
@@ -527,9 +534,19 @@ def check_trade_allowed(state, data, action):
                        "de propósito: encerrar posição reduz risco e você precisa poder se proteger "
                        "no meio de um ensaio")
 
-    if action in ENTRY_ACTIONS and not state["armed"]:
+    # Ordens manuais da boleta ou do modo Copiloto disparadas pelo operador:
+    comment = str(data.get("comment", ""))
+    is_operator_order = bool(
+        comment.startswith("COPILOT") or
+        comment.startswith("WEB_") or
+        comment.startswith("MAE_") or
+        comment.startswith("PIR_") or
+        data.get("magic") in (MANUAL_ORDER_MAGIC, 150101, 150201, 150301)
+    )
 
-        return False, "ponte EM SEGURO: ligue o Robô no app para liberar entradas"
+    if action in ENTRY_ACTIONS and not state["armed"] and not is_operator_order:
+
+        return False, "ponte EM SEGURO: ligue o Robô no app para liberar entradas automáticas"
 
     if action == "ORDER_SEND":
 
@@ -1401,7 +1418,7 @@ class MT5OrderManager:
 
 
 
-        order_tag = f"{ORDER_COMMENT} {comment}"[:31]
+        order_tag = str(comment or "FLOW")[:24]
 
         request = {
 
@@ -1664,91 +1681,76 @@ class MT5OrderManager:
 
 
 
-        point = mt5.symbol_info(self.symbol).point
-
-        tick = mt5.symbol_info_tick(self.symbol)
-
-        if not tick:
-
-            self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
-                              "SEM_TICK_DA_CORRETORA", box_index, sl_points, tp_points)
-
+        mt5.symbol_select(self.symbol, True)
+        sym_info = mt5.symbol_info(self.symbol)
+        if not sym_info:
+            print(f"[ERRO MT5] Símbolo {self.symbol} não encontrado no MT5!", flush=True)
             return False, 0
 
+        tick_size = sym_info.trade_tick_size if sym_info.trade_tick_size > 0 else 1.0
+        digits = sym_info.digits
 
+        tick = mt5.symbol_info_tick(self.symbol)
+        if not tick:
+            self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
+                              "SEM_TICK_DA_CORRETORA", box_index, sl_points, tp_points)
+            print(f"[ERRO MT5] Sem tick disponível para {self.symbol}!", flush=True)
+            return False, 0
 
-        use_volume = float(volume) if volume is not None else self.contracts
-
+        use_volume = float(volume) if volume is not None else float(self.contracts)
         is_buy = order_type == "BUY"
-
         entry_price = tick.ask if is_buy else tick.bid
 
+        sl_val = float(sl_points) if sl_points is not None else float(STOP_LOSS_POINTS)
+        if sl_val > 0:
+            raw_sl = (entry_price - sl_val) if is_buy else (entry_price + sl_val)
+            sl_price = round(round(raw_sl / tick_size) * tick_size, digits)
+        else:
+            sl_price = 0.0
 
+        tp_val = float(tp_points) if tp_points is not None else float(TAKE_PROFIT_POINTS)
+        if tp_val > 0:
+            raw_tp = (entry_price + tp_val) if is_buy else (entry_price - tp_val)
+            tp_price = round(round(raw_tp / tick_size) * tick_size, digits)
+        else:
+            tp_price = 0.0
 
-        sl_val = sl_points if sl_points is not None else STOP_LOSS_POINTS
-
-        sl_price = (entry_price - (sl_val * point) if is_buy else entry_price + (sl_val * point)) if sl_val > 0 else 0.0
-
-
-
-        tp_val = tp_points if tp_points is not None else TAKE_PROFIT_POINTS
-
-        tp_price = (entry_price + (tp_val * point) if is_buy else entry_price - (tp_val * point)) if tp_val > 0 else 0.0
-
-
-
-        order_tag = f"{ORDER_COMMENT} {comment}"[:31]
-
-
+        order_tag = str(comment or "FLOW")[:24]
 
         request = {
-
             "action": mt5.TRADE_ACTION_DEAL,
-
             "symbol": self.symbol,
-
             "volume": use_volume,
-
             "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
-
             "price": entry_price,
-
             "sl": sl_price,
-
             "tp": tp_price,
-
             "deviation": 20,
-
             "magic": int(magic) if magic else self.magic_number,
-
             "comment": order_tag,
-
             "type_time": mt5.ORDER_TIME_GTC,
-
             "type_filling": self.get_filling_mode(),
-
         }
 
+        print(f" 🚀 ENVIANDO ORDEM AO MT5: {self.symbol} {order_type} {use_volume} ctros @ {entry_price} | SL={sl_price} TP={tp_price} Magic={request['magic']}", flush=True)
         res = mt5.order_send(request)
 
+        if res is None:
+            err_code, err_desc = mt5.last_error()
+            print(f"❌ [ERRO MT5 CRÍTICO [{self.symbol}]] order_send retornou None! Erro={err_code} ({err_desc}) | Request: {request}", flush=True)
+            return False, 0
+
         if res.retcode == mt5.TRADE_RETCODE_DONE:
-
-            print(f"✅ ORDEM EXECUTADA: {order_type} {use_volume} ctros @ {entry_price:.1f} | Ticket #{res.order}")
-
+            print(f"✅ ORDEM EXECUTADA: {self.symbol} {order_type} {use_volume} ctros @ {entry_price} | Ticket #{res.order}", flush=True)
             self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, entry_price,
                               res.order, res.retcode, True, "ORDEM_ACCEPTED", box_index, sl_val, tp_val)
-
             return True, res.order
-
         else:
-
-            print(f"[ERRO MT5] RetCode={res.retcode}, Desc={res.comment}")
-
+            print(f"❌ [ERRO MT5 [{self.symbol}]] RetCode={res.retcode}, Desc={res.comment} | Request: {request}", flush=True)
             self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None,
                               getattr(res, "retcode", None), False, f"REJEITADO_CORRETORA | {getattr(res, 'comment', '')}",
                               box_index, sl_val, tp_val)
-
-        return False, 0
+            return False, 0
 
 
 
@@ -2993,8 +2995,8 @@ async def ws_handler(websocket):
                 mgr = get_or_create_order_manager(target_sym)
 
                 if action == "ORDER_SEND":
-
                     order_magic = data.get("magic") or None
+                    print(f" 📥 [WEBSOCKET] RECEBIDA SOLICITAÇÃO ORDER_SEND: {target_sym} {data.get('type')} {data.get('contracts', 1)} ctros | Magic={order_magic} SL={data.get('sl')} TP={data.get('tp')}", flush=True)
 
                     if data.get("isLimit"):
 
@@ -3078,6 +3080,15 @@ async def ws_handler(websocket):
                         magic=data.get("robotMagic") if data.get("robotMagic") else None
 
                     )
+
+                elif action == "SET_ROBOT_MODE":
+
+                    asset_k = str(data.get("assetKey", "")).upper()
+                    new_mode = str(data.get("mode", "COPILOT")).upper()
+                    if asset_k in ROBOT_MODES:
+                        ROBOT_MODES[asset_k] = new_mode
+                        print(f" 🤖 MODO DO ROBÔ [{asset_k}] ALTERADO PARA: {new_mode}", flush=True)
+                        await broadcast_to_web({"type": "ROBOT_MODES_UPDATE", "data": ROBOT_MODES})
 
     except websockets.exceptions.ConnectionClosed:
 
@@ -3667,12 +3678,18 @@ async def mt5_stream_loop():
                                 # A trava de ambiente passa na frente do armado: um cliente ARMADO (a tela reenvia
                                 # `armed` no AUTH sozinha) jamais pode abrir posição enquanto o operador decidiu
                                 # rodar em seguro.
+                                asset_k = "WIN" if "WIN" in s else ("WDO" if "WDO" in s else ("BIT" if "BIT" in s else "WIN"))
+                                current_mode = ROBOT_MODES.get(asset_k, "COPILOT")
+
                                 if ordens_bloqueadas():
                                     print(f" 🛑 ORDEM BLOQUEADA POR TRAVA [{'ORDERS_BLOCKED' if ORDERS_BLOCKED else 'MODO REPLAY'}] [{s}]: sinal "
                                           f"{signal} ({reason}) calculado e transmitido, nenhuma ordem enviada",
                                           flush=True)
-                                elif any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
-                                    mgr.execute_pyramid_confluence(signal, new_box)
+                                elif current_mode == "AUTO":
+                                    if any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
+                                        mgr.execute_pyramid_confluence(signal, new_box)
+                                else:
+                                    print(f" 🎯 SINAL [{s}] DISPONÍVEL NO COPILOTO [{current_mode}]: {signal} ({reason}) — aguardando operador", flush=True)
 
                     if batch_ticks:
                         if len(batch_ticks) == 1:
