@@ -552,6 +552,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Menu Dropdown unificado de Indicadores no topo do gráfico
   const [indicatorsMenuOpen, setIndicatorsMenuOpen] = useState<boolean>(false);
 
+  // Detecção de navegador interno (IDE / Electron / iframe) vs. navegador externo
+  const isInternalBrowser = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return navigator.userAgent.includes('Electron') || window.self !== window.top;
+  }, []);
+
   // Preferências visuais
   const [showOrderLines, setShowOrderLines] = useState<boolean>(true);
   // Níveis do pregão: traço fino na cor do nível + etiqueta curta. Persistido porque é preferência de
@@ -3749,8 +3755,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
           {/* ===================================================================== */}
           {/* PAINEL CENTRALIZADO DE INDICADORES (Dropdown Popover)                 */}
+          {/* Oculto no navegador interno da IDE para liberar espaço no layout     */}
           {/* ===================================================================== */}
-          <div className="relative">
+          {!isInternalBrowser && (
+            <div className="relative">
             <button
               type="button"
               onClick={() => setIndicatorsMenuOpen((prev) => !prev)}
@@ -3928,6 +3936,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               </>
             )}
           </div>
+          )}
 
           {/* Níveis do pregão: atalho rápido na barra */}
           {priceLevels.length > 0 && (
@@ -3955,31 +3964,28 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             </button>
           )}
 
-          {/* Atalho rápido da Subjanela de Ciclos / Fluxo na barra */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowFlowPane((prev) => {
-                const next = !prev;
-                try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, String(next)); } catch {}
-                return next;
-              });
-            }}
-            className={`flex items-center gap-1 px-2 h-[22px] rounded border font-sans text-[10px] font-bold cursor-pointer transition-all ${
-              showFlowPane
-                ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300 hover:bg-emerald-900/80 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
-                : 'bg-zinc-900 border-zinc-700/80 text-zinc-400 hover:text-zinc-200'
-            }`}
-            title={showFlowPane ? 'Subjanela de Ciclos ATIVA — clique para recolher (gráfico em tela cheia)' : 'Subjanela de Ciclos INATIVA — clique para abrir'}
-          >
-            <Activity className="w-3 h-3 text-emerald-400" />
-            <span>CICLOS</span>
-            <span className={`w-1.5 h-1.5 rounded-full ${showFlowPane ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-zinc-600'}`} />
-          </button>
-
-          {/* Dica de sinal */}
-          {openOrders.length === 0 && (
-            <span className="text-zinc-500 text-[10px] hidden sm:inline">Aguardando Sinal</span>
+          {/* Atalho rápido da Subjanela de Ciclos / Fluxo na barra (oculto no navegador interno) */}
+          {!isInternalBrowser && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowFlowPane((prev) => {
+                  const next = !prev;
+                  try { localStorage.setItem(STORAGE_KEY_SHOW_FLOW, String(next)); } catch {}
+                  return next;
+                });
+              }}
+              className={`flex items-center gap-1 px-2 h-[22px] rounded border font-sans text-[10px] font-bold cursor-pointer transition-all ${
+                showFlowPane
+                  ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300 hover:bg-emerald-900/80 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
+                  : 'bg-zinc-900 border-zinc-700/80 text-zinc-400 hover:text-zinc-200'
+              }`}
+              title={showFlowPane ? 'Subjanela de Ciclos ATIVA — clique para recolher (gráfico em tela cheia)' : 'Subjanela de Ciclos INATIVA — clique para abrir'}
+            >
+              <Activity className="w-3 h-3 text-emerald-400" />
+              <span>CICLOS</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${showFlowPane ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-zinc-600'}`} />
+            </button>
           )}
         </div>
       </div>
