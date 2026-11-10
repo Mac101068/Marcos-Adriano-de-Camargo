@@ -545,9 +545,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Controle do card flutuante em celulares
   const [isMobileDetailsOpen, setIsMobileDetailsOpen] = useState<boolean>(false);
 
-  // Barra lateral de controles: dockada na esquerda no desktop, drawer em telas pequenas
-  const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
-
   // Painel de ajustes de exibição do gráfico (aberto pela engrenagem na linha da boleta).
   // Concentra tijolos/zoom/modo/escala do fluxo + legenda, tirando a tarima miúda sempre-visível.
   const [chartToolsOpen, setChartToolsOpen] = useState<boolean>(false);
@@ -3509,17 +3506,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   // Cálculo do PnL flutuante migrou para o livro de hedge do App (hedgeBook), que alimenta a
   // boleta — a antiga tira de status e a janela de Dados só repetiam esse número.
 
-  // Fecha o drawer de controles com Esc
-  useEffect(() => {
-    if (!sidebarOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSidebarOpen(false);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [sidebarOpen]);
-
-  // Props compartilhadas entre a barra lateral dockada (desktop) e o drawer (telas pequenas)
+  // Props compartilhadas para a janela flutuante de Dados (atalho no menu)
   const sidebarProps = {
     blockCount: boxes.length,
     visibleCount,
@@ -3610,16 +3597,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* ========================================================================= */}
       <div className="flex items-center justify-between gap-2 px-1.5 sm:px-2 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
         <div className="flex items-center gap-2 min-w-0">
-          {/* Abre a barra lateral de controles em telas pequenas */}
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="lg:hidden flex items-center gap-1 px-1.5 h-[22px] rounded bg-zinc-950/70 border border-zinc-700/80 text-zinc-300 hover:text-zinc-100 cursor-pointer"
-            title="Abrir controles do gráfico"
-          >
-            <Sliders className="w-3 h-3" />
-            <span className="text-[10px] font-sans">Controles</span>
-          </button>
-
           {/* DADOS DO ATIVO E VALOR ATUAL (INVERTIDOS PARA ESTA LINHA MAIS PRÓXIMA DO GRÁFICO) */}
           <div className="flex items-center gap-1.5 shrink-0 rounded bg-zinc-950 border border-zinc-700/80 px-2 h-[22px]">
             <span
@@ -4481,18 +4458,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         </div>
       </div>
 
-      {/* Drawer de controles (telas pequenas): mesma barra lateral sobre o gráfico */}
-      {sidebarOpen && (
-        <>
-          <div
-            className="fixed inset-0 z-40 bg-zinc-950/70 backdrop-blur-sm lg:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
-          <div className="fixed top-0 bottom-0 left-0 z-50 lg:hidden shadow-2xl shadow-black/60">
-            <ChartControlSidebar {...sidebarProps} isDrawer onCloseDrawer={() => setSidebarOpen(false)} />
-          </div>
-        </>
-      )}
+
 
       {/* ========================================================================= */}
       {/* FAIXA DO FUNIL: o limiar CALCULADO do pregão exposto para avaliação, no     */}
