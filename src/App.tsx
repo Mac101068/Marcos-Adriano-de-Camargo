@@ -1107,6 +1107,17 @@ export default function App() {
           } else if (data.action === 'DISCONNECT') {
             toggleMT5ConnectRef.current?.('DISCONNECT', true);
           }
+        } else if (data.type === 'MT5_DAY_STATS_SYNC') {
+          if (data.dayStats) {
+            setMt5State((prev) => ({
+              ...prev,
+              dayStats: data.dayStats,
+              dayStatsBySymbol: data.dayStatsBySymbol ?? (prev as any).dayStatsBySymbol,
+              balance: data.balance ?? prev.balance,
+              equity: data.equity ?? prev.equity,
+              floatingProfit: data.floatingProfit ?? prev.floatingProfit,
+            }));
+          }
         } else if (data.type === 'BOX_POINTS_SYNC') {
           const bPts = Number(data.boxPoints);
           const targetAssetId = (data.assetId || (data.symbol ? resolveAsset(data.symbol).id : null)) as AssetId | null;
@@ -1661,7 +1672,7 @@ export default function App() {
     return posArray.map((p: any) => ({
       symbol: String(p.symbol || ''),
       magic: Number(p.magic) || 0,
-      type: p.type === 0 ? 'BUY' : 'SELL',
+      type: (p.type === 0 || p.type === 'BUY' || String(p.type).toUpperCase() === 'BUY') ? 'BUY' : 'SELL',
       volume: Number(p.volume) || 1,
       profit: Number(p.profit) || 0,
       openPrice: Number(p.price_open) || 0,
@@ -4715,9 +4726,24 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               dayStats: payload.data?.dayStats ?? prev.dayStats,
 
+              dayStatsBySymbol: payload.data?.dayStatsBySymbol ?? (prev as any).dayStatsBySymbol,
+
               ...(!authResultSeen ? { bridgeAuthOk: true, bridgeLegacy: true } : {}),
 
             }));
+
+            if (payload.data?.dayStats) {
+              try {
+                saasChannelRef.current?.postMessage({
+                  type: 'MT5_DAY_STATS_SYNC',
+                  dayStats: payload.data.dayStats,
+                  dayStatsBySymbol: payload.data.dayStatsBySymbol,
+                  balance: payload.data.balance,
+                  equity: payload.data.equity,
+                  floatingProfit: payload.data.floatingProfit,
+                });
+              } catch {}
+            }
 
             // Sincroniza posições reais do MetaTrader 5 diretamente na boleta e no gráfico
             if (Array.isArray(payload.data?.positions)) {
@@ -4727,7 +4753,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   symbol: string;
                   type: 'BUY' | 'SELL';
                   volume: number;
-                  price_open: number;
+                  priceOpen?: number;
+                  price_open?: number;
                   sl: number;
                   tp: number;
                   profit: number;
@@ -4785,22 +4812,27 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     );
                   }
 
+                  const openPrice = Number(pos.priceOpen ?? pos.price_open ?? 0);
+                  const posSl = Number(pos.sl ?? 0);
+                  const posTp = Number(pos.tp ?? 0);
+                  const posProfit = Number(pos.profit ?? 0);
                   const isBuy = pos.type === 'BUY';
-                  const pnlPts = isBuy ? (currentPrice - pos.price_open) : (pos.price_open - currentPrice);
+                  const pnlPts = openPrice > 0 ? (isBuy ? (currentPrice - openPrice) : (openPrice - currentPrice)) : 0;
+
                   if (existingIdx >= 0) {
                     updated[existingIdx] = {
                       ...updated[existingIdx],
                       ticket: pos.ticket,
                       source: 'MT5_LIVE',
                       isRealMT5: true,
-                      entryPrice: pos.price_open,
+                      entryPrice: openPrice > 0 ? openPrice : updated[existingIdx].entryPrice,
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
                       status: 'OPEN',
-                      stopLoss: pos.sl > 0 ? pos.sl : updated[existingIdx].stopLoss,
-                      takeProfit: pos.tp > 0 ? pos.tp : updated[existingIdx].takeProfit,
-                      pointsResult: pnlPts,
-                      financialResult: pos.profit,
+                      stopLoss: posSl > 0 ? posSl : updated[existingIdx].stopLoss,
+                      takeProfit: posTp > 0 ? posTp : updated[existingIdx].takeProfit,
+                      pointsResult: Number.isFinite(pnlPts) ? pnlPts : 0,
+                      financialResult: Number.isFinite(posProfit) ? posProfit : 0,
                     };
                   } else {
                     const newOrd: TradeOrder = {
@@ -4810,18 +4842,18 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                       timeStr: new Date(pos.time ? pos.time * 1000 : Date.now()).toLocaleTimeString(),
                       type: pos.type,
                       role: String(pos.comment || '').toLowerCase().includes('pyr') ? 'PYRAMID' : 'MAIN',
-                      entryPrice: pos.price_open,
+                      entryPrice: openPrice > 0 ? openPrice : currentPrice,
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
                       status: 'OPEN',
                       source: 'MT5_LIVE',
                       magicNumber: pos.magic,
-                      stopLoss: pos.sl || 0,
-                      takeProfit: pos.tp || 0,
+                      stopLoss: posSl > 0 ? posSl : 0,
+                      takeProfit: posTp > 0 ? posTp : 0,
                       triggerReason: 'Execução MT5 Terminal',
                       isRealMT5: true,
-                      pointsResult: pnlPts,
-                      financialResult: pos.profit,
+                      pointsResult: Number.isFinite(pnlPts) ? pnlPts : 0,
+                      financialResult: Number.isFinite(posProfit) ? posProfit : 0,
                     };
                     updated = [newOrd, ...updated];
                   }
@@ -5137,8 +5169,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const bfSym = String(payload.symbol || '').toUpperCase();
             const bfAssetSpec = resolveAsset(bfSym);
             const bfAssetId = bfAssetSpec.id;
-            const bfBoxPointsRaw = Number(payload.data?.boxPoints) || (bfAssetId === 'WIN' ? 50 : config.boxPoints);
-            const bfBoxPoints = (bfAssetId === 'WIN' && bfBoxPointsRaw > 120) ? 50 : bfBoxPointsRaw;
+            
+            // Determina os pontos do box com sanitização rigorosa por ativo (evita contaminação de 50 pts no WDO)
+            let effectiveBoxPoints = Number(payload.data?.boxPoints);
+            if (!effectiveBoxPoints || (bfAssetId === 'WDO' && effectiveBoxPoints > 15) || (bfAssetId === 'WIN' && effectiveBoxPoints < 10)) {
+              effectiveBoxPoints = bfAssetSpec.tradeDefaults.boxPoints || (bfAssetId === 'WDO' ? 2.5 : (bfAssetId === 'WIN' ? 50 : 100));
+            }
+            const bfBoxPoints = effectiveBoxPoints;
 
             // A ponte manda os boxes do ÚLTIMO PREGÃO já formados ou os ticks M1 (SESSION_BACKFILL).
             let rawBfBoxes: RenkoBox[] = [];
@@ -5172,9 +5209,15 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               if (firstTick && firstTick.price > 0) {
                 tempEngine.initialize(firstTick.price, firstTick.timestamp);
               }
+              const tempConfig: AutomationConfig = {
+                ...config,
+                assetId: bfAssetId,
+                boxPoints: bfBoxPoints,
+                minDeltaThreshold: bfAssetSpec.tradeDefaults.minDeltaThreshold,
+              };
               for (const t of incomingTicks) {
                 if (t && t.price > 0) {
-                  tempEngine.processTick(t, config);
+                  tempEngine.processTick(t, tempConfig);
                 }
               }
               rawBfBoxes = tempEngine.getBoxes();
@@ -5285,7 +5328,125 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               positions: payload.data.positions ?? prev.positions,
 
+              dayStats: payload.data?.dayStats ?? prev.dayStats,
+
+              dayStatsBySymbol: payload.data?.dayStatsBySymbol ?? (prev as any).dayStatsBySymbol,
+
             }));
+
+            if (payload.data?.dayStats) {
+              try {
+                saasChannelRef.current?.postMessage({
+                  type: 'MT5_DAY_STATS_SYNC',
+                  dayStats: payload.data.dayStats,
+                  dayStatsBySymbol: payload.data.dayStatsBySymbol,
+                  balance: payload.data.balance,
+                  equity: payload.data.equity,
+                  floatingProfit: payload.data.floatingProfit,
+                });
+              } catch {}
+            }
+
+            // Sincroniza posições vivas a cada pulso de equity broadcast (atualiza boleta e caixas)
+            if (Array.isArray(payload.data?.positions)) {
+              setOrders((prev) => {
+                const livePositions: Array<{
+                  ticket: number;
+                  symbol: string;
+                  type: 'BUY' | 'SELL';
+                  volume: number;
+                  priceOpen?: number;
+                  price_open?: number;
+                  sl: number;
+                  tp: number;
+                  profit: number;
+                  comment?: string;
+                  magic?: number;
+                  time?: number;
+                }> = payload.data.positions;
+
+                const activeSym = chartSymbolFor(asset).toUpperCase().trim();
+                const relevantLive = livePositions.filter((p) => {
+                  const s = String(p.symbol || '').toUpperCase().trim();
+                  return s === activeSym || s.startsWith(asset.id);
+                });
+
+                const liveTicketSet = new Set(relevantLive.map((p) => p.ticket));
+
+                let updated = prev.map((o) => {
+                  if (o.status === 'OPEN' && o.ticket && !liveTicketSet.has(o.ticket)) {
+                    const isWin = (o.pointsResult ?? 0) >= 0;
+                    return {
+                      ...o,
+                      status: (isWin ? 'CLOSED_PROFIT' : 'CLOSED_LOSS') as TradeOrder['status'],
+                      exitPrice: currentPrice,
+                      exitTimestamp: Date.now(),
+                      exitTimeStr: new Date().toLocaleTimeString(),
+                      exitReason: 'FLIP_REVERSAL' as const,
+                    };
+                  }
+                  return o;
+                });
+
+                for (const pos of relevantLive) {
+                  let existingIdx = updated.findIndex((o) => o.ticket === pos.ticket);
+                  if (existingIdx < 0) {
+                    existingIdx = updated.findIndex(
+                      (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') &&
+                             !o.ticket &&
+                             o.type === pos.type
+                    );
+                  }
+
+                  const openPrice = Number(pos.priceOpen ?? pos.price_open ?? 0);
+                  const posSl = Number(pos.sl ?? 0);
+                  const posTp = Number(pos.tp ?? 0);
+                  const posProfit = Number(pos.profit ?? 0);
+                  const isBuy = pos.type === 'BUY';
+                  const pnlPts = openPrice > 0 ? (isBuy ? (currentPrice - openPrice) : (openPrice - currentPrice)) : 0;
+
+                  if (existingIdx >= 0) {
+                    updated[existingIdx] = {
+                      ...updated[existingIdx],
+                      ticket: pos.ticket,
+                      source: 'MT5_LIVE',
+                      isRealMT5: true,
+                      entryPrice: openPrice > 0 ? openPrice : updated[existingIdx].entryPrice,
+                      contracts: pos.volume,
+                      remainingContracts: pos.volume,
+                      status: 'OPEN',
+                      stopLoss: posSl > 0 ? posSl : updated[existingIdx].stopLoss,
+                      takeProfit: posTp > 0 ? posTp : updated[existingIdx].takeProfit,
+                      pointsResult: Number.isFinite(pnlPts) ? pnlPts : 0,
+                      financialResult: Number.isFinite(posProfit) ? posProfit : 0,
+                    };
+                  } else {
+                    const newOrd: TradeOrder = {
+                      id: `mt5-${pos.ticket}`,
+                      ticket: pos.ticket,
+                      timestamp: pos.time ? pos.time * 1000 : Date.now(),
+                      timeStr: new Date(pos.time ? pos.time * 1000 : Date.now()).toLocaleTimeString(),
+                      type: pos.type,
+                      role: String(pos.comment || '').toLowerCase().includes('pyr') ? 'PYRAMID' : 'MAIN',
+                      entryPrice: openPrice > 0 ? openPrice : currentPrice,
+                      contracts: pos.volume,
+                      remainingContracts: pos.volume,
+                      status: 'OPEN',
+                      source: 'MT5_LIVE',
+                      magicNumber: pos.magic,
+                      stopLoss: posSl > 0 ? posSl : 0,
+                      takeProfit: posTp > 0 ? posTp : 0,
+                      triggerReason: 'Execução MT5 Terminal',
+                      isRealMT5: true,
+                      pointsResult: Number.isFinite(pnlPts) ? pnlPts : 0,
+                      financialResult: Number.isFinite(posProfit) ? posProfit : 0,
+                    };
+                    updated = [newOrd, ...updated];
+                  }
+                }
+                return updated;
+              });
+            }
 
           } else if (payload.type === 'LOCAL_PREGOES_LIST') {
             const raw = payload.data;
@@ -8351,12 +8512,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       filled.forEach((o) => {
         const rc = o.remainingContracts ?? o.contracts ?? 1;
+        const safeEntry = Number(o.entryPrice) > 0 ? Number(o.entryPrice) : (currentPrice > 0 ? currentPrice : asset.basePrice);
+        const safeCurPrice = currentPrice > 0 ? currentPrice : safeEntry;
         ctros += rc;
-        avgNum += o.entryPrice * rc;
-        const pts = type === 'BUY' ? currentPrice - o.entryPrice : o.entryPrice - currentPrice;
-        livePts += pts;
-        liveBRL += pointsToBRL(pts, rc, asset);
-        partialBRL += o.partialFinancial || 0;
+        avgNum += safeEntry * rc;
+        const pts = type === 'BUY' ? safeCurPrice - safeEntry : safeEntry - safeCurPrice;
+        const validPts = Number.isFinite(pts) ? pts : 0;
+        livePts += validPts;
+        const brlVal = pointsToBRL(validPts, rc, asset);
+        liveBRL += Number.isFinite(brlVal) ? brlVal : 0;
+        partialBRL += Number.isFinite(o.partialFinancial) ? (o.partialFinancial || 0) : 0;
       });
 
       return {
@@ -8365,9 +8530,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         pending,
         contracts: ctros,
         avgEntry: ctros > 0 ? avgNum / ctros : 0,
-        livePts,
-        liveBRL,
-        partialBRL,
+        livePts: Number.isFinite(livePts) ? livePts : 0,
+        liveBRL: Number.isFinite(liveBRL) ? liveBRL : 0,
+        partialBRL: Number.isFinite(partialBRL) ? partialBRL : 0,
       };
     };
 
@@ -8390,10 +8555,13 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     const localBuyContractsToday = traded.filter((o) => o.type === 'BUY').reduce((a, o) => a + (o.contracts || 1), 0);
     const localSellContractsToday = traded.filter((o) => o.type === 'SELL').reduce((a, o) => a + (o.contracts || 1), 0);
 
-    // Quando conectado ao MetaTrader 5 SEM estar em replay e apenas com ordens reais de mercado:
-    // os contratos e o resultado são buscados do MT5. Caso contrário, usamos a auditoria local.
-    const isRealMT5 = mt5State.status === 'CONNECTED' && !isReplaying && !isSimulating && orders.every((o) => o.isRealMT5);
-    const mt5Stats = isRealMT5 ? mt5State.dayStats : undefined;
+    // Quando conectado ao MetaTrader 5 SEM estar em replay:
+    // os contratos e o resultado são buscados do MT5. Se houver estatísticas por ativo, usamos do ativo corrente.
+    const isRealMT5 = mt5State.status === 'CONNECTED' && !isReplaying && !isSimulating;
+    const statsBySym = (mt5State as any).dayStatsBySymbol;
+    const assetPrefix = (asset.id || 'WIN').substring(0, 3).toUpperCase();
+    const symStats = statsBySym ? (statsBySym[assetPrefix] || statsBySym[asset.id] || statsBySym[asset.primarySymbol]) : undefined;
+    const mt5Stats = isRealMT5 ? (symStats || mt5State.dayStats) : undefined;
 
     const buyContractsToday = mt5Stats ? mt5Stats.buyContractsToday : localBuyContractsToday;
     const sellContractsToday = mt5Stats ? mt5Stats.sellContractsToday : localSellContractsToday;
@@ -8402,21 +8570,20 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     const realizedLoss = mt5Stats ? mt5Stats.realizedLoss : localRealizedLoss;
 
     const floatingTotal = (buy.liveBRL + buy.partialBRL + sell.liveBRL + sell.partialBRL);
-    const dayPnl = mt5Stats
-      ? (mt5Stats.netRealized + (mt5State.floatingProfit !== undefined ? mt5State.floatingProfit : floatingTotal))
-      : (realizedProfit + realizedLoss + floatingTotal);
+    const rawNetRealized = mt5Stats ? Number(mt5Stats.netRealized) : (Number(realizedProfit) + Number(realizedLoss));
+    const dayPnl = (Number.isFinite(rawNetRealized) ? rawNetRealized : 0) + (Number.isFinite(floatingTotal) ? floatingTotal : 0);
 
     return {
       buy,
       sell,
-      realizedProfit,
-      realizedLoss,
-      dayPnl,
-      buyContractsToday,
-      sellContractsToday,
-      contractsTodayTotal,
+      realizedProfit: Number.isFinite(realizedProfit) ? Number(realizedProfit) : 0,
+      realizedLoss: Number.isFinite(realizedLoss) ? Number(realizedLoss) : 0,
+      dayPnl: Number.isFinite(dayPnl) ? Number(dayPnl) : 0,
+      buyContractsToday: Number(buyContractsToday) || 0,
+      sellContractsToday: Number(sellContractsToday) || 0,
+      contractsTodayTotal: Number(contractsTodayTotal) || 0,
     };
-  }, [orders, currentPrice, asset, mt5State.status, mt5State.dayStats, mt5State.floatingProfit, isReplaying, isSimulating]);
+  }, [orders, currentPrice, asset, mt5State.status, mt5State.dayStats, (mt5State as any).dayStatsBySymbol, mt5State.floatingProfit, isReplaying, isSimulating]);
 
 
 
@@ -9570,6 +9737,8 @@ ${
                   orderNotifsMuted={orderNotifsMuted}
 
                   onToggleOrderNotifs={handleToggleOrderNotifs}
+
+                  dayStatsBySymbol={(mt5State as any)?.dayStatsBySymbol}
 
                 />
 

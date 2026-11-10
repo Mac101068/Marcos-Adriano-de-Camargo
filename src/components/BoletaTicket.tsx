@@ -134,8 +134,10 @@ interface BoletaTicketProps {
   isChartShifted?: boolean;
 }
 
-const brl = (v: number) =>
-  `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+const brl = (v: number) => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 'R$ 0,00';
+  return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+};
 
 /**
  * Linha de um lado do hedge: `C 3ct @ 121,30` à esquerda, o R$ flutuante colorido à direita.
@@ -143,7 +145,9 @@ const brl = (v: number) =>
  * lados costumam apontar para cores opostas, e quem lê quer saber quem está no lucro.
  */
 const SideRow: React.FC<{ tag: 'C' | 'V'; book: HedgeSideBook; asset: AssetSpec }> = ({ tag, book, asset }) => {
-  const total = book.liveBRL + book.partialBRL;
+  const live = Number.isFinite(book.liveBRL) ? book.liveBRL : 0;
+  const partial = Number.isFinite(book.partialBRL) ? book.partialBRL : 0;
+  const total = live + partial;
   const tone = book.filled === 0 ? 'text-zinc-500' : total > 0 ? 'text-emerald-300' : total < 0 ? 'text-rose-300' : 'text-zinc-100';
   return (
     <div
@@ -414,6 +418,21 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
         >
           <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-amber-400">Boleta</span>
           <span className="font-semibold text-emerald-300 tabular-nums">{formatPrice(currentPrice, asset)}</span>
+          {/* PnL financeiro do dia diretamente no chip recolhido */}
+          {hedgeBook && (
+            <span
+              className={`text-[9.5px] font-mono font-bold px-1.5 py-0.5 rounded tabular-nums border ${
+                hedgeBook.dayPnl > 0
+                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/60'
+                  : hedgeBook.dayPnl < 0
+                  ? 'bg-rose-950/80 text-rose-300 border-rose-700/60'
+                  : 'bg-zinc-900 text-zinc-400 border-zinc-700/60'
+              }`}
+              title={`PnL do Dia: ${brl(hedgeBook.dayPnl)} (Ganhos: ${brl(hedgeBook.realizedProfit)} | Perdas: ${brl(hedgeBook.realizedLoss)})`}
+            >
+              {brl(hedgeBook.dayPnl)}
+            </span>
+          )}
           {/* Recolhida, a boleta ainda resume o hedge: C/V com contratos de cada lado */}
           {hedgeVisible && (hedgeBook!.buy.contracts > 0 || hedgeBook!.sell.contracts > 0) ? (
             <span className="flex items-center gap-1 font-sans font-bold">

@@ -15,6 +15,7 @@ interface MultiAssetRobotsBarProps {
   signals: Record<string, AssetSignalState>;
   positions: PositionSummary[];
   robotStates: Record<MultiRobotId, RobotRuntimeState>;
+  dayStatsBySymbol?: Record<string, { netRealized: number; realizedProfit: number; realizedLoss: number; totalContractsToday: number }>;
   onExecuteSignal: (assetId: MultiRobotId, signal: 'BUY' | 'SELL') => void;
   onOpenRobotWindow: (assetId: MultiRobotId) => void;
 }
@@ -26,6 +27,7 @@ export const MultiAssetRobotsBar: React.FC<MultiAssetRobotsBarProps> = ({
   signals,
   positions,
   robotStates,
+  dayStatsBySymbol,
   onExecuteSignal,
   onOpenRobotWindow,
 }) => {
@@ -43,6 +45,12 @@ export const MultiAssetRobotsBar: React.FC<MultiAssetRobotsBarProps> = ({
         const totalProfit = posList.reduce((acc, p) => acc + p.profit, 0);
         const hasPosition = posList.length > 0;
         const posType = hasPosition ? posList[0].type : null;
+
+        // PnL diário consolidado do robô (Fechado + Flutuante Aberto)
+        const stat = dayStatsBySymbol ? dayStatsBySymbol[id] : undefined;
+        const netRealized = stat ? stat.netRealized : 0;
+        const dayPnl = netRealized + totalProfit;
+        const hasHistoryOrPos = (stat && stat.totalContractsToday > 0) || hasPosition;
 
         // Sinal aguardando operador no modo Copiloto (disponível para novas entradas, pirâmide ou reversão)
         const hasPendingSignal = Boolean(sig && sig.signal && state.mode === 'COPILOT');
@@ -86,16 +94,16 @@ export const MultiAssetRobotsBar: React.FC<MultiAssetRobotsBarProps> = ({
               </span>
             </button>
 
-            {/* PnL da Posição Aberta */}
-            {hasPosition && (
+            {/* PnL do Dia do Robô (Consolidado: Fechado + Aberto) */}
+            {hasHistoryOrPos && (
               <span
                 className={`font-mono font-semibold tabular-nums ml-0.5 ${
-                  totalProfit > 0 ? 'text-emerald-400' : totalProfit < 0 ? 'text-rose-400' : 'text-slate-400'
+                  dayPnl > 0 ? 'text-emerald-400' : dayPnl < 0 ? 'text-rose-400' : 'text-slate-400'
                 }`}
-                title={`Posição aberta: ${posType} ${posList[0].volume}ct @ ${posList[0].openPrice}`}
+                title={`Robô ${id} - PnL do Dia: ${fmtBRL(dayPnl)} (Realizado: ${fmtBRL(netRealized)} | Flutuante: ${fmtBRL(totalProfit)})${hasPosition ? ` | Posição aberta: ${posType} ${posList[0].volume}ct` : ''}`}
               >
-                {totalProfit > 0 ? '+' : ''}
-                {fmtBRL(totalProfit)}
+                {dayPnl > 0 ? '+' : ''}
+                {fmtBRL(dayPnl)}
               </span>
             )}
 

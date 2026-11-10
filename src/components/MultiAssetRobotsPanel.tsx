@@ -8,6 +8,7 @@ interface MultiAssetRobotsPanelProps {
   signals: Record<string, AssetSignalState>;
   positions: PositionSummary[];
   robotStates: Record<MultiRobotId, RobotRuntimeState>;
+  dayStatsBySymbol?: Record<string, { netRealized: number; realizedProfit: number; realizedLoss: number; totalContractsToday: number }>;
   onChangeRobotState: (assetId: MultiRobotId, patch: Partial<RobotRuntimeState>) => void;
   onExecuteSignal: (assetId: MultiRobotId, signal: 'BUY' | 'SELL') => void;
   onManualOrder: (assetId: MultiRobotId, type: 'BUY' | 'SELL') => void;
@@ -22,6 +23,7 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
   signals,
   positions,
   robotStates,
+  dayStatsBySymbol,
   onChangeRobotState,
   onExecuteSignal,
   onManualOrder,
@@ -49,6 +51,10 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
   const totalProfit = posList.reduce((acc, p) => acc + p.profit, 0);
   const hasPos = posList.length > 0;
 
+  const curStat = dayStatsBySymbol ? dayStatsBySymbol[selectedAsset] : undefined;
+  const curNetRealized = curStat ? curStat.netRealized : 0;
+  const totalDayPnl = curNetRealized + totalProfit;
+
   const assetTabs: MultiRobotId[] = ['WIN', 'WDO', 'BIT'];
 
   return (
@@ -60,6 +66,10 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
           const isSelected = selectedAsset === id;
           const tabPos = positions.filter((p) => p.magic === tabSpec.magic || p.symbol.includes(id));
           const tabProfit = tabPos.reduce((acc, p) => acc + p.profit, 0);
+          const tabStat = dayStatsBySymbol ? dayStatsBySymbol[id] : undefined;
+          const tabNet = tabStat ? tabStat.netRealized : 0;
+          const tabDayPnl = tabNet + tabProfit;
+          const hasActivity = (tabStat && tabStat.totalContractsToday > 0) || tabPos.length > 0;
 
           return (
             <button
@@ -73,14 +83,14 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
             >
               <span>{id}</span>
               <span className="text-[9px] text-slate-500 font-mono">({tabSpec.scaleLabel})</span>
-              {tabPos.length > 0 && (
+              {hasActivity && (
                 <span
                   className={`text-[8.5px] font-mono px-1 rounded ${
-                    tabProfit >= 0 ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'
+                    tabDayPnl >= 0 ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'
                   }`}
                 >
-                  {tabProfit >= 0 ? '+' : ''}
-                  {tabProfit.toFixed(0)}
+                  {tabDayPnl >= 0 ? '+' : ''}
+                  {tabDayPnl.toFixed(0)}
                 </span>
               )}
             </button>
@@ -194,20 +204,24 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
           )}
         </div>
 
-        {/* Posições Abertas no MT5 */}
+        {/* Posições Abertas e PnL do Dia no MT5 */}
         <div className="bg-slate-950/70 border border-slate-800 rounded p-2.5">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[9.5px] font-bold uppercase text-slate-400">Posição Atual no MT5</span>
-            {hasPos && (
+            <span className="text-[9.5px] font-bold uppercase text-slate-400">Desempenho no MT5 (Hoje)</span>
+            <div className="flex items-center gap-1.5">
               <span
                 className={`font-mono font-bold text-[11px] ${
-                  totalProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  totalDayPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
                 }`}
+                title={`PnL Consolidado: Realizado ${fmtBRL(curNetRealized)} + Flutuante ${fmtBRL(totalProfit)}`}
               >
-                {totalProfit >= 0 ? '+' : ''}
-                {fmtBRL(totalProfit)}
+                {totalDayPnl >= 0 ? '+' : ''}
+                {fmtBRL(totalDayPnl)}
               </span>
-            )}
+              <span className="text-[8.5px] text-zinc-500 font-mono">
+                ({fmtBRL(curNetRealized)} fechado{hasPos ? ` · ${fmtBRL(totalProfit)} aberto` : ''})
+              </span>
+            </div>
           </div>
 
           {hasPos ? (

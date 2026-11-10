@@ -161,6 +161,7 @@ interface RenkoFlowChartProps {
   multiRobotSignals?: Record<string, AssetSignalState>;
   multiRobotPositions?: PositionSummary[];
   multiRobotStates?: Record<MultiRobotId, RobotRuntimeState>;
+  dayStatsBySymbol?: Record<string, { netRealized: number; realizedProfit: number; realizedLoss: number; totalContractsToday: number }>;
   onChangeRobotState?: (assetId: MultiRobotId, patch: Partial<RobotRuntimeState>) => void;
   onExecuteMultiRobotSignal?: (assetId: MultiRobotId, signal: 'BUY' | 'SELL') => void;
   onManualMultiRobotOrder?: (assetId: MultiRobotId, type: 'BUY' | 'SELL') => void;
@@ -318,6 +319,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   multiRobotSignals = {},
   multiRobotPositions = [],
   multiRobotStates,
+  dayStatsBySymbol,
   onChangeRobotState,
   onExecuteMultiRobotSignal,
   onManualMultiRobotOrder,
@@ -2705,7 +2707,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           // No lugar do preço de entrada, o VALOR AO VIVO da posição (verde se positiva,
           // vermelho se negativa) — em pontos ou em R$, na opção da janela Dados. O preço de entrada
           // não se perde: é o número que agora aparece na régua, na cor da linha.
-          const livePts = o.type === 'BUY' ? currentPrice - o.entryPrice : o.entryPrice - currentPrice;
+          const validEntry = Number(o.entryPrice) > 0 ? Number(o.entryPrice) : (currentPrice > 0 ? currentPrice : asset.basePrice);
+          const rawPts = o.type === 'BUY' ? currentPrice - validEntry : validEntry - currentPrice;
+          const livePts = Number.isFinite(rawPts) ? rawPts : 0;
           const liveTxt = isPending
             ? `Δ${Math.abs(Math.round((targetPrice - currentPrice) * 10) / 10)}p`
             : orderValueMode === 'money'
@@ -2772,7 +2776,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
             // Etiqueta clean: só o papel (SL / SL BE) e a distância em pontos. O preço do stop
             // passa a ser lido na régua, como número colorido — sem placa saturada.
-            const slPts = Math.round(Math.abs(o.entryPrice - o.stopLoss) * 10) / 10;
+            const validSlEntry = Number(o.entryPrice) > 0 ? Number(o.entryPrice) : (currentPrice > 0 ? currentPrice : asset.basePrice);
+            const slDiff = Math.abs(validSlEntry - o.stopLoss);
+            const slPts = Number.isFinite(slDiff) ? Math.round(slDiff * 10) / 10 : 0;
             drawOrderTag({
               priceY: slY,
               role: isProtected ? 'SL BE' : 'SL',
@@ -2814,7 +2820,9 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             ctx.setLineDash([]);
 
             // Mesma clean-up do SL: papel + distância; o preço do alvo vai para a régua.
-            const tpPts = Math.round(Math.abs(o.takeProfit - o.entryPrice) * 10) / 10;
+            const validTpEntry = Number(o.entryPrice) > 0 ? Number(o.entryPrice) : (currentPrice > 0 ? currentPrice : asset.basePrice);
+            const tpDiff = Math.abs(o.takeProfit - validTpEntry);
+            const tpPts = Number.isFinite(tpDiff) ? Math.round(tpDiff * 10) / 10 : 0;
             drawOrderTag({
               priceY: tpY,
               role: isPyramidTp ? `ALVO P${o.pyramidLevel || 1}` : 'TP',
@@ -3736,6 +3744,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
               signals={multiRobotSignals}
               positions={multiRobotPositions}
               robotStates={multiRobotStates}
+              dayStatsBySymbol={dayStatsBySymbol}
               onExecuteSignal={(aid, sig) => onExecuteMultiRobotSignal?.(aid, sig)}
               onOpenRobotWindow={(aid) => {
                 onOpenMultiRobotWindow ? onOpenMultiRobotWindow(aid) : onOpenShadowWindow?.();
@@ -4052,6 +4061,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 signals={multiRobotSignals}
                 positions={multiRobotPositions}
                 robotStates={multiRobotStates}
+                dayStatsBySymbol={dayStatsBySymbol}
                 onChangeRobotState={onChangeRobotState || (() => {})}
                 onExecuteSignal={onExecuteMultiRobotSignal || (() => {})}
                 onManualOrder={onManualMultiRobotOrder || (() => {})}
