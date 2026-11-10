@@ -11,10 +11,11 @@ interface DadosPanelWindowProps {
   onClose: () => void;
   /** Posição inicial da janela (padrão: canto superior esquerdo 10,10) */
   initialPos?: { x: number; y: number };
+  widthClass?: string;
   children: React.ReactNode;
 }
 
-export const DadosPanelWindow: React.FC<DadosPanelWindowProps> = ({ title, onClose, initialPos, children }) => {
+export const DadosPanelWindow: React.FC<DadosPanelWindowProps> = ({ title, onClose, initialPos, widthClass, children }) => {
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ offX: number; offY: number } | null>(null);
   const origin = initialPos ?? { x: 10, y: 10 };
@@ -53,7 +54,7 @@ export const DadosPanelWindow: React.FC<DadosPanelWindowProps> = ({ title, onClo
   return (
     <div
       ref={frameRef}
-      className="absolute z-30 w-[246px] max-h-[calc(100%-12px)] flex flex-col rounded-lg border border-slate-700/90 bg-slate-900/97 backdrop-blur-md shadow-2xl shadow-black/60 overflow-hidden"
+      className={`absolute z-30 ${widthClass || 'w-[246px]'} max-h-[calc(100%-12px)] flex flex-col rounded-lg border border-slate-700/90 bg-slate-900/97 backdrop-blur-md shadow-2xl shadow-black/60 overflow-hidden`}
       style={{ left: pos.x, top: pos.y }}
     >
       {/* Barra de título: arraste para mover */}

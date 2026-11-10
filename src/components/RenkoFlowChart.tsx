@@ -25,6 +25,9 @@ import { FunnelMetricsPanel } from './FunnelMetricsPanel';
 import type { FunnelMetricsSnapshot } from '../utils/funnelMetrics';
 import { DadosPanelWindow } from './DadosPanelWindow';
 import { ShadowRobotPanel } from './ShadowRobotPanel';
+import { MultiAssetRobotsBar, PositionSummary } from './MultiAssetRobotsBar';
+import { MultiAssetRobotsPanel } from './MultiAssetRobotsPanel';
+import { MultiRobotId, AssetSignalState, RobotRuntimeState } from '../types/multiRobots';
 import { RenkoBoxCard } from './RenkoBoxCard';
 import { DrawingToolbar } from './DrawingToolbar';
 import { Sliders, ArrowUp, ArrowDown, Eye, X, Bell, BellOff, Activity, ChevronDown, Check, Layers, CandlestickChart, BarChart3 } from 'lucide-react';
@@ -154,6 +157,16 @@ interface RenkoFlowChartProps {
   onShadowWindowClose?: () => void;
   /** Escolhas da sombra (estratégia/escala/ligar) viram patch do config — quem persiste é o App. */
   onPatchShadowConfig?: (patch: Partial<AutomationConfig>) => void;
+  /** Multi-Robôs: sinais em tempo real do EA principal para WIN, WDO e BIT */
+  multiRobotSignals?: Record<string, AssetSignalState>;
+  multiRobotPositions?: PositionSummary[];
+  multiRobotStates?: Record<MultiRobotId, RobotRuntimeState>;
+  onChangeRobotState?: (assetId: MultiRobotId, patch: Partial<RobotRuntimeState>) => void;
+  onExecuteMultiRobotSignal?: (assetId: MultiRobotId, signal: 'BUY' | 'SELL') => void;
+  onManualMultiRobotOrder?: (assetId: MultiRobotId, type: 'BUY' | 'SELL') => void;
+  onCloseMultiRobotPosition?: (assetId: MultiRobotId) => void;
+  focusedRobotAsset?: MultiRobotId;
+  onOpenMultiRobotWindow?: (assetId: MultiRobotId) => void;
   /** Níveis relevantes do pregão (utils/priceLevels), desenhados como tracejado cinza discreto. */
   priceLevels?: PriceLevel[];
   /** VWAP acumulada do dia amostrada nos tijolos — a curva laranja. */
@@ -302,6 +315,15 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   shadowWindowOpen = false,
   onShadowWindowClose,
   onPatchShadowConfig,
+  multiRobotSignals = {},
+  multiRobotPositions = [],
+  multiRobotStates,
+  onChangeRobotState,
+  onExecuteMultiRobotSignal,
+  onManualMultiRobotOrder,
+  onCloseMultiRobotPosition,
+  focusedRobotAsset = 'WIN',
+  onOpenMultiRobotWindow,
   priceLevels = [],
   vwapCurve,
   asset = ASSETS[DEFAULT_ASSET_ID],
@@ -3708,28 +3730,39 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
             )}
           </div>
 
-          {/* ROBÔ 2 (sombra): atalho para a janela do segundo robô de papel. Sem sombra ligada,
-              o chip é só o "+" — clicar abre a janela, onde se escolhe estratégia e escala. */}
-          {onOpenShadowWindow && (
-            <button
-              onClick={() => onOpenShadowWindow()}
-              className="flex items-center gap-1 px-1.5 h-[22px] rounded border font-sans text-[10px] cursor-pointer transition-colors whitespace-nowrap max-w-[190px] overflow-hidden text-ellipsis shrink-0"
-              title={shadowDetail || 'Robô 2 (sombra) — segundo robô em papel, com estratégia e escala próprias'}
-            >
-              <span className={shadowEnabled ? 'text-zinc-200' : 'text-zinc-500'}>
-                {shadowEnabled ? shadowSummary || 'Robô 2' : '+ Sombra'}
-              </span>
-              {shadowEnabled && shadowPnl !== undefined && (
-                <span
-                  className={`font-mono tabular-nums ${
-                    shadowPnl > 0 ? 'text-emerald-400' : shadowPnl < 0 ? 'text-rose-400' : 'text-zinc-400'
-                  }`}
-                >
-                  {shadowPnl > 0 ? '+' : ''}
-                  {shadowPnl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {/* MULTI-ROBÔS / COPILOTO (WIN, WDO, BIT) COM SINAIS E PNL */}
+          {multiRobotStates ? (
+            <MultiAssetRobotsBar
+              signals={multiRobotSignals}
+              positions={multiRobotPositions}
+              robotStates={multiRobotStates}
+              onExecuteSignal={(aid, sig) => onExecuteMultiRobotSignal?.(aid, sig)}
+              onOpenRobotWindow={(aid) => {
+                onOpenMultiRobotWindow ? onOpenMultiRobotWindow(aid) : onOpenShadowWindow?.();
+              }}
+            />
+          ) : (
+            onOpenShadowWindow && (
+              <button
+                onClick={() => onOpenShadowWindow()}
+                className="flex items-center gap-1 px-1.5 h-[22px] rounded border font-sans text-[10px] cursor-pointer transition-colors whitespace-nowrap max-w-[190px] overflow-hidden text-ellipsis shrink-0"
+                title={shadowDetail || 'Robô 2 (sombra) — segundo robô em papel, com estratégia e escala próprias'}
+              >
+                <span className={shadowEnabled ? 'text-zinc-200' : 'text-zinc-500'}>
+                  {shadowEnabled ? shadowSummary || 'Robô 2' : '+ Sombra'}
                 </span>
-              )}
-            </button>
+                {shadowEnabled && shadowPnl !== undefined && (
+                  <span
+                    className={`font-mono tabular-nums ${
+                      shadowPnl > 0 ? 'text-emerald-400' : shadowPnl < 0 ? 'text-rose-400' : 'text-zinc-400'
+                    }`}
+                  >
+                    {shadowPnl > 0 ? '+' : ''}
+                    {shadowPnl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                )}
+              </button>
+            )
           )}
 
           {/* O chip de PnL flutuante saiu da tira: o número vivo agora mora no painel Hedge da boleta. */}
@@ -4005,14 +4038,28 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           </div>
         )}
 
-        {/* Janela do Robô 2 (sombra): terceira da pilha, à direita das outras duas */}
+        {/* Janela Multi-Robôs / Copiloto / Sombra */}
         {shadowWindowOpen && (
           <DadosPanelWindow
-            title="Robô 2 (sombra)"
+            title="Gestão Multi-Robôs & Copiloto"
+            widthClass="w-[290px] sm:w-[325px]"
             onClose={() => onShadowWindowClose?.()}
             initialPos={{ x: dadosWindowOpen ? 514 : boxWindowOpen ? 302 : 10, y: 10 }}
           >
-            <ShadowRobotPanel onPatchConfig={onPatchShadowConfig} />
+            {multiRobotStates ? (
+              <MultiAssetRobotsPanel
+                initialAssetId={focusedRobotAsset}
+                signals={multiRobotSignals}
+                positions={multiRobotPositions}
+                robotStates={multiRobotStates}
+                onChangeRobotState={onChangeRobotState || (() => {})}
+                onExecuteSignal={onExecuteMultiRobotSignal || (() => {})}
+                onManualOrder={onManualMultiRobotOrder || (() => {})}
+                onClosePosition={onCloseMultiRobotPosition || (() => {})}
+              />
+            ) : (
+              <ShadowRobotPanel onPatchConfig={onPatchShadowConfig} />
+            )}
           </DadosPanelWindow>
         )}
 

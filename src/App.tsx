@@ -137,6 +137,8 @@ import type { SeriesKey } from './utils/paperStrategyBot';
 
 import type { SessionRegimeMeter } from './utils/sessionRegime';
 import { computeFunnelMetrics } from './utils/funnelMetrics';
+import { MultiRobotId, MULTI_ROBOTS, AssetSignalState, RobotRuntimeState } from './types/multiRobots';
+import { PositionSummary } from './components/MultiAssetRobotsBar';
 
 import { SimulatorView } from './components/SimulatorView';
 
@@ -1003,6 +1005,29 @@ export default function App() {
 
   };
 
+  // =========================================================================
+  // GESTÃO MULTI-ROBÔS / COPILOTO (WIN, WDO, BIT)
+  // =========================================================================
+  const [multiRobotSignals, setMultiRobotSignals] = useState<Record<string, AssetSignalState>>({});
+  const [focusedRobotAsset, setFocusedRobotAsset] = useState<MultiRobotId>('WIN');
+  const [multiRobotStates, setMultiRobotStates] = useState<Record<MultiRobotId, RobotRuntimeState>>(() => {
+    try {
+      const saved = localStorage.getItem('fluxo_multi_robot_states_v1');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      WIN: { id: 'WIN', mode: 'COPILOT', contracts: MULTI_ROBOTS.WIN.defaultContracts, slPoints: MULTI_ROBOTS.WIN.defaultSlPoints, tpPoints: MULTI_ROBOTS.WIN.defaultTpPoints },
+      WDO: { id: 'WDO', mode: 'COPILOT', contracts: MULTI_ROBOTS.WDO.defaultContracts, slPoints: MULTI_ROBOTS.WDO.defaultSlPoints, tpPoints: MULTI_ROBOTS.WDO.defaultTpPoints },
+      BIT: { id: 'BIT', mode: 'COPILOT', contracts: MULTI_ROBOTS.BIT.defaultContracts, slPoints: MULTI_ROBOTS.BIT.defaultSlPoints, tpPoints: MULTI_ROBOTS.BIT.defaultTpPoints },
+    };
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fluxo_multi_robot_states_v1', JSON.stringify(multiRobotStates));
+    } catch {}
+  }, [multiRobotStates]);
+
   // Menu "Mais" da barra inferior móvel — agrupa as abas secundárias sem rolagem lateral
 
   const [moreNavOpen, setMoreNavOpen] = useState<boolean>(false);
@@ -1630,6 +1655,108 @@ export default function App() {
   // Por padrão nasce falso para auto-conectar à ponte se ela estiver ativa na rede/local.
   // Só vira `true` se o usuário clicar explicitamente em Desconectar.
   const userDisconnectedRef = useRef(false);
+
+  const multiRobotPositions: PositionSummary[] = useMemo(() => {
+    const posArray = Array.isArray(mt5State.positions) ? mt5State.positions : [];
+    return posArray.map((p: any) => ({
+      symbol: String(p.symbol || ''),
+      magic: Number(p.magic) || 0,
+      type: p.type === 0 ? 'BUY' : 'SELL',
+      volume: Number(p.volume) || 1,
+      profit: Number(p.profit) || 0,
+      openPrice: Number(p.price_open) || 0,
+    }));
+  }, [mt5State.positions]);
+
+  const handleOpenMultiRobotWindow = (assetId: MultiRobotId) => {
+    setFocusedRobotAsset(assetId);
+    setShadowWindowOpen(true);
+    setActiveTab('chart');
+  };
+
+  const handleChangeRobotState = (assetId: MultiRobotId, patch: Partial<RobotRuntimeState>) => {
+    setMultiRobotStates((prev) => {
+      const next = {
+        ...prev,
+        [assetId]: {
+          ...prev[assetId],
+          ...patch,
+        },
+      };
+      if (patch.mode && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            action: 'SET_ROBOT_MODE',
+            assetKey: assetId,
+            mode: patch.mode,
+          })
+        );
+      }
+      return next;
+    });
+  };
+
+  const handleExecuteMultiRobotSignal = (assetId: MultiRobotId, signal: 'BUY' | 'SELL') => {
+    const spec = MULTI_ROBOTS[assetId];
+    const rState = multiRobotStates[assetId] || { contracts: spec.defaultContracts, slPoints: spec.defaultSlPoints, tpPoints: spec.defaultTpPoints };
+
+    console.log(`[COPILOTO] Disparando ordem: ${assetId} (${spec.symbol}) ${signal} ${rState.contracts}ct | Magic=${spec.magic}`);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          action: 'ORDER_SEND',
+          symbol: spec.symbol,
+          type: signal,
+          contracts: rState.contracts,
+          sl: rState.slPoints,
+          tp: rState.tpPoints,
+          magic: spec.magic,
+          comment: `COPILOT_${assetId}`,
+        })
+      );
+      setLatestToast({
+        id: `copilot-${Date.now()}`,
+        type: signal,
+        title: `⚡ COPILOTO: ${signal} EM ${spec.label}`,
+        description: `Ordem enviada ao MT5 com Magic ${spec.magic} (${rState.contracts} ctro, SL ${rState.slPoints}p, TP ${rState.tpPoints}p).`,
+        timestamp: Date.now(),
+      });
+    } else {
+      console.warn('[COPILOTO] Falha ao enviar ordem: WebSocket desconectado ou não pronto.', wsRef.current?.readyState);
+      setLatestToast({
+        id: `err-${Date.now()}`,
+        type: 'SELL',
+        title: 'FALHA DE ENVIO',
+        description: 'Ponte MT5 desconectada ou reconectando. Aguarde a reconexão.',
+        timestamp: Date.now(),
+      });
+    }
+  };
+
+  const handleManualMultiRobotOrder = (assetId: MultiRobotId, type: 'BUY' | 'SELL') => {
+    handleExecuteMultiRobotSignal(assetId, type);
+  };
+
+  const handleCloseMultiRobotPosition = (assetId: MultiRobotId) => {
+    const spec = MULTI_ROBOTS[assetId];
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          action: 'CLOSE_POSITIONS',
+          symbol: spec.symbol,
+          robotMagic: spec.magic,
+        })
+      );
+      setLatestToast({
+        id: `close-${Date.now()}`,
+        type: 'INFO',
+        title: `ZERAGEM: ${spec.label}`,
+        description: `Solicitada a zeragem das posições com Magic ${spec.magic} no MT5.`,
+        timestamp: Date.now(),
+      });
+    }
+  };
 
 
 
@@ -5235,6 +5362,22 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
             });
 
+          } else if (payload.type === 'SIGNAL_GENERATED') {
+            const sym = String(payload.symbol || '');
+            const data = payload.data || {};
+            const assetKey: MultiRobotId = sym.includes('WDO') ? 'WDO' : (sym.includes('BIT') ? 'BIT' : 'WIN');
+            setMultiRobotSignals((prev) => ({
+              ...prev,
+              [sym]: {
+                symbol: sym,
+                assetKey,
+                signal: data.signal,
+                reason: data.reason || '',
+                price: Number(data.price) || 0,
+                boxIndex: Number(data.boxIndex) || 0,
+                timestamp: Number(data.timestamp) || Date.now(),
+              },
+            }));
           }
 
         } catch {
@@ -9395,6 +9538,24 @@ ${
                   onShadowWindowClose={() => setShadowWindowOpen(false)}
 
                   onPatchShadowConfig={handleBoletaConfigPatch}
+
+                  multiRobotSignals={multiRobotSignals}
+
+                  multiRobotPositions={multiRobotPositions}
+
+                  multiRobotStates={multiRobotStates}
+
+                  onChangeRobotState={handleChangeRobotState}
+
+                  onExecuteMultiRobotSignal={handleExecuteMultiRobotSignal}
+
+                  onManualMultiRobotOrder={handleManualMultiRobotOrder}
+
+                  onCloseMultiRobotPosition={handleCloseMultiRobotPosition}
+
+                  focusedRobotAsset={focusedRobotAsset}
+
+                  onOpenMultiRobotWindow={handleOpenMultiRobotWindow}
 
                   priceLevels={sessionLevels}
 
