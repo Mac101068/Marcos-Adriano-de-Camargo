@@ -8893,10 +8893,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                 });
               } catch {}
             }}
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-all cursor-pointer select-none text-[11px] font-semibold ${
+            className={`flex items-center gap-1.5 h-6 px-2 rounded border transition-all cursor-pointer select-none text-[11px] font-semibold ${
               replayOperates
-                ? 'text-emerald-300 hover:text-emerald-200'
-                : 'text-zinc-500 hover:text-zinc-300'
+                ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300 hover:border-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
+                : 'bg-slate-900 border-slate-800 text-zinc-500 hover:text-zinc-300'
             }`}
             title={replayOperates ? 'Robô Opera: LIGADO (paper trading ativo)' : 'Robô Opera: DESLIGADO (modo silencioso)'}
           >

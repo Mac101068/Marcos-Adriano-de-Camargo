@@ -3595,7 +3595,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       {/* ========================================================================= */}
       {/* TIRA DE STATUS DA SÉRIE / CONTROLES COLADA NO GRÁFICO (LINHA 4)          */}
       {/* ========================================================================= */}
-      <div className="flex items-center justify-between gap-2 px-1.5 sm:px-2 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
+      <div className="flex items-center justify-between gap-2 pl-0 sm:pl-0 pr-1.5 sm:pr-2 h-7 shrink-0 bg-zinc-900/95 border-b border-zinc-800 text-[11px] font-mono">
         <div className="flex items-center gap-2 min-w-0">
           {/* DADOS DO ATIVO E VALOR ATUAL (INVERTIDOS PARA ESTA LINHA MAIS PRÓXIMA DO GRÁFICO) */}
           <div className="flex items-center gap-1.5 shrink-0 rounded bg-zinc-950 border border-zinc-700/80 px-2 h-[22px]">
