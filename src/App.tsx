@@ -5013,29 +5013,45 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             const bfBoxPointsRaw = Number(payload.data?.boxPoints) || (bfAssetId === 'WIN' ? 50 : config.boxPoints);
             const bfBoxPoints = (bfAssetId === 'WIN' && bfBoxPointsRaw > 120) ? 50 : bfBoxPointsRaw;
 
-            // A ponte manda os boxes do ÚLTIMO PREGÃO já formados (reconstruídos do tick real).
-            // Converte o formato do Python para o RenkoBox do app e adota como estado do ativo.
-            const bfRecebidos = (payload.data?.boxes || []).length;
-            const rawBfBoxes: RenkoBox[] = (payload.data?.boxes || [])
-              .map((b: any, i: number) => ({
-                index: Number(b?.index ?? i),
-                direction: b?.direction === 'UP' ? 'UP' : 'DOWN',
-                open: Number(b?.open),
-                close: Number(b?.close),
-                high: Number(b?.high),
-                low: Number(b?.low),
-                timeStart: Number(b?.time_start || b?.timestamp) || 0,
-                timeEnd: Number(b?.timestamp) || 0,
-                ticksCount: Number(b?.ticks_count) || 0,
-                totalVolume: (Number(b?.buy_volume) || 0) + (Number(b?.sell_volume) || 0),
-                buyVolume: Number(b?.buy_volume) || 0,
-                sellVolume: Number(b?.sell_volume) || 0,
-                delta: Number(b?.delta) || 0,
-                cvdAtClose: Number(b?.cvd_at_close) || 0,
-                isConvergence: false,
-                regimeFactor: Number(b?.regime_factor) || undefined,
-              }))
-              .filter((b: RenkoBox) => Number.isFinite(b.close) && b.close > 0 && Number.isFinite(b.open) && b.open > 0);
+            // A ponte manda os boxes do ÚLTIMO PREGÃO já formados ou os ticks M1 (SESSION_BACKFILL).
+            let rawBfBoxes: RenkoBox[] = [];
+            const incomingTicks: Tick[] = Array.isArray(payload.data?.ticks) ? payload.data.ticks : [];
+            const bfRecebidos = (payload.data?.boxes || []).length || incomingTicks.length;
+
+            if (Array.isArray(payload.data?.boxes) && payload.data.boxes.length > 0) {
+              rawBfBoxes = (payload.data.boxes || [])
+                .map((b: any, i: number) => ({
+                  index: Number(b?.index ?? i),
+                  direction: b?.direction === 'UP' ? 'UP' : 'DOWN',
+                  open: Number(b?.open),
+                  close: Number(b?.close),
+                  high: Number(b?.high),
+                  low: Number(b?.low),
+                  timeStart: Number(b?.time_start || b?.timestamp) || 0,
+                  timeEnd: Number(b?.timestamp) || 0,
+                  ticksCount: Number(b?.ticks_count) || 0,
+                  totalVolume: (Number(b?.buy_volume) || 0) + (Number(b?.sell_volume) || 0),
+                  buyVolume: Number(b?.buy_volume) || 0,
+                  sellVolume: Number(b?.sell_volume) || 0,
+                  delta: Number(b?.delta) || 0,
+                  cvdAtClose: Number(b?.cvd_at_close) || 0,
+                  isConvergence: false,
+                  regimeFactor: Number(b?.regime_factor) || undefined,
+                }))
+                .filter((b: RenkoBox) => Number.isFinite(b.close) && b.close > 0 && Number.isFinite(b.open) && b.open > 0);
+            } else if (incomingTicks.length > 0) {
+              const tempEngine = new RenkoFlowEngine(bfBoxPoints, bfAssetSpec);
+              const firstTick = incomingTicks[0];
+              if (firstTick && firstTick.price > 0) {
+                tempEngine.initialize(firstTick.price, firstTick.timestamp);
+              }
+              for (const t of incomingTicks) {
+                if (t && t.price > 0) {
+                  tempEngine.processTick(t, config);
+                }
+              }
+              rawBfBoxes = tempEngine.getBoxes();
+            }
 
             const bfBoxes: RenkoBox[] = [];
             const bfPriceLbl = renkoScaleLabel(bfBoxPoints, bfAssetSpec);
