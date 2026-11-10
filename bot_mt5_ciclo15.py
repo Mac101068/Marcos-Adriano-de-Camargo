@@ -115,12 +115,21 @@ SUPPORTED_ASSETS = {
         "tick_size": 5.0,
         "point_value": 0.2,
         "box_points": 50.0,
-        "min_delta": 150,
+        "min_delta": 300,
         "magic": 150101,
         "contracts": 2,
         "sl_points": 50.0,
         "tp_points": 100.0,
         "partial_points": 50.0,
+        "pyramid_contracts": 1,
+        "pyramid_tp_points": 50.0,
+        "pyramid_sl_points": 50.0,
+        "max_pyramids": 3,
+        "breakeven_offset_ticks": 1,
+        "max_spread_ticks": 3,
+        "max_daily_loss": 500.0,
+        "max_daily_profit": 1000.0,
+        "trailing_stop_enabled": True,
     },
     "WDO": {
         "symbol": "WDOZ26",
@@ -130,12 +139,21 @@ SUPPORTED_ASSETS = {
         "tick_size": 0.5,
         "point_value": 10.0,
         "box_points": 2.5,
-        "min_delta": 20,
+        "min_delta": 400,
         "magic": 150201,
         "contracts": 1,
         "sl_points": 2.5,
         "tp_points": 5.0,
         "partial_points": 2.5,
+        "pyramid_contracts": 1,
+        "pyramid_tp_points": 2.5,
+        "pyramid_sl_points": 2.5,
+        "max_pyramids": 3,
+        "breakeven_offset_ticks": 1,
+        "max_spread_ticks": 3,
+        "max_daily_loss": 300.0,
+        "max_daily_profit": 600.0,
+        "trailing_stop_enabled": True,
     },
     "BTCBR": {
         "symbol": "BITX26",
@@ -144,15 +162,22 @@ SUPPORTED_ASSETS = {
         "decimals": 0,
         "tick_size": 20.0,
         "point_value": 0.1,
-        # Piso igual ao do avaliador da tela (Math.max(50, ...)): limiar de 20 contratos num
-        # tijolo de 100 pts é ruído de tela, não agressão institucional.
         "box_points": 100.0,
-        "min_delta": 50,
+        "min_delta": 35,
         "magic": 150301,
         "contracts": 1,
         "sl_points": 200.0,
         "tp_points": 400.0,
         "partial_points": 200.0,
+        "pyramid_contracts": 1,
+        "pyramid_tp_points": 100.0,
+        "pyramid_sl_points": 100.0,
+        "max_pyramids": 3,
+        "breakeven_offset_ticks": 1,
+        "max_spread_ticks": 3,
+        "max_daily_loss": 300.0,
+        "max_daily_profit": 600.0,
+        "trailing_stop_enabled": True,
     },
     "BTC": {
         "symbol": "BITX26",
@@ -161,15 +186,22 @@ SUPPORTED_ASSETS = {
         "decimals": 0,
         "tick_size": 20.0,
         "point_value": 0.1,
-        # Piso igual ao do avaliador da tela (Math.max(50, ...)): limiar de 20 contratos num
-        # tijolo de 100 pts é ruído de tela, não agressão institucional.
         "box_points": 100.0,
-        "min_delta": 50,
+        "min_delta": 35,
         "magic": 150301,
         "contracts": 1,
         "sl_points": 200.0,
         "tp_points": 400.0,
         "partial_points": 200.0,
+        "pyramid_contracts": 1,
+        "pyramid_tp_points": 100.0,
+        "pyramid_sl_points": 100.0,
+        "max_pyramids": 3,
+        "breakeven_offset_ticks": 1,
+        "max_spread_ticks": 3,
+        "max_daily_loss": 300.0,
+        "max_daily_profit": 600.0,
+        "trailing_stop_enabled": True,
     },
 }
 
@@ -284,7 +316,8 @@ EVAL_CONFIG = {
     "regime_lookback": REGIME_LOOKBACK_BOXES,
     "percentile": 0.7,
     "floor_multiple": 1.6,
-    "flow_divergence_min": 0.5,
+    "flow_divergence_min": 0.15,
+    "anti_absorption_enabled": True,
     "pyramid_static_floor": PYRAMID_STATIC_FLOOR,
     "consolidation_enabled": CONSOLIDATION_FILTER_ENABLED,
     "consolidation_lookback": CONSOLIDATION_LOOKBACK_BOXES,
@@ -1064,10 +1097,14 @@ class RenkoFlowEngine:
         req_sell = limit_sell if (adaptive or not pyramid) else max(cfg["pyramid_static_floor"], base_thresh)
 
         # Filtro de divergência de fluxo (SEL-A: |Δ| ÷ volume >= min)
-        div_min = float(cfg.get("flow_divergence_min", 0.5)) if pyramid else 0.0
+        div_min = float(cfg.get("flow_divergence_min", 0.15)) if pyramid else 0.0
         tot_vol = max(1, int(box.get("total_volume") or box.get("volume") or 0))
         divergence = abs(delta) / tot_vol
         divergence_ok = (divergence >= div_min) if (pyramid and div_min > 0) else True
+
+        # Detecção e Filtro de Absorção Institucional (Box fecha a favor mas Delta fecha oposto)
+        is_absorbed = (direction == "UP" and delta <= 0) or (direction == "DOWN" and delta >= 0)
+        box["is_absorption"] = is_absorbed
 
         # O Efficiency Ratio é medido SEMPRE, com o filtro ligado ou não: é a coluna que permite
         # auditar depois se o filtro de acumulação teria ajudado. Custa ~10 subtrações por box.
@@ -1088,10 +1125,16 @@ class RenkoFlowEngine:
             "efficiency_ratio": round(er, 4),
             "consolidacao": consolidating,
             "exaustao": exhausting,
+            "absorcao": is_absorbed,
             "sinal": None,
             "motivo": "SEM_DIRECAO",
         }
         signal, reason = None, ""
+
+        if bool(cfg.get("anti_absorption_enabled", True)) and is_absorbed:
+            audit["motivo"] = f"CALADO_ABSORCAO | Box {direction} com Δ {delta} oposto ao fechamento"
+            box["audit"] = audit
+            return None, ""
 
         if pyramid:
             if direction == "UP":
@@ -1226,11 +1269,112 @@ class MT5OrderManager:
 
 
 
+    def get_daily_pnl(self):
+        """Calcula o PnL diário consolidado (fechado + aberto) do robô pelo seu magic_number."""
+        now = datetime.now()
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        realized_pnl = 0.0
+        with MT5_LOCK:
+            deals = mt5.history_deals_get(start_of_day, now)
+            if deals:
+                for d in deals:
+                    if int(d.magic) == self.magic_number and d.symbol == self.symbol:
+                        if d.entry == mt5.DEAL_ENTRY_OUT or d.profit != 0.0:
+                            realized_pnl += float(d.profit) + float(d.commission) + float(d.swap)
+
+            floating_pnl = 0.0
+            positions = mt5.positions_get(symbol=self.symbol)
+            if positions:
+                for p in positions:
+                    if int(p.magic) == self.magic_number:
+                        floating_pnl += float(p.profit)
+
+        self.daily_pnl = round(realized_pnl + floating_pnl, 2)
+        return self.daily_pnl
+
+    def check_risk_limits(self):
+        """Verifica se o robô atingiu o teto diário de perda ou meta de lucro."""
+        spec = get_asset_spec(self.symbol)
+        max_loss = float(spec.get("max_daily_loss", MAX_DAILY_LOSS))
+        max_gain = float(spec.get("max_daily_profit", MAX_DAILY_PROFIT))
+        current_pnl = self.get_daily_pnl()
+
+        if current_pnl <= -max_loss:
+            if not getattr(self, "is_loss_locked", False):
+                self.is_loss_locked = True
+                print(f"🛑 [TRAVA DE RISCO DIÁRIA [{self.symbol}]] Stop Loss Diário atingido! PnL={current_pnl:.2f} <= -{max_loss:.2f}. Zerando posições!", flush=True)
+                self.close_all_positions()
+            return False, f"STOP_DIARIO_ATINGIDO (PnL R$ {current_pnl:.2f})"
+
+        if current_pnl >= max_gain:
+            if not getattr(self, "is_gain_locked", False):
+                self.is_gain_locked = True
+                print(f"🎉 [TRAVA DE GANHO DIÁRIA [{self.symbol}]] Meta de Lucro atingida! PnL={current_pnl:.2f} >= +{max_gain:.2f}. Protegendo capital!", flush=True)
+            return False, f"META_DIARIA_BATIDA (PnL R$ {current_pnl:.2f})"
+
+        return True, "OK"
+
+    def update_trailing_stop_box(self, box):
+        """Trailing Stop Caixa a Caixa: move o Stop Loss a cada box fechado a favor da tendência."""
+        spec = get_asset_spec(self.symbol)
+        if not spec.get("trailing_stop_enabled", True) and not TRAILING_STOP:
+            return False
+
+        sym_info = mt5.symbol_info(self.symbol)
+        if not sym_info:
+            return False
+
+        tick_size = sym_info.trade_tick_size if sym_info.trade_tick_size > 0 else 1.0
+        digits = sym_info.digits
+        box_dir = box.get("direction")
+        box_open = float(box.get("open", 0.0))
+        box_close = float(box.get("close", 0.0))
+
+        positions = mt5.positions_get(symbol=self.symbol)
+        active_positions = [p for p in (positions or []) if p.magic == self.magic_number]
+        if not active_positions:
+            return False
+
+        updated_any = False
+        for pos in active_positions:
+            is_buy = pos.type == mt5.ORDER_TYPE_BUY
+            current_sl = float(pos.sl) if pos.sl else 0.0
+
+            if is_buy and box_dir == "UP":
+                raw_sl = box_open - tick_size
+                candidate_sl = round(round(raw_sl / tick_size) * tick_size, digits)
+                if candidate_sl > current_sl and candidate_sl < box_close:
+                    print(f"📈 [TRAILING STOP [{self.symbol}]] Elevando SL da posição #{pos.ticket} de {current_sl} para {candidate_sl} (Box #{box['index']})", flush=True)
+                    self.modify_stop_loss(pos.ticket, candidate_sl)
+                    updated_any = True
+
+            elif not is_buy and box_dir == "DOWN":
+                raw_sl = box_open + tick_size
+                candidate_sl = round(round(raw_sl / tick_size) * tick_size, digits)
+                if (current_sl == 0.0 or candidate_sl < current_sl) and candidate_sl > box_close:
+                    print(f"📉 [TRAILING STOP [{self.symbol}]] Descendo SL da posição #{pos.ticket} de {current_sl} para {candidate_sl} (Box #{box['index']})", flush=True)
+                    self.modify_stop_loss(pos.ticket, candidate_sl)
+                    updated_any = True
+
+        return updated_any
+
     def check_schedule(self):
+        if TRADING_HOURS_ENABLED:
+            now_hm = datetime.now().strftime("%H:%M")
+            if now_hm >= CLOSE_ALL_TIME:
+                print(f"[HORÁRIO] Horário de zeragem atingido ({now_hm} >= {CLOSE_ALL_TIME}). Zerando posições...")
+                self.close_all_positions()
+                return False, True
+            if now_hm < START_TIME or now_hm >= STOP_ENTRIES_TIME:
+                print(f"[HORÁRIO] Fora da janela de entradas ({now_hm} fora de {START_TIME}-{STOP_ENTRIES_TIME}). Ordem ignorada.")
+                return False, False
 
-        if not TRADING_HOURS_ENABLED:
+        can_trade_risk, risk_reason = self.check_risk_limits()
+        if not can_trade_risk:
+            print(f"🛑 [TRAVA DE RISCO [{self.symbol}]] Entrada bloqueada: {risk_reason}", flush=True)
+            return False, False
 
-            return True, False
+        return True, False
 
         now_hm = datetime.now().strftime("%H:%M")
 
@@ -1555,63 +1699,58 @@ class MT5OrderManager:
 
 
     def move_main_to_breakeven(self, direction):
-
         sym_info = mt5.symbol_info(self.symbol)
+        if not sym_info:
+            return False
 
-        point = sym_info.point if sym_info else 1.0
+        tick_size = sym_info.trade_tick_size if (sym_info and sym_info.trade_tick_size > 0) else 1.0
+        digits = sym_info.digits if sym_info else 0
+        spec = get_asset_spec(self.symbol)
+        offset_ticks = spec.get("breakeven_offset_ticks", 1)
+        offset = offset_ticks * tick_size
 
-        offset = BREAKEVEN_OFFSET_POINTS * point
+        positions = mt5.positions_get(symbol=self.symbol)
+        if not positions:
+            return False
 
-        for ticket in list(self.main_tickets.keys()):
+        active_same_dir = [
+            p for p in positions
+            if p.magic == self.magic_number and (
+                (direction == "BUY" and p.type == mt5.ORDER_TYPE_BUY) or
+                (direction == "SELL" and p.type == mt5.ORDER_TYPE_SELL)
+            )
+        ]
+        if not active_same_dir:
+            return False
 
-            if self.main_tickets[ticket] != direction:
+        # Identifica a ordem mãe (marcada com 'MAE' ou a mais antiga na direção)
+        main_candidates = [p for p in active_same_dir if "MAE" in (p.comment or "")]
+        target_pos = main_candidates[0] if main_candidates else sorted(active_same_dir, key=lambda x: x.time_msc)[0]
 
-                continue
+        raw_be = (target_pos.price_open + offset) if direction == "BUY" else (target_pos.price_open - offset)
+        be_sl = round(round(raw_be / tick_size) * tick_size, digits)
 
-            positions = mt5.positions_get(ticket=ticket)
+        current_sl = float(target_pos.sl) if target_pos.sl else 0.0
+        improves = (current_sl <= 0.0) or (be_sl > current_sl if direction == "BUY" else be_sl < current_sl)
+        if not improves:
+            return False
 
-            if not positions:
-
-                self.main_tickets.pop(ticket, None)
-
-                continue
-
-            pos = positions[0]
-
-            be_sl = pos.price_open + offset if direction == "BUY" else pos.price_open - offset
-
-            current_sl = pos.sl if pos.sl else 0.0
-
-            improves = current_sl <= 0 or (be_sl > current_sl if direction == "BUY" else be_sl < current_sl)
-
-            if not improves:
-
-                continue
-
-            self.modify_stop_loss(ticket, be_sl)
-
-
+        print(f"🛡️ [BREAKEVEN AUTOMÁTICO [{self.symbol}]] Movendo SL da Ordem Mãe #{target_pos.ticket} de {current_sl} para {be_sl} (preço entrada={target_pos.price_open})", flush=True)
+        return self.modify_stop_loss(target_pos.ticket, be_sl)
 
     def watch_closed_pyramids(self):
-
         if not MAIN_BREAKEVEN_ON_PYR_TP or not self.pyramid_tickets:
-
             return
 
         positions = mt5.positions_get(symbol=self.symbol)
-
         open_tickets = set(p.ticket for p in (positions or []) if p.magic == self.magic_number)
 
         for ticket in list(self.pyramid_tickets.keys()):
-
             if ticket in open_tickets:
-
                 continue
 
             direction = self.pyramid_tickets.pop(ticket)
-
-            print(f"🎯 [TP DA PIRÂMIDE #{ticket} {direction}] Movendo ordem mãe para o breakeven...")
-
+            print(f"🎯 [TP/FECHAMENTO PIRÂMIDE #{ticket} {direction} [{self.symbol}]] Movendo ordem mãe para o breakeven...", flush=True)
             self.move_main_to_breakeven(direction)
 
 
@@ -1701,14 +1840,28 @@ class MT5OrderManager:
         is_buy = order_type == "BUY"
         entry_price = tick.ask if is_buy else tick.bid
 
-        sl_val = float(sl_points) if sl_points is not None else float(STOP_LOSS_POINTS)
+        spec = get_asset_spec(self.symbol)
+
+        # Proteção contra spread excessivo (evita slippage em momentos de book furado)
+        max_spread_pts = spec.get("max_spread_ticks", 4) * tick_size
+        current_spread = abs(tick.ask - tick.bid)
+        if current_spread > max_spread_pts:
+            msg_spread = f"SPREAD_EXCESSIVO | spread={current_spread:.1f} > max={max_spread_pts:.1f}"
+            print(f"🛑 [TRAVA DE SPREAD [{self.symbol}]] Ordem cancelada: spread {current_spread:.1f} pts > teto de {max_spread_pts:.1f} pts", flush=True)
+            self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None, None, False,
+                              msg_spread, box_index, sl_points, tp_points)
+            return False, 0
+
+        default_sl = spec.get("sl_points", STOP_LOSS_POINTS)
+        default_tp = spec.get("tp_points", TAKE_PROFIT_POINTS)
+        sl_val = float(sl_points) if sl_points is not None else float(default_sl)
         if sl_val > 0:
             raw_sl = (entry_price - sl_val) if is_buy else (entry_price + sl_val)
             sl_price = round(round(raw_sl / tick_size) * tick_size, digits)
         else:
             sl_price = 0.0
 
-        tp_val = float(tp_points) if tp_points is not None else float(TAKE_PROFIT_POINTS)
+        tp_val = float(tp_points) if tp_points is not None else float(default_tp)
         if tp_val > 0:
             raw_tp = (entry_price + tp_val) if is_buy else (entry_price - tp_val)
             tp_price = round(round(raw_tp / tick_size) * tick_size, digits)
@@ -1755,202 +1908,101 @@ class MT5OrderManager:
 
 
     def execute_pyramid_confluence(self, signal, box):
-
         positions = mt5.positions_get(symbol=self.symbol)
-
         active_positions = [p for p in (positions or []) if p.magic == self.magic_number]
 
-
-
         current_dir = signal
-
         has_opposite = False
 
-
-
         for pos in active_positions:
-
             is_pos_buy = pos.type == mt5.ORDER_TYPE_BUY
-
             if (current_dir == "BUY" and not is_pos_buy) or (current_dir == "SELL" and is_pos_buy):
-
                 has_opposite = True
-
                 break
 
-
-
         if has_opposite:
-
-            print(f"\n🔄 [INVERSÃO DE FLUXO DETECTADA] Zerando as posições do robô (magic {self.magic_number}) para virar para {current_dir}!")
-
+            print(f"\n🔄 [INVERSÃO DE FLUXO DETECTADA [{self.symbol}]] Zerando posições antigas (magic {self.magic_number}) para virar para {current_dir}!", flush=True)
             self.close_all_positions()
-
             time.sleep(0.05)
-
             active_positions = []
 
-
+        spec = get_asset_spec(self.symbol)
+        main_vol = spec.get("contracts", MAIN_CONTRACTS)
+        pyr_vol = spec.get("pyramid_contracts", PYRAMID_CONTRACTS)
+        pyr_sl = spec.get("pyramid_sl_points", PYRAMID_SL_POINTS)
+        pyr_tp = spec.get("pyramid_tp_points", PYRAMID_TP_POINTS)
+        max_pyr = spec.get("max_pyramids", 3)
 
         has_main_order = False
-
         pyramid_count = 0
-
         for pos in active_positions:
-
-            if "MAE" in pos.comment:
-
+            comment_str = str(pos.comment or "")
+            if "MAE" in comment_str:
                 has_main_order = True
-
-            elif "PIR" in pos.comment:
-
+            elif "PIR" in comment_str:
                 pyramid_count += 1
 
-
-
-        if not has_main_order:
+        if not has_main_order and not active_positions:
+            sl_pts = spec.get("sl_points", 0)
+            tp_pts = spec.get("tp_points", 0)
 
             if PYRAMID_ENTRY_TYPE != "MARKET_ON_CLOSE":
-
                 success, ticket, placed = self.place_pyramid_limit_order(
-
                     current_dir,
-
                     box,
-
                     comment=f"MAE_{box['index']}",
-
-                    volume=MAIN_CONTRACTS,
-
-                    sl_points=0,
-
-                    tp_points=0
-
+                    volume=main_vol,
+                    sl_points=sl_pts,
+                    tp_points=tp_pts
                 )
-
                 if success:
-
                     self.main_tickets[ticket] = current_dir
-
                 return success, ticket, "MAIN"
 
-
-
-            print(f"🟢 [ABRINDO ORDEM MÃE] {current_dir} {MAIN_CONTRACTS} ctro(s) no Box #{box['index']}")
-
+            print(f"🟢 [ABRINDO ORDEM MÃE [{self.symbol}]] {current_dir} {main_vol} ctro(s) no Box #{box['index']}", flush=True)
             try:
-
                 success, ticket = self.execute_market_order(
-
                     order_type=current_dir,
-
                     comment=f"MAE_{box['index']}",
-
-                    volume=MAIN_CONTRACTS,
-
-                    sl_points=0,
-
-                    tp_points=0,
-
+                    volume=main_vol,
+                    sl_points=sl_pts,
+                    tp_points=tp_pts,
                     box_index=box["index"],
-
                     preco_box=box["close"],
-
                     acao="ORDEM_MAE",
-
                 )
-
             except Exception as exc:
-
-                # Foi por aqui que um dia inteiro de sinais morreu sem deixar rastro: a exceção
-                # subia para o loop de ticks, que imprimia [AVISO STREAM] e seguia o baile.
-
-                self._audit_ordem("ORDEM_MAE", current_dir, MAIN_CONTRACTS, box["close"], None, None,
+                self._audit_ordem("ORDEM_MAE", current_dir, main_vol, box["close"], None, None,
                                   None, None, False,
                                   f"EXCECAO_ANTES_DO_SEND | {type(exc).__name__}: {exc}", box["index"], 0, 0)
-
-                print(f"❌ [ORDEM ABORTADA ANTES DO ENVIO] {type(exc).__name__}: {exc}", flush=True)
-
+                print(f"❌ [ORDEM ABORTADA ANTES DO ENVIO [{self.symbol}]] {type(exc).__name__}: {exc}", flush=True)
                 return False, 0, "MAIN"
 
             if success:
-
                 self.main_tickets[ticket] = current_dir
-
             return success, ticket, "MAIN"
 
         else:
+            if pyramid_count >= max_pyr:
+                print(f"⚠️ [LIMITE PIRÂMIDE [{self.symbol}]] Já existem {pyramid_count} pirâmides ativas (teto = {max_pyr}). Adição ignorada.", flush=True)
+                return False, 0, "MAX_PYRAMIDS_REACHED"
 
             pyramid_num = pyramid_count + 1
+            print(f"🪜 [PIRAMIDAÇÃO #{pyramid_num} [{self.symbol}]] Adicionando {pyr_vol} ctro(s) a favor de {current_dir} no Box #{box['index']}", flush=True)
 
             if PYRAMID_ENTRY_TYPE != "MARKET_ON_CLOSE":
-
                 success, ticket, placed = self.place_pyramid_limit_order(
-
                     current_dir,
-
                     box,
-
                     comment=f"PIR_{pyramid_num}_{box['index']}",
-
-                    volume=PYRAMID_CONTRACTS,
-
-                    sl_points=PYRAMID_SL_POINTS,
-
-                    tp_points=PYRAMID_TP_POINTS
-
+                    volume=pyr_vol,
+                    sl_points=pyr_sl,
+                    tp_points=pyr_tp
                 )
-
                 if success:
-
                     self.pyramid_tickets[ticket] = current_dir
-
+                    self.move_main_to_breakeven(current_dir)
                 return success, ticket, "PYRAMID"
-
-
-
-            try:
-
-                success, ticket = self.execute_market_order(
-
-                    order_type=current_dir,
-
-                    comment=f"PIR_{pyramid_num}_{box['index']}",
-
-                    volume=PYRAMID_CONTRACTS,
-
-                    sl_points=PYRAMID_SL_POINTS,
-
-                    tp_points=PYRAMID_TP_POINTS,
-
-                    box_index=box["index"],
-
-                    preco_box=box["close"],
-
-                    acao="PIRAMIDE",
-
-                )
-
-            except Exception as exc:
-
-                # Mesmo guard da ordem mãe: sem isto a exceção subia para o loop de ticks, virava
-                # [AVISO STREAM] e a pirâmide morria sem deixar linha no diário.
-
-                self._audit_ordem("PIRAMIDE", current_dir, PYRAMID_CONTRACTS, box["close"], None, None,
-                                  None, None, False,
-                                  f"EXCECAO_ANTES_DO_SEND | {type(exc).__name__}: {exc}", box["index"],
-                                  PYRAMID_SL_POINTS, PYRAMID_TP_POINTS)
-
-                print(f"❌ [ORDEM ABORTADA ANTES DO ENVIO] {type(exc).__name__}: {exc}", flush=True)
-
-                return False, 0, "PYRAMID"
-
-            if success:
-
-                self.pyramid_tickets[ticket] = current_dir
-
-            return success, ticket, "PYRAMID"
-
 
 
     def close_partial_position(self, ticket, partial_volume, new_sl=None, magic=None):
@@ -2335,7 +2387,11 @@ def fetch_mt5_positions():
 
                 'priceOpen': float(p.price_open),
 
+                'price_open': float(p.price_open),
+
                 'priceCurrent': float(p.price_current),
+
+                'price_current': float(p.price_current),
 
                 'profit': float(p.profit),
 
@@ -2353,6 +2409,75 @@ def fetch_mt5_positions():
 
 
 
+LAST_DAY_STATS_CACHE = None
+LAST_DAY_STATS_TIME = 0.0
+
+def fetch_mt5_day_stats(symbol=None):
+    """Calcula estatísticas de contratos negociados e resultado financeiro realizado da sessão de hoje (com cache de 4s para estabilidade e fluidez)."""
+    global LAST_DAY_STATS_CACHE, LAST_DAY_STATS_TIME
+    now_ts = time.time()
+    if LAST_DAY_STATS_CACHE and (now_ts - LAST_DAY_STATS_TIME < 4.0):
+        sym_key = (symbol or SYMBOL)[:3].upper()
+        res = dict(LAST_DAY_STATS_CACHE)
+        res["current"] = res["bySymbol"].get(sym_key, res["global"])
+        return res
+
+    now = datetime.now()
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    with MT5_LOCK:
+        deals = mt5.history_deals_get(start_of_day, now) or []
+
+    def _calc(sym_prefix=None):
+        buy_vol = 0.0
+        sell_vol = 0.0
+        realized_pos = 0.0
+        realized_neg = 0.0
+        closed_cnt = 0
+        for d in deals:
+            if sym_prefix and not str(d.symbol).upper().startswith(sym_prefix.upper()):
+                continue
+            vol = float(d.volume)
+            if d.type == mt5.DEAL_TYPE_BUY:
+                buy_vol += vol
+            elif d.type == mt5.DEAL_TYPE_SELL:
+                sell_vol += vol
+            if d.entry == mt5.DEAL_ENTRY_OUT or d.entry == mt5.DEAL_ENTRY_INOUT or d.profit != 0.0:
+                pnl = float(d.profit) + float(d.commission) + float(d.swap)
+                if pnl >= 0:
+                    realized_pos += pnl
+                else:
+                    realized_neg += pnl
+                closed_cnt += 1
+        return {
+            "buyContractsToday": buy_vol,
+            "sellContractsToday": sell_vol,
+            "totalContractsToday": buy_vol + sell_vol,
+            "realizedProfit": round(realized_pos, 2),
+            "realizedLoss": round(realized_neg, 2),
+            "netRealized": round(realized_pos + realized_neg, 2),
+            "dealsCount": closed_cnt
+        }
+
+    global_stats = _calc(None)
+    by_symbol = {
+        "WIN": _calc("WIN"),
+        "WDO": _calc("WDO"),
+        "BIT": _calc("BIT")
+    }
+
+    sym_key = (symbol or SYMBOL)[:3].upper()
+    current_sym_stats = by_symbol.get(sym_key, global_stats)
+
+    res = {
+        "current": current_sym_stats,
+        "global": global_stats,
+        "bySymbol": by_symbol
+    }
+    LAST_DAY_STATS_CACHE = res
+    LAST_DAY_STATS_TIME = now_ts
+    return res
+
+
 async def send_mt5_equity_data(websocket, limit=1000, days=30):
 
     with MT5_LOCK:
@@ -2362,6 +2487,8 @@ async def send_mt5_equity_data(websocket, limit=1000, days=30):
     deals = await asyncio.to_thread(fetch_mt5_deals, limit, days)
 
     positions = await asyncio.to_thread(fetch_mt5_positions)
+
+    day_stats_pack = await asyncio.to_thread(fetch_mt5_day_stats, SYMBOL)
 
     await send_json(websocket, {
 
@@ -2385,7 +2512,13 @@ async def send_mt5_equity_data(websocket, limit=1000, days=30):
 
             "deals": deals,
 
-            "positions": positions
+            "positions": positions,
+
+            "dayStats": day_stats_pack["current"],
+
+            "dayStatsGlobal": day_stats_pack["global"],
+
+            "dayStatsBySymbol": day_stats_pack["bySymbol"]
 
         }
 
@@ -2404,6 +2537,8 @@ async def send_account_info(websocket):
     deals = await asyncio.to_thread(fetch_mt5_deals, 500, 30)
 
     positions = await asyncio.to_thread(fetch_mt5_positions)
+
+    day_stats_pack = await asyncio.to_thread(fetch_mt5_day_stats, SYMBOL)
 
     await send_json(websocket, {
 
@@ -2428,6 +2563,12 @@ async def send_account_info(websocket):
             "deals": deals,
 
             "positions": positions,
+
+            "dayStats": day_stats_pack["current"],
+
+            "dayStatsGlobal": day_stats_pack["global"],
+
+            "dayStatsBySymbol": day_stats_pack["bySymbol"],
 
             "entryTriggerType": ENTRY_TRIGGER_TYPE,
 
@@ -2476,13 +2617,26 @@ async def send_today_session_backfill(websocket, target_symbol=None):
     Cada tick leva o seu dia (`session`): é o que permite ao app marcar onde um pregão
     termina e o outro começa — com só o pregão de hoje na tela o gap de abertura é invisível."""
     global LAST_BACKFILL_CACHE
-    sym = target_symbol or SYMBOL
+    raw_sym = str(target_symbol or SYMBOL).upper().strip()
+    spec = get_asset_spec(raw_sym)
+
+    # Resolve o símbolo físico do MT5 (ex: "WDO" -> "WDOZ26")
+    sym = raw_sym
+    with MT5_LOCK:
+        s_info = mt5.symbol_info(sym)
+        if not s_info:
+            sym = spec.get("symbol", raw_sym)
+            mt5.symbol_select(sym, True)
+        else:
+            mt5.symbol_select(sym, True)
+
+    box_pts = float(spec.get("box_points", 2.5 if ("WDO" in sym or "DOL" in sym) else 50.0))
     now = time.time()
 
-    cached = LAST_BACKFILL_CACHE.get(sym)
+    cached = LAST_BACKFILL_CACHE.get(sym) or LAST_BACKFILL_CACHE.get(raw_sym)
     if cached and (now - cached["time"] < 45):
         await send_json(websocket, cached["payload"])
-        print(f" 📊 Gráfico do dia ({sym}) enviado do CACHE para {get_peer_ip(websocket)}", flush=True)
+        print(f" 📊 Gráfico do dia ({sym} / box {box_pts} pts) enviado do CACHE para {get_peer_ip(websocket)}", flush=True)
         return
 
     def _safe_fetch_rates():
@@ -2565,13 +2719,15 @@ async def send_today_session_backfill(websocket, target_symbol=None):
                 "sessions": dias,
                 "date": last_day,
                 "symbol": sym,
+                "boxPoints": box_pts,
                 "source": "MT5_M1_ESTIMATED"
             }
         }
         LAST_BACKFILL_CACHE[sym] = {"payload": payload, "time": now}
+        LAST_BACKFILL_CACHE[raw_sym] = {"payload": payload, "time": now}
         await send_json(websocket, payload)
         print(
-            f" 📊 Gráfico ({sym}) {len(dias)} pregão(ões) {dias[0]}..{last_day}: "
+            f" 📊 Gráfico ({sym} / {box_pts} pts) {len(dias)} pregão(ões) {dias[0]}..{last_day}: "
             f"{len(selecionadas)} barras M1 ({len(bf_ticks)} ticks) para {get_peer_ip(websocket)}",
             flush=True,
         )
@@ -3112,29 +3268,38 @@ async def broadcast_to_web(msg_dict):
 
     msg_str = json.dumps(msg_dict)
 
-    disconnected = set()
+    clients = []
 
     for client in list(CONNECTED_CLIENTS):
 
         state = CLIENT_STATES.get(client)
 
-        if REQUIRE_AUTH and (state is None or not state["authenticated"]):
+        if REQUIRE_AUTH and (state is None or not state.get("authenticated", False)):
 
             continue
 
+        clients.append(client)
+
+    if not clients:
+
+        return
+
+    async def _safe_send(c):
         try:
-
-            await client.send(msg_str)
-
+            await asyncio.wait_for(c.send(msg_str), timeout=1.5)
+            return None
         except Exception:
+            return c
 
-            disconnected.add(client)
+    results = await asyncio.gather(*[_safe_send(c) for c in clients], return_exceptions=True)
 
-    for d in disconnected:
+    for r in results:
 
-        CONNECTED_CLIENTS.discard(d)
+        if r and not isinstance(r, Exception):
 
-        CLIENT_STATES.pop(d, None)
+            CONNECTED_CLIENTS.discard(r)
+
+            CLIENT_STATES.pop(r, None)
 
 
 
@@ -3660,6 +3825,7 @@ async def mt5_stream_loop():
                             await broadcast_to_web({"type": "BOX_CLOSED", "symbol": s, "data": new_box})
                             mgr.check_and_clean_expired_pending(new_box["index"])
                             mgr.watch_closed_pyramids()
+                            mgr.update_trailing_stop_box(new_box)
 
                             if signal:
                                 print(f" ⚡ SINAL GERADO [{s}]: {signal} ({reason})", flush=True)
@@ -3714,7 +3880,7 @@ async def mt5_equity_broadcaster_loop():
 
     while True:
 
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(3.0)
 
         if not CONNECTED_CLIENTS:
 
@@ -3732,6 +3898,8 @@ async def mt5_equity_broadcaster_loop():
 
             positions = await asyncio.to_thread(fetch_mt5_positions)
 
+            day_stats_pack = await asyncio.to_thread(fetch_mt5_day_stats, SYMBOL)
+
             await broadcast_to_web({
 
                 "type": "MT5_EQUITY_UPDATE",
@@ -3748,7 +3916,13 @@ async def mt5_equity_broadcaster_loop():
 
                     "marginFree": acc.margin_free,
 
-                    "positions": positions
+                    "positions": positions,
+
+                    "dayStats": day_stats_pack["current"],
+
+                    "dayStatsGlobal": day_stats_pack["global"],
+
+                    "dayStatsBySymbol": day_stats_pack["bySymbol"]
 
                 }
 
