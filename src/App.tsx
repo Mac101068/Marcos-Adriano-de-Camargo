@@ -687,17 +687,6 @@ export default function App() {
 
   // =========================================================================================
 
-  const shadowVersion = useSyncExternalStore(shadowRobotService.subscribe, shadowRobotService.getVersion);
-
-  const shadowWindowRef = useRef<{ v: number; snap: ReturnType<typeof shadowRobotService.getSnapshot> } | null>(null);
-
-  if (!shadowWindowRef.current || shadowWindowRef.current.v !== shadowVersion) {
-
-    shadowWindowRef.current = { v: shadowVersion, snap: shadowRobotService.getSnapshot() };
-
-  }
-
-  const shadowSnap = shadowWindowRef.current.snap;
 
   // =========================================================================
   // GESTÃO MULTI-ROBÔS / COPILOTO (WIN, WDO, BIT)
@@ -1178,7 +1167,7 @@ export default function App() {
         : { ...o, status: fin >= 0 ? ('CLOSED_PROFIT' as const) : ('CLOSED_LOSS' as const), ...closed };
 
     });
-  const { shadowEngineRef, ensureShadowEngine } = useShadowRobot();
+  const { shadowEngineRef, ensureShadowEngine, shadowSnap } = useShadowRobot();
 
 
 

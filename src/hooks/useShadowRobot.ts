@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
 import { RenkoFlowEngine } from '../utils/renkoCalculator';
 import { resolveAsset } from '../assets/assetRegistry';
 import { shadowRobotService } from '../services/shadowRobotService';
@@ -56,5 +56,17 @@ export function useShadowRobot() {
 
   }, []);
 
-  return { shadowEngineRef, ensureShadowEngine };
+  const shadowVersion = useSyncExternalStore(shadowRobotService.subscribe, shadowRobotService.getVersion);
+
+  const shadowWindowRef = useRef<{ v: number; snap: ReturnType<typeof shadowRobotService.getSnapshot> } | null>(null);
+
+  if (!shadowWindowRef.current || shadowWindowRef.current.v !== shadowVersion) {
+
+    shadowWindowRef.current = { v: shadowVersion, snap: shadowRobotService.getSnapshot() };
+
+  }
+
+  const shadowSnap = shadowWindowRef.current.snap;
+
+  return { shadowEngineRef, ensureShadowEngine, shadowVersion, shadowSnap };
 }
