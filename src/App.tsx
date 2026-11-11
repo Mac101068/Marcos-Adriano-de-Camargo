@@ -32,6 +32,7 @@ import { migrateFunnelSelA } from './utils/funnelSelAMigration';
 import { migrateAntiBurstCycle } from './utils/antiBurstMigration';
 import { usePanelWindows } from './hooks/usePanelWindows';
 import { useSession } from './hooks/useSession';
+import { useMultiRobots } from './hooks/useMultiRobots';
 
 import {
 
@@ -839,25 +840,11 @@ export default function App() {
   // =========================================================================
   // GESTÃO MULTI-ROBÔS / COPILOTO (WIN, WDO, BIT)
   // =========================================================================
-  const [multiRobotSignals, setMultiRobotSignals] = useState<Record<string, AssetSignalState>>({});
-  const [focusedRobotAsset, setFocusedRobotAsset] = useState<MultiRobotId>('WIN');
-  const [multiRobotStates, setMultiRobotStates] = useState<Record<MultiRobotId, RobotRuntimeState>>(() => {
-    try {
-      const saved = localStorage.getItem('fluxo_multi_robot_states_v1');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return {
-      WIN: { id: 'WIN', mode: 'COPILOT', contracts: MULTI_ROBOTS.WIN.defaultContracts, slPoints: MULTI_ROBOTS.WIN.defaultSlPoints, tpPoints: MULTI_ROBOTS.WIN.defaultTpPoints },
-      WDO: { id: 'WDO', mode: 'COPILOT', contracts: MULTI_ROBOTS.WDO.defaultContracts, slPoints: MULTI_ROBOTS.WDO.defaultSlPoints, tpPoints: MULTI_ROBOTS.WDO.defaultTpPoints },
-      BIT: { id: 'BIT', mode: 'COPILOT', contracts: MULTI_ROBOTS.BIT.defaultContracts, slPoints: MULTI_ROBOTS.BIT.defaultSlPoints, tpPoints: MULTI_ROBOTS.BIT.defaultTpPoints },
-    };
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('fluxo_multi_robot_states_v1', JSON.stringify(multiRobotStates));
-    } catch {}
-  }, [multiRobotStates]);
+  const {
+    multiRobotSignals, setMultiRobotSignals,
+    focusedRobotAsset, setFocusedRobotAsset,
+    multiRobotStates, setMultiRobotStates,
+  } = useMultiRobots();
 
   const mobileMoreTabsActive = ['simulador', 'comparativo', 'avaliacao', 'audit', 'settings', 'studio', 'docs', 'admin', 'python'].includes(activeTab);
 
