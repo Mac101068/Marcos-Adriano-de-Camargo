@@ -230,13 +230,13 @@ export function computeFlowConvictionScore(
   // 5. Velocidade
   let ptsSpeed = 0;
   const tStart = box.timeStart ?? 0;
-  const tEnd = box.timestamp ?? 0;
+  const tEnd = box.timeEnd ?? 0;
   if (tStart > 0 && tEnd > tStart) {
     const curDur = (tEnd - tStart) / 1000;
     const recentDurs = previousBoxes
       .slice(-10)
-      .filter((b) => (b.timestamp ?? 0) > (b.timeStart ?? 0))
-      .map((b) => ((b.timestamp ?? 0) - (b.timeStart ?? 0)) / 1000);
+      .filter((b) => (b.timeEnd ?? 0) > (b.timeStart ?? 0))
+      .map((b) => ((b.timeEnd ?? 0) - (b.timeStart ?? 0)) / 1000);
     if (recentDurs.length > 0) {
       const avgDur = recentDurs.reduce((a, b) => a + b, 0) / recentDurs.length;
       if (curDur <= avgDur * 0.4 && curDur >= 0.1) ptsSpeed = 1;
@@ -271,7 +271,7 @@ export function evaluateBoxConvergence(
   // Corte do momento: auto-calibrado (percentil da sessão + piso relativo à média do dia) ou limiar estático
   const adaptive = config.adaptiveThresholdEnabled === true && meter !== undefined;
   const timeRegimeOn = config.timeBasedRegimeEnabled !== false;
-  const timeRegime = getTimeBasedFlowRegime(box.timestamp);
+  const timeRegime = getTimeBasedFlowRegime(box.timeEnd);
 
   const SESSION_PERCENTILE = timeRegimeOn ? timeRegime.percentile : (config.adaptiveThresholdPercentile ?? 0.7);
   const FLOOR_MULTIPLE = timeRegimeOn ? timeRegime.floorMultiple : (config.adaptiveFloorMultiple ?? 1.6);
