@@ -35,6 +35,7 @@ import { useSession } from './hooks/useSession';
 import { useMultiRobots } from './hooks/useMultiRobots';
 import { useSimulation } from './hooks/useSimulation';
 import { useTerminalFeed } from './hooks/useTerminalFeed';
+import { useEngines } from './hooks/useEngines';
 
 import {
 
@@ -669,9 +670,8 @@ export default function App() {
 
   const [timeCurrentBox, setTimeCurrentBox] = useState<Partial<RenkoBox> | null>(null);
 
-  const rangeEngineRef = useRef<RangeBarEngine>(new RangeBarEngine(100));
+  const { engineRef, rangeEngineRef, timeEngineRef, altEnginesRef } = useEngines(asset);
 
-  const timeEngineRef = useRef<TimeBarEngine>(new TimeBarEngine(30000));
 
 
   // Buffer de atualização visual via requestAnimationFrame (desacopla ingestão de ticks da renderização 60 FPS)
@@ -1180,20 +1180,6 @@ export default function App() {
 
 
 
-  // Motores Renko extras (15R/20R/25R) rodando em paralelo só para o coletor
-
-  const altEnginesRef = useRef<Record<'renko15r' | 'renko20r' | 'renko25r', RenkoFlowEngine>>({
-
-    renko15r: new RenkoFlowEngine(75, asset),
-
-    renko20r: new RenkoFlowEngine(100, asset),
-
-    renko25r: new RenkoFlowEngine(125, asset),
-
-  });
-
-
-
   // MOTOR DO ROBÔ 2 (sombra): escala própria, CVD e medidor de regime próprios. Existe só
 
   // enquanto a sombra estiver ligada com uma estratégia válida.
@@ -1580,7 +1566,6 @@ export default function App() {
 
   });
 
-const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   const activeAssetIdRef = useRef<AssetId>(asset.id);
   useEffect(() => {
     activeAssetIdRef.current = asset.id;
