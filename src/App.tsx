@@ -34,6 +34,7 @@ import { usePanelWindows } from './hooks/usePanelWindows';
 import { useSession } from './hooks/useSession';
 import { useMultiRobots } from './hooks/useMultiRobots';
 import { useSimulation } from './hooks/useSimulation';
+import { useTerminalFeed } from './hooks/useTerminalFeed';
 
 import {
 
@@ -604,17 +605,15 @@ export default function App() {
 
 
 
-  const [ticks, setTicks] = useState<Tick[]>([]);
+  const {
+    ticks, setTicks,
+    bfDiag, setBfDiag,
+    allTicksRef,
+    pendingUiUpdateRef,
+  } = useTerminalFeed();
 
   const [boxes, setBoxes] = useState<RenkoBox[]>([]);
   // Última resposta da ponte sobre o backfill do gráfico (diagnóstico visível na tela)
-  const [bfDiag, setBfDiag] = useState<string>('');
-  // A faixa de diagnóstico é temporária: mostra o que a ponte entregou e sai da frente.
-  useEffect(() => {
-    if (!bfDiag) return;
-    const t = window.setTimeout(() => setBfDiag(''), 5000);
-    return () => window.clearTimeout(t);
-  }, [bfDiag]);
 
 
   const [currentBox, setCurrentBox] = useState<Partial<RenkoBox> | null>(null);
@@ -674,24 +673,8 @@ export default function App() {
 
   const timeEngineRef = useRef<TimeBarEngine>(new TimeBarEngine(30000));
 
-  const allTicksRef = useRef<Tick[]>([]);
 
   // Buffer de atualização visual via requestAnimationFrame (desacopla ingestão de ticks da renderização 60 FPS)
-  const pendingUiUpdateRef = useRef<{
-    scheduled: boolean;
-    latestPrice: number;
-    pendingTicks: Tick[];
-    boxesChanged: boolean;
-    rangeBoxesChanged: boolean;
-    timeBoxesChanged: boolean;
-  }>({
-    scheduled: false,
-    latestPrice: 0,
-    pendingTicks: [],
-    boxesChanged: false,
-    rangeBoxesChanged: false,
-    timeBoxesChanged: false,
-  });
 
   // =========================================================================================
 
