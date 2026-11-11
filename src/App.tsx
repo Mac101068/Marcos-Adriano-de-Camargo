@@ -31,6 +31,7 @@ import { migrateAutoCalibratedFunnel } from './utils/autoCalibrationMigration';
 import { migrateFunnelSelA } from './utils/funnelSelAMigration';
 import { migrateAntiBurstCycle } from './utils/antiBurstMigration';
 import { usePanelWindows } from './hooks/usePanelWindows';
+import { useSession } from './hooks/useSession';
 
 import {
 
@@ -594,55 +595,17 @@ export default function App() {
 
   const [realBacktestResult, setRealBacktestResult] = useState<any>(null);
 
-  const [localPregoes, setLocalPregoes] = useState<LocalPregao[]>([]);
-  
-    /**
-     * Catálogo dos recortes por pregão SEM depender da ponte: o navegador lê o
-     * arquivo estático `public/pregoes.json` (gerado pelo Python a partir de
-     * `data/pregoes/`), que o Vite serve no dev e no build. A ponte, quando está
-     * no ar, completa ou corrige a lista pela ação `LIST_LOCAL_PREGOES`.
-     */
-    useEffect(() => {
-      let cancelado = false;
-  
-      listarPregoesLocais(chartSymbolFor(asset)).then((lista) => {
-        if (cancelado) return;
-        setLocalPregoes((atual) => mesclarPregoes(atual, lista));
-      });
-  
-      return () => {
-        cancelado = true;
-      };
-    }, [asset]);
+  const {
+    localPregoes, setLocalPregoes,
+    currentAssetPregoes,
+    selectedPregaoDate, setSelectedPregaoDate,
+    selectedPregaoValue, setSelectedPregaoValue,
+    getPregaoCompactCode,
+    sessionGaps, setSessionGaps,
+  } = useSession(asset);
 
-  const currentAssetPregoes = useMemo(() => {
-    const sym = chartSymbolFor(asset).toUpperCase();
-    return localPregoes
-      .filter((p) => p.symbol.toUpperCase() === sym || sym.startsWith(p.symbol.toUpperCase().slice(0, 3)))
-      .slice(0, 10);
-  }, [localPregoes, asset]);
 
-  const [selectedPregaoDate, setSelectedPregaoDate] = useState<string | null>(null);
-  const [selectedPregaoValue, setSelectedPregaoValue] = useState<string>('');
 
-  useEffect(() => {
-    if (currentAssetPregoes.length > 0 && !selectedPregaoDate) {
-      const first = currentAssetPregoes[0];
-      setSelectedPregaoDate(first.date);
-      setSelectedPregaoValue(`date:${first.date}`);
-    }
-  }, [currentAssetPregoes, selectedPregaoDate]);
-
-  const getPregaoCompactCode = (val: string): string => {
-    if (val.startsWith('date:')) {
-      const d = val.replace('date:', '');
-      const idx = currentAssetPregoes.findIndex((p) => p.date === d);
-      if (idx >= 0) return `Flow${idx + 1}`;
-      const parts = d.split('-');
-      return `Flow (${parts[2]}/${parts[1]})`;
-    }
-    return currentAssetPregoes.length > 0 ? 'Flow1' : 'Flow';
-  };
 
   // "Replay opera": durante a reprodução cada tick passa pelo MESMO caminho do feed ao vivo
 
@@ -774,11 +737,6 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [bfDiag]);
 
-  // Emendas de pregão (fechamento de ontem → abertura de hoje) da série Renko em tela.
-
-  // Vão junto com os boxes para o gráfico desenhar a linha do gap entre as sessões.
-
-  const [sessionGaps, setSessionGaps] = useState<SessionGap[]>([]);
 
   const [currentBox, setCurrentBox] = useState<Partial<RenkoBox> | null>(null);
 
