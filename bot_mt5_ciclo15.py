@@ -127,8 +127,8 @@ SUPPORTED_ASSETS = {
         "max_pyramids": 3,
         "breakeven_offset_ticks": 1,
         "max_spread_ticks": 3,
-        "max_daily_loss": 500.0,
-        "max_daily_profit": 1000.0,
+        "max_daily_loss": 1000.0,
+        "max_daily_profit": 2500.0,
         "trailing_stop_enabled": True,
     },
     "WDO": {
@@ -209,10 +209,11 @@ SUPPORTED_ASSETS = {
 
 # ==============================================================================
 # CONFIGURAÇÕES DO ROBÔ 2: VARAL DE ORDENS (SOMBRA REAL NO MT5)
+# Cada ativo possui gestão e ativação 100% INDEPENDENTE (inicia pausado por segurança)
 # ==============================================================================
 VARAL_CONFIG = {
     "WIN": {
-        "enabled": True,
+        "enabled": False,     # Independente: inicia pausado até ativação explícita
         "magic": 150102,
         "execution_type": "MARKET",  # "MARKET" (A Mercado no fechamento do bloco) ou "LIMIT" (Pendente)
         "step_points": 50.0,
@@ -222,7 +223,7 @@ VARAL_CONFIG = {
         "sl_points": 50.0,
     },
     "WDO": {
-        "enabled": True,
+        "enabled": False,     # Independente: inicia pausado até ativação explícita
         "magic": 150202,
         "execution_type": "MARKET",  # "MARKET" ou "LIMIT"
         "step_points": 2.5,
@@ -232,7 +233,7 @@ VARAL_CONFIG = {
         "sl_points": 2.5,
     },
     "BIT": {
-        "enabled": True,
+        "enabled": False,     # Independente: inicia pausado até ativação explícita
         "magic": 150302,
         "execution_type": "MARKET",  # "MARKET" ou "LIMIT"
         "step_points": 100.0,
@@ -329,8 +330,8 @@ REGIME_LOOKBACK_BOXES = 20
 # P60 das agressões do próprio lado, calculado do pregão (regra: limiar é calculado)
 SESSION_PERCENTILE = 0.6
 
-# Piso do gate estático da Pirâmide — o mesmo Math.max(50, minDelta) do avaliador da tela
-PYRAMID_STATIC_FLOOR = 50
+# Piso do gate estático da Pirâmide — no Mini-Índice B3 o piso mínimo de fluxo institucional é 300
+PYRAMID_STATIC_FLOOR = 300
 
 # Consolidação: Efficiency Ratio abaixo disto = mercado girando em círculo, bloco mudo
 CONSOLIDATION_FILTER_ENABLED = True
@@ -339,10 +340,13 @@ CONSOLIDATION_LOOKBACK_BOXES = 10
 
 CONSOLIDATION_ER_MAX = 0.35
 
-# Exaustão: opcional, ligada só por decisão do operador (no app também vem desligada)
-EXHAUSTION_FILTER_ENABLED = False
+# Exaustão: protege contra entrada no final de estouro e clímax de fluxo
+EXHAUSTION_FILTER_ENABLED = True
 
 EXHAUSTION_DELTA_RATIO = 0.7
+
+# Teto anti-estouro (clímax institucional): deltas isolados absurdos acima deste teto são filtrados
+MAX_DELTA_CEILING = 3200
 
 
 
@@ -350,10 +354,11 @@ EXHAUSTION_DELTA_RATIO = 0.7
 EVAL_CONFIG = {
     "strategy_mode": STRATEGY_MODE,
     "adaptive": ADAPTIVE_THRESHOLD_ENABLED,
+    "time_based_regime_enabled": True,
     "regime_lookback": REGIME_LOOKBACK_BOXES,
     "percentile": 0.7,
     "floor_multiple": 1.6,
-    "flow_divergence_min": 0.15,
+    "flow_divergence_min": 0.4,
     "anti_absorption_enabled": True,
     "pyramid_static_floor": PYRAMID_STATIC_FLOOR,
     "consolidation_enabled": CONSOLIDATION_FILTER_ENABLED,
@@ -361,6 +366,7 @@ EVAL_CONFIG = {
     "consolidation_er_max": CONSOLIDATION_ER_MAX,
     "exhaustion_enabled": EXHAUSTION_FILTER_ENABLED,
     "exhaustion_ratio": EXHAUSTION_DELTA_RATIO,
+    "max_delta_ceiling": MAX_DELTA_CEILING,
     "require_cvd_extreme": REQUIRE_CVD_EXTREME,
 }
 
@@ -899,6 +905,92 @@ def is_exhausted_flow(previous_boxes, box, ratio):
     return False
 
 
+# ==============================================================================
+# CALIBRAÇÃO DINÂMICA DE FLUXO & AGRESSÃO POR HORÁRIO DA FITA (TAPE TIME)
+# ==============================================================================
+TIME_BASED_REGIME_ENABLED = True
+
+REGIME_SCHEDULE = [
+    {
+        "phase": "ABERTURA",
+        "start": "09:00",
+        "end": "10:30",
+        "percentile": 0.70,          # P70: Alta liquidez e volatilidade direcional de abertura
+        "flow_divergence_min": 0.15, # 15% divergência mínima
+        "floor_multiple": 1.4,       # Piso moderado para capturar expansão rápida de abertura
+        "desc": "Abertura: Alta liquidez e volatilidade direcional",
+    },
+    {
+        "phase": "MANHA_REGULAR",
+        "start": "10:30",
+        "end": "12:00",
+        "percentile": 0.75,          # P75: Consolidação inicial pós-abertura do à vista
+        "flow_divergence_min": 0.18, # 18% divergência
+        "floor_multiple": 1.5,
+        "desc": "Manhã: À vista aberto, fluxo consistente",
+    },
+    {
+        "phase": "MEIO_DIA",
+        "start": "12:00",
+        "end": "14:00",
+        "percentile": 0.80,          # P80: Almoço / menor liquidez institucional / maior ruído
+        "flow_divergence_min": 0.25, # 25% divergência mínima (exige agressão líquida expressiva)
+        "floor_multiple": 1.8,       # Piso elevado para barrar falsos rompimentos e violinadas
+        "desc": "Meio-dia: Faixa de consolidação, exigindo maior divergência de fluxo",
+    },
+    {
+        "phase": "TARDE_REGULAR",
+        "start": "14:00",
+        "end": "16:00",
+        "percentile": 0.75,          # P75: Retomada de volume com mercado norte-americano
+        "flow_divergence_min": 0.18, # 18% divergência
+        "floor_multiple": 1.5,
+        "desc": "Tarde: Fluxo pleno com mercado internacional",
+    },
+    {
+        "phase": "FECHAMENTO",
+        "start": "16:00",
+        "end": "17:30",
+        "percentile": 0.80,          # P80: Desaceleração pré-leilão e ajustes de tesouraria
+        "flow_divergence_min": 0.20, # 20% divergência
+        "floor_multiple": 1.6,       # Rigor antes do encerramento das 17:30
+        "desc": "Fechamento: Desaceleração pré-leilão",
+    },
+]
+
+
+def get_time_based_regime(tick_time_msc=None):
+    """Determina o regime de agressão e percentil calibrado pelo horário da fita (Tape Time)."""
+    if tick_time_msc and tick_time_msc > 0:
+        try:
+            t_dt = datetime.fromtimestamp(tick_time_msc / 1000)
+        except Exception:
+            t_dt = datetime.now()
+    else:
+        t_dt = datetime.now()
+    hm = t_dt.strftime("%H:%M")
+
+    for item in REGIME_SCHEDULE:
+        if item["start"] <= hm < item["end"]:
+            return {
+                "phase": item["phase"],
+                "time_str": hm,
+                "percentile": item["percentile"],
+                "flow_divergence_min": item["flow_divergence_min"],
+                "floor_multiple": item["floor_multiple"],
+                "desc": item["desc"],
+            }
+
+    return {
+        "phase": "FORA_GRADE",
+        "time_str": hm,
+        "percentile": 0.80,
+        "flow_divergence_min": 0.25,
+        "floor_multiple": 1.8,
+        "desc": "Fora do horário regular de negociação",
+    }
+
+
 def compute_flow_conviction_score(box, previous_boxes, regime_meter, base_thresh, direction):
     """Calcula o Score de Convicção Institucional (0 a 10 pontos) para o box de sinal.
     Critérios:
@@ -1225,8 +1317,23 @@ class RenkoFlowEngine:
         adaptive = bool(cfg["adaptive"])
         base_thresh = self.min_delta_threshold
         pyramid = cfg["strategy_mode"] == "PYRAMID_FLOW_CONFLUENCE"
-        pct = float(cfg.get("percentile", 0.7))
-        flr = float(cfg.get("floor_multiple", 1.6))
+
+        time_regime_on = bool(cfg.get("time_based_regime_enabled", TIME_BASED_REGIME_ENABLED))
+        box_ts = box.get("timestamp") or LAST_TAPE_TIME_MSC.get(self.symbol)
+        if time_regime_on:
+            t_reg = get_time_based_regime(box_ts)
+            pct = t_reg["percentile"]
+            flr = t_reg["floor_multiple"]
+            div_min = t_reg["flow_divergence_min"] if pyramid else 0.0
+            phase_lbl = t_reg["phase"]
+            hm_lbl = t_reg["time_str"]
+        else:
+            pct = float(cfg.get("percentile", 0.7))
+            flr = float(cfg.get("floor_multiple", 1.6))
+            div_min = float(cfg.get("flow_divergence_min", 0.15)) if pyramid else 0.0
+            phase_lbl = "FIXO"
+            hm_lbl = datetime.fromtimestamp((box_ts or 0) / 1000).strftime("%H:%M") if box_ts else "--:--"
+
         limit_buy = (
             self.regime_meter.get_self_calibrated_limit(base_thresh, "BUY", pct, flr)
             if adaptive else base_thresh
@@ -1235,12 +1342,18 @@ class RenkoFlowEngine:
             self.regime_meter.get_self_calibrated_limit(base_thresh, "SELL", pct, flr)
             if adaptive else base_thresh
         )
-        # Com adaptativo o corte é o auto-calibrado; na Pirâmide estática o app usa max(50, minDelta)
-        req_buy = limit_buy if (adaptive or not pyramid) else max(cfg["pyramid_static_floor"], base_thresh)
-        req_sell = limit_sell if (adaptive or not pyramid) else max(cfg["pyramid_static_floor"], base_thresh)
+        # Com adaptativo o corte é o auto-calibrado; na Pirâmide estática respeita o piso institucional do ativo
+        asset_floor = 300 if "WIN" in self.symbol else (100 if "WDO" in self.symbol else 35)
+        pyramid_floor = max(cfg.get("pyramid_static_floor", 300), asset_floor)
+        req_buy = max(limit_buy, asset_floor) if (adaptive or not pyramid) else max(pyramid_floor, base_thresh)
+        req_sell = max(limit_sell, asset_floor) if (adaptive or not pyramid) else max(pyramid_floor, base_thresh)
+
+        # Filtro de Estouro Anômalo / Clímax de Fluxo (Anti-Clímax no Topo/Fundo):
+        # Entrar no final de um estouro extremo de delta isolado quase sempre resulta em stop contra a reversão.
+        max_delta_teto = int(cfg.get("max_delta_ceiling", 3200))
+        is_delta_climax = ("WIN" in self.symbol) and (abs(delta) > max_delta_teto)
 
         # Filtro de divergência de fluxo (SEL-A: |Δ| ÷ volume >= min)
-        div_min = float(cfg.get("flow_divergence_min", 0.15)) if pyramid else 0.0
         tot_vol = max(1, int(box.get("total_volume") or box.get("volume") or 0))
         divergence = abs(delta) / tot_vol
         divergence_ok = (divergence >= div_min) if (pyramid and div_min > 0) else True
@@ -1264,13 +1377,21 @@ class RenkoFlowEngine:
         box["flow_score"] = flow_score
         box["flow_score_breakdown"] = score_breakdown
 
-        factor_lbl = f" | limiar = P{int(pct * 100)} SEL-A (janela {self.regime_meter.lookback}b)" if adaptive else ""
+        factor_lbl = (
+            f" | [{hm_lbl} · {phase_lbl} · P{int(pct * 100)} · DivMin {int(div_min * 100)}%] SEL-A (janela {self.regime_meter.lookback}b)"
+            if adaptive else ""
+        )
 
         # Vereditão completo vai para o diário (auditoria_diario). Um sinal que não sai deixa
         # rastro com o MOTIVO: sem a metade dos calados, nenhum filtro é auditável.
         audit = {
             "limiar_compra": req_buy,
             "limiar_venda": req_sell,
+            "fase_horario": phase_lbl,
+            "hora_fita": hm_lbl,
+            "percentil_vigente": pct,
+            "div_min_vigente": div_min,
+            "divergencia_medida": round(divergence, 3),
             "fator_regime": round(self.regime_meter.last_factor, 3),
             "efficiency_ratio": round(er, 4),
             "consolidacao": consolidating,
@@ -1288,7 +1409,13 @@ class RenkoFlowEngine:
             box["audit"] = audit
             return None, ""
 
+        if is_delta_climax:
+            audit["motivo"] = f"CALADO_ESTOURO_CLIMAX | Δ {delta} excedeu teto de {max_delta_teto} (barra de exaustão/clímax)"
+            box["audit"] = audit
+            return None, ""
+
         if pyramid:
+            min_flow_score = 4 if "WIN" in self.symbol else 3
             if direction == "UP":
                 # 1. Delta institucional: abaixo do limiar não existe sinal, seja qual for o regime
                 if delta < req_buy:
@@ -1298,6 +1425,8 @@ class RenkoFlowEngine:
                 # 2. Regime: verde dentro de range curto ou fluxo exausto não é confluência
                 elif regime_block:
                     audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
+                elif flow_score < min_flow_score:
+                    audit["motivo"] = f"CALADO_SCORE_BAIXO | Score {flow_score}/10 < mínimo {min_flow_score}"
                 else:
                     signal = "BUY"
                     reason = f"Pirâmide Confluência Alta: Bloco Verde #{box['index']} [Score {flow_score}/10] (Δ {delta} vs limiar {req_buy}{factor_lbl})"
@@ -1309,6 +1438,8 @@ class RenkoFlowEngine:
                     audit["motivo"] = f"CALADO_DIVERGENCIA | div {divergence:.2f} < {div_min}"
                 elif regime_block:
                     audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
+                elif flow_score < min_flow_score:
+                    audit["motivo"] = f"CALADO_SCORE_BAIXO | Score {flow_score}/10 < mínimo {min_flow_score}"
                 else:
                     signal = "SELL"
                     reason = f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']} [Score {flow_score}/10] (Δ {delta} vs limiar {-req_sell}{factor_lbl})"
@@ -1465,6 +1596,12 @@ class MT5OrderManager:
             return False, f"META_DIARIA_BATIDA (PnL R$ {current_pnl:.2f})"
 
         return True, "OK"
+
+    def reset_risk_locks(self):
+        """Rearma as travas de perda e ganho para permitir que o robô volte a operar."""
+        self.is_loss_locked = False
+        self.is_gain_locked = False
+        print(f"🔓 [RISCO RESETADO [{self.symbol}]] Travas de perda/ganho rearmadas pelo operador.", flush=True)
 
     def update_trailing_stop_box(self, box):
         """Trailing Stop Caixa a Caixa: move o Stop Loss a cada box fechado a favor da tendência."""
@@ -2012,13 +2149,22 @@ class MT5OrderManager:
         default_sl = spec.get("sl_points", STOP_LOSS_POINTS)
         default_tp = spec.get("tp_points", TAKE_PROFIT_POINTS)
         sl_val = float(sl_points) if sl_points is not None else float(default_sl)
+        tp_val = float(tp_points) if tp_points is not None else float(default_tp)
+
+        # Guarda anti-contaminação do Mini-Índice: nunca aceitar stops curtos herdados de WDO (ex: 2.5 pts)
+        if "WIN" in self.symbol:
+            if 0 < sl_val < 30.0:
+                print(f"🛡️ [PROTEÇÃO SL {self.symbol}] Stop de {sl_val} pts rejeitado (muito curto para Índice B3). Corrigido para {default_sl} pts.", flush=True)
+                sl_val = float(default_sl)
+            if 0 < tp_val < 30.0:
+                tp_val = float(default_tp)
+
         if sl_val > 0:
             raw_sl = (entry_price - sl_val) if is_buy else (entry_price + sl_val)
             sl_price = round(round(raw_sl / tick_size) * tick_size, digits)
         else:
             sl_price = 0.0
 
-        tp_val = float(tp_points) if tp_points is not None else float(default_tp)
         if tp_val > 0:
             raw_tp = (entry_price + tp_val) if is_buy else (entry_price - tp_val)
             tp_price = round(round(raw_tp / tick_size) * tick_size, digits)
@@ -2383,14 +2529,21 @@ class MT5VaralManager:
     - Virou a direção: cancela ordens pendentes do lado oposto e zera posições anteriores.
     - Magic Numbers independentes (150102 / 150202 / 150302).
     - Não interfere nas posições nem na gestão do Robô Mestre (150x01).
+    - Ativação e parâmetros 100% INDEPENDENTES por ativo (WIN / WDO / BIT).
     """
     def __init__(self, symbol):
         self.symbol = symbol
         self.asset_key = "WIN" if "WIN" in symbol else ("WDO" if "WDO" in symbol else ("BIT" if "BIT" in symbol else "WIN"))
-        self.cfg = dict(VARAL_CONFIG.get(self.asset_key, VARAL_CONFIG["WIN"]))
-        self.magic = self.cfg["magic"]
         self.last_signal_dir = None
         self.placed_orders_count = 0
+
+    @property
+    def cfg(self):
+        return VARAL_CONFIG.get(self.asset_key, VARAL_CONFIG.get("WIN", {}))
+
+    @property
+    def magic(self):
+        return self.cfg.get("magic", 150102)
 
     def get_filling_mode(self):
         sym_info = mt5.symbol_info(self.symbol)
@@ -2404,12 +2557,9 @@ class MT5VaralManager:
         return mt5.ORDER_FILLING_RETURN
 
     def update_config(self, patch):
-        for k, v in patch.items():
-            if k in self.cfg:
-                self.cfg[k] = v
-        # Sincroniza de volta no dict global
-        VARAL_CONFIG[self.asset_key].update(self.cfg)
-        print(f"🧺 [VARAL {self.symbol}] Config atualizada: max_orders={self.cfg['max_orders']}, tp={self.cfg['tp_points']} pts, step={self.cfg['step_points']} pts, enabled={self.cfg['enabled']}", flush=True)
+        if self.asset_key in VARAL_CONFIG and isinstance(patch, dict):
+            VARAL_CONFIG[self.asset_key].update(patch)
+        print(f"🧺 [VARAL {self.symbol} ({self.asset_key})] Config atualizada: max_orders={self.cfg.get('max_orders')}, tp={self.cfg.get('tp_points')} pts, step={self.cfg.get('step_points')} pts, enabled={self.cfg.get('enabled')}", flush=True)
 
     def cancel_pending_orders(self):
         """Cancela todas as ordens pendentes do Varal no MT5."""
@@ -2468,7 +2618,7 @@ class MT5VaralManager:
         """
         Gatilho do Varal acionado por sinal de box ('BUY' / 'SELL' ou 'C' / 'V').
         """
-        if not self.cfg.get("enabled", True):
+        if not self.cfg.get("enabled", False):
             return
 
         if tick_time_msc is None:
@@ -2680,6 +2830,7 @@ def apply_ea_config(payload):
             changed.append(f"strategy_mode={mode}")
 
     _bool("adaptiveThresholdEnabled", "adaptive")
+    _bool("timeBasedRegimeEnabled", "time_based_regime_enabled")
     _bool("consolidationFilterEnabled", "consolidation_enabled")
     _bool("exhaustionFilterEnabled", "exhaustion_enabled")
     _bool("requireCvdNewExtreme", "require_cvd_extreme")
@@ -2692,6 +2843,23 @@ def apply_ea_config(payload):
     _num("adaptiveFloorMultiple", "floor_multiple", float)
     _num("flowDivergenceMin", "flow_divergence_min", float)
 
+    # Pisos de segurança anti-estouro e anti-cache obsoleto no Mini-Índice (WIN):
+    # Impedem que localStorage antigo rebaixe a seletividade e libere ruído/clímax na ponte.
+    sym = str(payload.get("symbol") or SYMBOL or "").upper()
+    if "WIN" in sym:
+        if EVAL_CONFIG["flow_divergence_min"] < 0.35:
+            EVAL_CONFIG["flow_divergence_min"] = 0.40
+            changed.append("flow_divergence_min=0.40(safety_floor)")
+        if not EVAL_CONFIG["consolidation_enabled"]:
+            EVAL_CONFIG["consolidation_enabled"] = True
+            changed.append("consolidation_enabled=True(safety_floor)")
+        if not EVAL_CONFIG["exhaustion_enabled"]:
+            EVAL_CONFIG["exhaustion_enabled"] = True
+            changed.append("exhaustion_enabled=True(safety_floor)")
+        if not EVAL_CONFIG["adaptive"]:
+            EVAL_CONFIG["adaptive"] = True
+            changed.append("adaptive=True(safety_floor)")
+
     # Propaga o lookback de boxes para todos os motores de regime ativos
     if "regime_lookback" in EVAL_CONFIG:
         new_lb = EVAL_CONFIG["regime_lookback"]
@@ -2701,12 +2869,13 @@ def apply_ea_config(payload):
 
     # A base de Delta é calibrada por ativo (cada mercado tem outra liquidez por tijolo),
     # então o número global da tela só se aplica ao ativo que está no gráfico.
-    sym = str(payload.get("symbol") or "").upper()
     if sym in ENGINES and payload.get("minDeltaThreshold") is not None:
         try:
             eng_min = int(payload["minDeltaThreshold"])
         except (TypeError, ValueError):
             eng_min = 0
+        if "WIN" in sym and 0 < eng_min < 300:
+            eng_min = 300
         if eng_min > 0 and eng_min != ENGINES[sym].min_delta_threshold:
             ENGINES[sym].min_delta_threshold = eng_min
             changed.append(f"min_delta[{sym}]={eng_min}")
@@ -2873,9 +3042,19 @@ LAST_DAY_STATS_TIME = 0.0
 def fetch_mt5_day_stats(symbol=None):
     """Calcula estatísticas de contratos negociados e resultado financeiro realizado da sessão de hoje (com cache de 4s para estabilidade e fluidez)."""
     global LAST_DAY_STATS_CACHE, LAST_DAY_STATS_TIME
+    def _parse_sym_key(s):
+        raw = str(s or SYMBOL).upper()
+        if "BIT" in raw or "BTC" in raw:
+            return "BIT"
+        if "WDO" in raw:
+            return "WDO"
+        if "WIN" in raw:
+            return "WIN"
+        return raw[:3]
+
     now_ts = time.time()
     if LAST_DAY_STATS_CACHE and (now_ts - LAST_DAY_STATS_TIME < 4.0):
-        sym_key = (symbol or SYMBOL)[:3].upper()
+        sym_key = _parse_sym_key(symbol)
         res = dict(LAST_DAY_STATS_CACHE)
         res["current"] = res["bySymbol"].get(sym_key, res["global"])
         return res
@@ -2917,13 +3096,18 @@ def fetch_mt5_day_stats(symbol=None):
         }
 
     global_stats = _calc(None)
+    bit_stats = _calc("BIT")
     by_symbol = {
         "WIN": _calc("WIN"),
         "WDO": _calc("WDO"),
-        "BIT": _calc("BIT")
+        "BIT": bit_stats,
+        "BTC": bit_stats,
+        "BTCBR": bit_stats,
+        "BIT$": bit_stats,
+        "BITX26": bit_stats,
     }
 
-    sym_key = (symbol or SYMBOL)[:3].upper()
+    sym_key = _parse_sym_key(symbol)
     current_sym_stats = by_symbol.get(sym_key, global_stats)
 
     res = {
@@ -3587,7 +3771,7 @@ async def ws_handler(websocket):
 
             if action == "SET_VARAL_CONFIG":
                 sym = str(data.get("symbol") or SYMBOL)
-                asset_k = "WIN" if "WIN" in sym else ("WDO" if "WDO" in sym else ("BIT" if "BIT" in sym else "WIN"))
+                asset_k = str(data.get("assetKey") or ("WIN" if "WIN" in sym else ("WDO" if "WDO" in sym else ("BIT" if "BIT" in sym else "WIN")))).upper()
                 patch = data.get("config", {})
                 if asset_k in VARAL_CONFIG and isinstance(patch, dict):
                     VARAL_CONFIG[asset_k].update(patch)
@@ -3597,6 +3781,7 @@ async def ws_handler(websocket):
                     await broadcast_to_web({
                         "type": "VARAL_CONFIG_UPDATE",
                         "symbol": sym,
+                        "assetKey": asset_k,
                         "data": VARAL_CONFIG
                     })
                 continue
@@ -3748,6 +3933,17 @@ async def ws_handler(websocket):
                         ROBOT_MODES[asset_k] = new_mode
                         print(f" 🤖 MODO DO ROBÔ [{asset_k}] ALTERADO PARA: {new_mode}", flush=True)
                         await broadcast_to_web({"type": "ROBOT_MODES_UPDATE", "data": ROBOT_MODES})
+
+                elif action == "RESET_RISK_LOCK":
+                    for sym, mgr_inst in ORDER_MANAGERS.items():
+                        mgr_inst.reset_risk_locks()
+                    for varal_inst in VARAL_MANAGERS.values():
+                        varal_inst.placed_orders_count = 0
+                    print("🔓 [TRAVA DE RISCO] Travas de perda e limites de ordens rearmadas pelo operador.", flush=True)
+                    await broadcast_to_web({
+                        "type": "RISK_LOCK_RESET_OK",
+                        "data": {"timestamp": int(datetime.now().timestamp() * 1000)}
+                    })
 
     except websockets.exceptions.ConnectionClosed:
 
