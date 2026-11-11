@@ -207,6 +207,43 @@ SUPPORTED_ASSETS = {
 
 
 
+# ==============================================================================
+# CONFIGURAÇÕES DO ROBÔ 2: VARAL DE ORDENS (SOMBRA REAL NO MT5)
+# ==============================================================================
+VARAL_CONFIG = {
+    "WIN": {
+        "enabled": True,
+        "magic": 150102,
+        "execution_type": "MARKET",  # "MARKET" (A Mercado no fechamento do bloco) ou "LIMIT" (Pendente)
+        "step_points": 50.0,
+        "max_orders": 3,      # Editável: 3, 4, 5 ordens
+        "contracts": 1,
+        "tp_points": 50.0,    # Editável
+        "sl_points": 50.0,
+    },
+    "WDO": {
+        "enabled": True,
+        "magic": 150202,
+        "execution_type": "MARKET",  # "MARKET" ou "LIMIT"
+        "step_points": 2.5,
+        "max_orders": 3,
+        "contracts": 1,
+        "tp_points": 5.0,     # Editável
+        "sl_points": 2.5,
+    },
+    "BIT": {
+        "enabled": True,
+        "magic": 150302,
+        "execution_type": "MARKET",  # "MARKET" ou "LIMIT"
+        "step_points": 100.0,
+        "max_orders": 3,
+        "contracts": 1,
+        "tp_points": 200.0,   # Editável
+        "sl_points": 100.0,
+    },
+}
+
+
 SYMBOL = "WINZ26"
 
 ASSET_LABEL = "Mini-Índice B3"
@@ -464,6 +501,7 @@ ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "").strip().lower() in ("1", "
 # seguinte com o robô ensaiando sem querer. A trava de ambiente fica por cima dela: ligar pelo app
 # sempre funciona, desligar pelo app nunca vence um ORDERS_BLOCKED=1 definido no PC do MT5.
 REPLAY_MODE = False
+LAST_TAPE_TIME_MSC = {}
 
 
 def ordens_bloqueadas():
@@ -574,7 +612,8 @@ def check_trade_allowed(state, data, action):
         comment.startswith("WEB_") or
         comment.startswith("MAE_") or
         comment.startswith("PIR_") or
-        data.get("magic") in (MANUAL_ORDER_MAGIC, 150101, 150201, 150301)
+        comment.startswith("VARAL_") or
+        data.get("magic") in (MANUAL_ORDER_MAGIC, 150101, 150201, 150301, 150102, 150202, 150302)
     )
 
     if action in ENTRY_ACTIONS and not state["armed"] and not is_operator_order:
@@ -860,6 +899,110 @@ def is_exhausted_flow(previous_boxes, box, ratio):
     return False
 
 
+def compute_flow_conviction_score(box, previous_boxes, regime_meter, base_thresh, direction):
+    """Calcula o Score de Convicção Institucional (0 a 10 pontos) para o box de sinal.
+    Critérios:
+    1. Força do Delta vs Histórico (0 a 3 pts):
+       - Delta >= P90: +3 pts
+       - Delta >= P80: +2 pts
+       - Delta >= P70: +1 pt
+    2. Divergência de Fluxo (|Delta| / Volume) (0 a 2 pts):
+       - Div >= 35%: +2 pts
+       - Div >= 20%: +1 pt
+    3. Alinhamento de CVD (0 a 2 pts):
+       - Novo topo/fundo histórico do dia: +2 pts
+       - CVD inclinado a favor nos últimos 3 boxes: +1 pt
+    4. Eficiência de Kaufman (ER) (0 a 2 pts):
+       - ER >= 0.70: +2 pts
+       - ER >= 0.45: +1 pt
+    5. Velocidade de Formação do Box (0 a 1 pt):
+       - Box fechou em <= 40% do tempo médio recente: +1 pt
+    """
+    delta = abs(box.get("delta", 0) or 0)
+    side = "BUY" if direction == "UP" else "SELL"
+
+    # 1. Delta vs percentis do regime
+    p90 = regime_meter.get_self_calibrated_limit(base_thresh, side, percentile=0.90, floor_multiple=1.6)
+    p80 = regime_meter.get_self_calibrated_limit(base_thresh, side, percentile=0.80, floor_multiple=1.4)
+    p70 = regime_meter.get_self_calibrated_limit(base_thresh, side, percentile=0.70, floor_multiple=1.2)
+
+    if delta >= p90:
+        pts_delta = 3
+    elif delta >= p80:
+        pts_delta = 2
+    elif delta >= p70:
+        pts_delta = 1
+    else:
+        pts_delta = 0
+
+    # 2. Divergência de fluxo (|Delta| / Volume)
+    vol = max(1, int(box.get("total_volume") or box.get("volume") or 0))
+    div = delta / vol
+    if div >= 0.35:
+        pts_div = 2
+    elif div >= 0.20:
+        pts_div = 1
+    else:
+        pts_div = 0
+
+    # 3. CVD
+    cvd = box.get("cvd_at_close", 0) or 0
+    pts_cvd = 0
+    if previous_boxes:
+        all_prev_cvd = [b.get("cvd_at_close", 0) for b in previous_boxes if "cvd_at_close" in b]
+        if all_prev_cvd:
+            if direction == "UP" and cvd >= max(all_prev_cvd):
+                pts_cvd = 2
+            elif direction == "DOWN" and cvd <= min(all_prev_cvd):
+                pts_cvd = 2
+            elif len(all_prev_cvd) >= 2:
+                last_few = all_prev_cvd[-3:]
+                if direction == "UP" and all(last_few[i] <= last_few[i+1] for i in range(len(last_few)-1)):
+                    pts_cvd = 1
+                elif direction == "DOWN" and all(last_few[i] >= last_few[i+1] for i in range(len(last_few)-1)):
+                    pts_cvd = 1
+    else:
+        pts_cvd = 1
+
+    # 4. Efficiency Ratio
+    er = efficiency_ratio(previous_boxes, box, 10)
+    if er >= 0.70:
+        pts_er = 2
+    elif er >= 0.45:
+        pts_er = 1
+    else:
+        pts_er = 0
+
+    # 5. Velocidade
+    pts_speed = 0
+    t_start = box.get("time_start", 0)
+    t_end = box.get("timestamp", 0)
+    if t_start and t_end and t_end > t_start:
+        cur_dur = (t_end - t_start) / 1000.0
+        recent_durs = [
+            (b.get("timestamp", 0) - b.get("time_start", 0)) / 1000.0
+            for b in previous_boxes[-10:]
+            if b.get("timestamp") and b.get("time_start") and b.get("timestamp") > b.get("time_start")
+        ]
+        if recent_durs:
+            avg_dur = sum(recent_durs) / len(recent_durs)
+            if cur_dur <= avg_dur * 0.4 and cur_dur >= 0.1:
+                pts_speed = 1
+        elif cur_dur < 10.0:
+            pts_speed = 1
+
+    total_score = min(10, max(0, pts_delta + pts_div + pts_cvd + pts_er + pts_speed))
+    breakdown = {
+        "delta_pts": pts_delta,
+        "div_pts": pts_div,
+        "cvd_pts": pts_cvd,
+        "er_pts": pts_er,
+        "speed_pts": pts_speed,
+        "total": total_score
+    }
+    return total_score, breakdown
+
+
 class RenkoFlowEngine:
     def __init__(self, symbol="WINZ26", box_points=50.0, tick_size=5.0, min_delta_threshold=150):
         self.symbol = symbol
@@ -1114,6 +1257,13 @@ class RenkoFlowEngine:
             previous_boxes, box, cfg["exhaustion_ratio"])
         regime_block = consolidating or exhausting
 
+        # Score de Convicção Institucional de Fluxo (0 a 10)
+        flow_score, score_breakdown = compute_flow_conviction_score(
+            box, previous_boxes, self.regime_meter, base_thresh, direction
+        )
+        box["flow_score"] = flow_score
+        box["flow_score_breakdown"] = score_breakdown
+
         factor_lbl = f" | limiar = P{int(pct * 100)} SEL-A (janela {self.regime_meter.lookback}b)" if adaptive else ""
 
         # Vereditão completo vai para o diário (auditoria_diario). Um sinal que não sai deixa
@@ -1126,6 +1276,8 @@ class RenkoFlowEngine:
             "consolidacao": consolidating,
             "exaustao": exhausting,
             "absorcao": is_absorbed,
+            "flow_score": flow_score,
+            "flow_score_breakdown": score_breakdown,
             "sinal": None,
             "motivo": "SEM_DIRECAO",
         }
@@ -1148,8 +1300,8 @@ class RenkoFlowEngine:
                     audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
                 else:
                     signal = "BUY"
-                    reason = f"Pirâmide Confluência Alta: Bloco Verde #{box['index']} (Δ {delta} vs limiar {req_buy}{factor_lbl})"
-                    audit["motivo"] = f"SINAL_BUY | Δ {delta} >= {req_buy}"
+                    reason = f"Pirâmide Confluência Alta: Bloco Verde #{box['index']} [Score {flow_score}/10] (Δ {delta} vs limiar {req_buy}{factor_lbl})"
+                    audit["motivo"] = f"SINAL_BUY | Score {flow_score}/10 | Δ {delta} >= {req_buy}"
             elif direction == "DOWN":
                 if delta > -req_sell:
                     audit["motivo"] = f"CALADO_DELTA | Δ {delta} > limiar {-req_sell}"
@@ -1159,8 +1311,8 @@ class RenkoFlowEngine:
                     audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
                 else:
                     signal = "SELL"
-                    reason = f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']} (Δ {delta} vs limiar {-req_sell}{factor_lbl})"
-                    audit["motivo"] = f"SINAL_SELL | Δ {delta} <= {-req_sell}"
+                    reason = f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']} [Score {flow_score}/10] (Δ {delta} vs limiar {-req_sell}{factor_lbl})"
+                    audit["motivo"] = f"SINAL_SELL | Score {flow_score}/10 | Δ {delta} <= {-req_sell}"
         else:
             limite = limit_buy if direction == "UP" else limit_sell
             cruzou = (direction == "UP" and delta >= limit_buy) or (direction == "DOWN" and delta <= -limit_sell)
@@ -1358,15 +1510,38 @@ class MT5OrderManager:
 
         return updated_any
 
-    def check_schedule(self):
+    def check_schedule(self, tick_time_msc=None):
+        if REPLAY_MODE:
+            # Em modo replay, respeita a hora da fita se informada
+            if tick_time_msc is not None and tick_time_msc > 0:
+                tape_hm = datetime.fromtimestamp(tick_time_msc / 1000).strftime("%H:%M")
+                if TRADING_HOURS_ENABLED:
+                    if tape_hm >= CLOSE_ALL_TIME:
+                        return False, True
+                    if tape_hm < START_TIME or tape_hm >= STOP_ENTRIES_TIME:
+                        return False, False
+            return True, False
+
+        # Se não foi fornecido tick_time_msc, tenta o último timestamp registrado da fita para o ativo
+        if tick_time_msc is None:
+            tick_time_msc = LAST_TAPE_TIME_MSC.get(self.symbol)
+
         if TRADING_HOURS_ENABLED:
-            now_hm = datetime.now().strftime("%H:%M")
+            if tick_time_msc and tick_time_msc > 0:
+                now_hm = datetime.fromtimestamp(tick_time_msc / 1000).strftime("%H:%M")
+            else:
+                now_hm = datetime.now().strftime("%H:%M")
+
             if now_hm >= CLOSE_ALL_TIME:
-                print(f"[HORÁRIO] Horário de zeragem atingido ({now_hm} >= {CLOSE_ALL_TIME}). Zerando posições...")
-                self.close_all_positions()
+                if not getattr(self, "day_close_executed", False):
+                    self.day_close_executed = True
+                    print(f"🛑 [HORÁRIO B3] Fim de pregão atingido ({now_hm} >= {CLOSE_ALL_TIME}). Zerando posições...", flush=True)
+                    self.close_all_positions()
                 return False, True
+            else:
+                self.day_close_executed = False
+
             if now_hm < START_TIME or now_hm >= STOP_ENTRIES_TIME:
-                print(f"[HORÁRIO] Fora da janela de entradas ({now_hm} fora de {START_TIME}-{STOP_ENTRIES_TIME}). Ordem ignorada.")
                 return False, False
 
         can_trade_risk, risk_reason = self.check_risk_limits()
@@ -1376,29 +1551,11 @@ class MT5OrderManager:
 
         return True, False
 
-        now_hm = datetime.now().strftime("%H:%M")
-
-        if now_hm >= CLOSE_ALL_TIME:
-
-            print(f"[HORÁRIO] Horário de zeragem atingido ({now_hm} >= {CLOSE_ALL_TIME}). Zerando posições...")
-
-            self.close_all_positions()
-
-            return False, True
-
-        if now_hm < START_TIME or now_hm >= STOP_ENTRIES_TIME:
-
-            print(f"[HORÁRIO] Fora da janela de entradas ({now_hm} fora de {START_TIME}-{STOP_ENTRIES_TIME}). Ordem ignorada.")
-
-            return False, False
-
-        return True, False
 
 
+    def place_pullback_limit_order(self, signal, box, comment="", tick_time_msc=None):
 
-    def place_pullback_limit_order(self, signal, box, comment=""):
-
-        can_trade, _ = self.check_schedule()
+        can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
 
         if not can_trade:
 
@@ -1508,9 +1665,9 @@ class MT5OrderManager:
 
 
 
-    def place_pyramid_limit_order(self, signal, box, comment="", volume=None, sl_points=0, tp_points=0):
+    def place_pyramid_limit_order(self, signal, box, comment="", volume=None, sl_points=0, tp_points=0, tick_time_msc=None):
 
-        can_trade, _ = self.check_schedule()
+        can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
 
         if not can_trade:
 
@@ -1620,9 +1777,9 @@ class MT5OrderManager:
 
 
 
-    def place_websocket_limit_order(self, signal, limit_price, comment="", volume=None, sl_points=0, tp_points=0, magic=None):
+    def place_websocket_limit_order(self, signal, limit_price, comment="", volume=None, sl_points=0, tp_points=0, magic=None, tick_time_msc=None):
 
-        can_trade, _ = self.check_schedule()
+        can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
 
         if not can_trade or limit_price <= 0:
 
@@ -1807,9 +1964,9 @@ class MT5OrderManager:
 
 
     def execute_market_order(self, order_type, comment="", volume=None, sl_points=None, tp_points=None, magic=None,
-                             box_index="", preco_box=None, acao="MERCADO"):
+                             box_index="", preco_box=None, acao="MERCADO", tick_time_msc=None):
 
-        can_trade, _ = self.check_schedule()
+        can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
 
         if not can_trade:
 
@@ -1927,11 +2084,26 @@ class MT5OrderManager:
             active_positions = []
 
         spec = get_asset_spec(self.symbol)
-        main_vol = spec.get("contracts", MAIN_CONTRACTS)
+        base_vol = spec.get("contracts", MAIN_CONTRACTS)
         pyr_vol = spec.get("pyramid_contracts", PYRAMID_CONTRACTS)
         pyr_sl = spec.get("pyramid_sl_points", PYRAMID_SL_POINTS)
         pyr_tp = spec.get("pyramid_tp_points", PYRAMID_TP_POINTS)
         max_pyr = spec.get("max_pyramids", 3)
+
+        # Dimensionamento Dinâmico de Lotes por Score de Convicção Institucional (Item 4)
+        flow_score = box.get("flow_score", 5) if isinstance(box, dict) else 5
+        if flow_score >= 8:
+            # Score 8 a 10 (Alta Convicção / Super Confluência): Lote Turbo
+            main_vol = max(base_vol, 3) if "WIN" in self.symbol.upper() else max(base_vol, 2)
+            score_tier = f"TURBO (Score {flow_score}/10)"
+        elif flow_score >= 5:
+            # Score 5 a 7 (Convicção Padrão): Lote Calibrado
+            main_vol = base_vol
+            score_tier = f"PADRAO (Score {flow_score}/10)"
+        else:
+            # Score 1 a 4 (Convicção Baixa / Raspando Limiar): Lote Mínimo Conservador (1 contrato)
+            main_vol = 1
+            score_tier = f"CONSERVADOR (Score {flow_score}/10)"
 
         has_main_order = False
         pyramid_count = 0
@@ -1950,7 +2122,7 @@ class MT5OrderManager:
                 success, ticket, placed = self.place_pyramid_limit_order(
                     current_dir,
                     box,
-                    comment=f"MAE_{box['index']}",
+                    comment=f"MAE_{box['index']}_S{flow_score}",
                     volume=main_vol,
                     sl_points=sl_pts,
                     tp_points=tp_pts
@@ -1959,17 +2131,17 @@ class MT5OrderManager:
                     self.main_tickets[ticket] = current_dir
                 return success, ticket, "MAIN"
 
-            print(f"🟢 [ABRINDO ORDEM MÃE [{self.symbol}]] {current_dir} {main_vol} ctro(s) no Box #{box['index']}", flush=True)
+            print(f"🟢 [ABRINDO ORDEM MÃE [{self.symbol}]] {current_dir} {main_vol} ctro(s) [{score_tier}] no Box #{box['index']}", flush=True)
             try:
                 success, ticket = self.execute_market_order(
                     order_type=current_dir,
-                    comment=f"MAE_{box['index']}",
+                    comment=f"MAE_{box['index']}_S{flow_score}",
                     volume=main_vol,
                     sl_points=sl_pts,
                     tp_points=tp_pts,
                     box_index=box["index"],
                     preco_box=box["close"],
-                    acao="ORDEM_MAE",
+                    acao=f"ORDEM_MAE_S{flow_score}",
                 )
             except Exception as exc:
                 self._audit_ordem("ORDEM_MAE", current_dir, main_vol, box["close"], None, None,
@@ -2110,6 +2282,15 @@ class MT5OrderManager:
 
 
     def close_all_positions(self, side=None, magic="robot"):
+        sym_info = mt5.symbol_info(self.symbol)
+        if not sym_info:
+            return True
+
+        # Se a negociação estiver desativada na B3/corretora (fim de pregão), evita enviar ordem a mercado
+        # para que o MetaTrader 5 não fique emitindo som de rejeição de ordem ("bufando")
+        if sym_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
+            print(f"⚠️ [MERCADO FECHADO [{self.symbol}]] Negociação desativada pela corretora (trade_mode=DISABLED). Zeragem evitada no MT5.", flush=True)
+            return True
 
         positions = mt5.positions_get(symbol=self.symbol)
 
@@ -2135,13 +2316,17 @@ class MT5OrderManager:
 
                 continue
 
-            closed_n += 1
-
             close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
 
             tick = mt5.symbol_info_tick(self.symbol)
+            if not tick:
+                continue
 
             price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
+            if not price or price <= 0:
+                continue
+
+            closed_n += 1
 
             dir_sign = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else -1.0
 
@@ -2173,7 +2358,9 @@ class MT5OrderManager:
 
             }
 
-            mt5.order_send(req)
+            res = mt5.order_send(req)
+            if res and res.retcode != mt5.TRADE_RETCODE_DONE:
+                print(f"⚠️ [MT5 AVISO [{self.symbol}]] RetCode={res.retcode} ({res.comment}) ao zerar #{pos.ticket}", flush=True)
 
         alvo = f"lado {side}" if side_type is not None else "posições"
 
@@ -2187,12 +2374,258 @@ class MT5OrderManager:
 
 
 
+class MT5VaralManager:
+    """
+    ROBÔ 2: VARAL DE ORDENS (SOMBRA REAL NO MT5)
+    Executa ordens pendentes escalonadas para frente quando aparece sinal ('C' ou 'V') na tela:
+    - Se aparece 'C': pendura ordens BUY_STOP 50 pts pra frente (até max_orders).
+    - Se aparece 'V': pendura ordens SELL_STOP 50 pts pra baixo (até max_orders).
+    - Virou a direção: cancela ordens pendentes do lado oposto e zera posições anteriores.
+    - Magic Numbers independentes (150102 / 150202 / 150302).
+    - Não interfere nas posições nem na gestão do Robô Mestre (150x01).
+    """
+    def __init__(self, symbol):
+        self.symbol = symbol
+        self.asset_key = "WIN" if "WIN" in symbol else ("WDO" if "WDO" in symbol else ("BIT" if "BIT" in symbol else "WIN"))
+        self.cfg = dict(VARAL_CONFIG.get(self.asset_key, VARAL_CONFIG["WIN"]))
+        self.magic = self.cfg["magic"]
+        self.last_signal_dir = None
+        self.placed_orders_count = 0
+
+    def get_filling_mode(self):
+        sym_info = mt5.symbol_info(self.symbol)
+        if not sym_info:
+            return mt5.ORDER_FILLING_IOC
+        fill_flags = sym_info.filling_mode
+        if fill_flags & 2:
+            return mt5.ORDER_FILLING_RETURN
+        if fill_flags & 1:
+            return mt5.ORDER_FILLING_IOC
+        return mt5.ORDER_FILLING_RETURN
+
+    def update_config(self, patch):
+        for k, v in patch.items():
+            if k in self.cfg:
+                self.cfg[k] = v
+        # Sincroniza de volta no dict global
+        VARAL_CONFIG[self.asset_key].update(self.cfg)
+        print(f"🧺 [VARAL {self.symbol}] Config atualizada: max_orders={self.cfg['max_orders']}, tp={self.cfg['tp_points']} pts, step={self.cfg['step_points']} pts, enabled={self.cfg['enabled']}", flush=True)
+
+    def cancel_pending_orders(self):
+        """Cancela todas as ordens pendentes do Varal no MT5."""
+        with MT5_LOCK:
+            orders = mt5.orders_get(symbol=self.symbol)
+        if not orders:
+            return
+        for o in orders:
+            if o.magic == self.magic:
+                req = {
+                    "action": mt5.TRADE_ACTION_REMOVE,
+                    "order": o.ticket,
+                    "magic": self.magic,
+                    "symbol": self.symbol,
+                }
+                with MT5_LOCK:
+                    res = mt5.order_send(req)
+                if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                    print(f"🗑️ [VARAL {self.symbol}] Ordem pendente #{o.ticket} cancelada", flush=True)
+
+    def close_all_positions(self):
+        """Zera posições abertas pertencentes exclusivamente ao Magic do Varal."""
+        sym_info = mt5.symbol_info(self.symbol)
+        if not sym_info or sym_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
+            return
+        with MT5_LOCK:
+            positions = mt5.positions_get(symbol=self.symbol)
+        if not positions:
+            return
+        for pos in positions:
+            if pos.magic == self.magic:
+                is_buy = pos.type == mt5.ORDER_TYPE_BUY
+                close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+                close_price = sym_info.bid if is_buy else sym_info.ask
+                if not close_price or close_price <= 0:
+                    continue
+                req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "position": pos.ticket,
+                    "symbol": self.symbol,
+                    "volume": float(pos.volume),
+                    "type": close_type,
+                    "price": float(close_price),
+                    "deviation": 20,
+                    "magic": self.magic,
+                    "comment": f"FLIP_VARAL_{pos.ticket}"[:31],
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": self.get_filling_mode(),
+                }
+                with MT5_LOCK:
+                    res = mt5.order_send(req)
+                if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                    print(f"🔄 [VARAL {self.symbol}] Posição #{pos.ticket} zerada por virada de sinal", flush=True)
+
+    def on_box_signal(self, signal, box_price, tick_time_msc=None):
+        """
+        Gatilho do Varal acionado por sinal de box ('BUY' / 'SELL' ou 'C' / 'V').
+        """
+        if not self.cfg.get("enabled", True):
+            return
+
+        if tick_time_msc is None:
+            tick_time_msc = LAST_TAPE_TIME_MSC.get(self.symbol)
+
+        if TRADING_HOURS_ENABLED:
+            if tick_time_msc and tick_time_msc > 0:
+                now_hm = datetime.fromtimestamp(tick_time_msc / 1000).strftime("%H:%M")
+            elif not REPLAY_MODE:
+                now_hm = datetime.now().strftime("%H:%M")
+            else:
+                now_hm = None
+
+            if now_hm and (now_hm >= CLOSE_ALL_TIME or now_hm < START_TIME):
+                return
+
+        is_buy = signal in ("BUY", "C", "UP")
+        direction = "BUY" if is_buy else "SELL"
+
+        # Se virou a direção do sinal: cancela pendentes do lado oposto e zera posições
+        if self.last_signal_dir and self.last_signal_dir != direction:
+            print(f"\n🧺 [VARAL {self.symbol}] Virada de sinal detectada ({self.last_signal_dir} -> {direction})! Limpando varal anterior...", flush=True)
+            self.cancel_pending_orders()
+            self.close_all_positions()
+            self.placed_orders_count = 0
+
+        self.last_signal_dir = direction
+
+        # Quantas ordens/posições ativas do varal já existem?
+        with MT5_LOCK:
+            positions = [p for p in (mt5.positions_get(symbol=self.symbol) or []) if p.magic == self.magic]
+            pending = [o for o in (mt5.orders_get(symbol=self.symbol) or []) if o.magic == self.magic]
+
+        total_active = len(positions) + len(pending)
+        max_orders = int(self.cfg.get("max_orders", 3))
+
+        if total_active >= max_orders:
+            # Varal já atingiu o teto de ordens penduradas
+            return
+
+        # Próxima ordem do varal
+        order_index = total_active + 1
+        step_pts = float(self.cfg.get("step_points", 50.0))
+        tp_pts = float(self.cfg.get("tp_points", 50.0))
+        sl_pts = float(self.cfg.get("sl_points", 50.0))
+        contracts = float(self.cfg.get("contracts", 1.0))
+
+        sym_info = mt5.symbol_info(self.symbol)
+        if not sym_info:
+            return
+        tick_size = sym_info.trade_tick_size if sym_info.trade_tick_size > 0 else 1.0
+        curr_ask = sym_info.ask
+        curr_bid = sym_info.bid
+
+        execution_type = str(self.cfg.get("execution_type", "MARKET")).upper()
+
+        # =====================================================================
+        # MODO A MERCADO: Executa imediatamente no fechamento de cada bloco (C ou V)
+        # =====================================================================
+        if execution_type == "MARKET":
+            order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+            exec_price = curr_ask if is_buy else curr_bid
+            if is_buy:
+                ref_sl = min(curr_bid, exec_price)
+                sl_price = round((ref_sl - max(sl_pts, tick_size)) / tick_size) * tick_size if sl_pts > 0 else 0.0
+                tp_price = round((exec_price + tp_pts) / tick_size) * tick_size if tp_pts > 0 else 0.0
+            else:
+                ref_sl = max(curr_ask, exec_price)
+                sl_price = round((ref_sl + max(sl_pts, tick_size)) / tick_size) * tick_size if sl_pts > 0 else 0.0
+                tp_price = round((exec_price - tp_pts) / tick_size) * tick_size if tp_pts > 0 else 0.0
+
+            comment = f"VARAL_MKT_{'C' if is_buy else 'V'}{order_index}"
+            req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": self.symbol,
+                "volume": contracts,
+                "type": order_type,
+                "price": float(exec_price),
+                "sl": float(sl_price),
+                "tp": float(tp_price),
+                "deviation": 20,
+                "magic": self.magic,
+                "comment": comment,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": self.get_filling_mode(),
+            }
+
+            with MT5_LOCK:
+                res = mt5.order_send(req)
+
+            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                print(f"⚡ [VARAL A MERCADO {self.symbol} #{order_index}/{max_orders}] Ordem a mercado aberta: {direction} {contracts}ct @ {exec_price} | TP={tp_price} SL={sl_price} (Ticket #{res.order})", flush=True)
+                self.placed_orders_count += 1
+            else:
+                err = getattr(res, "comment", "Desconhecido")
+                print(f"⚠️ [VARAL A MERCADO {self.symbol}] Falha ao executar: {err} | Request: {req}", flush=True)
+            return
+
+        # =====================================================================
+        # MODO LIMITE / PENDENTE: Pendura ordem no book à frente (step_pts)
+        # =====================================================================
+        if is_buy:
+            ref_p = curr_ask
+            target_p = ref_p + (step_pts * (len(pending) + 1))
+            target_p = round(target_p / tick_size) * tick_size
+            order_type = mt5.ORDER_TYPE_BUY_STOP if target_p > curr_ask else mt5.ORDER_TYPE_BUY_LIMIT
+            sl_price = round((target_p - sl_pts) / tick_size) * tick_size if sl_pts > 0 else 0.0
+            tp_price = round((target_p + tp_pts) / tick_size) * tick_size if tp_pts > 0 else 0.0
+        else:
+            ref_p = curr_bid
+            target_p = ref_p - (step_pts * (len(pending) + 1))
+            target_p = round(target_p / tick_size) * tick_size
+            order_type = mt5.ORDER_TYPE_SELL_STOP if target_p < curr_bid else mt5.ORDER_TYPE_SELL_LIMIT
+            sl_price = round((target_p + sl_pts) / tick_size) * tick_size if sl_pts > 0 else 0.0
+            tp_price = round((target_p - tp_pts) / tick_size) * tick_size if tp_pts > 0 else 0.0
+
+        comment = f"VARAL_{'C' if is_buy else 'V'}{order_index}"
+        req = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": self.symbol,
+            "volume": contracts,
+            "type": order_type,
+            "price": float(target_p),
+            "sl": float(sl_price),
+            "tp": float(tp_price),
+            "deviation": 20,
+            "magic": self.magic,
+            "comment": comment,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": self.get_filling_mode(),
+        }
+
+        with MT5_LOCK:
+            res = mt5.order_send(req)
+
+        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+            print(f"🧺 [VARAL LIMITE {self.symbol} #{order_index}/{max_orders}] Ordem pendente enviada: {direction} {contracts}ct @ {target_p} | TP={tp_price} SL={sl_price} (Ticket #{res.order})", flush=True)
+            self.placed_orders_count += 1
+        else:
+            err = getattr(res, "comment", "Desconhecido")
+            print(f"⚠️ [VARAL LIMITE {self.symbol}] Falha ao pendurar degrau #{order_index}: {err} | Request: {req}", flush=True)
+
+
 CONNECTED_CLIENTS = set()
 
 ORDER_MANAGER = None
 
 ENGINES = {}
 ORDER_MANAGERS = {}
+VARAL_MANAGERS = {}
+
+def get_or_create_varal_manager(sym):
+    if sym in VARAL_MANAGERS:
+        return VARAL_MANAGERS[sym]
+    vmgr = MT5VaralManager(sym)
+    VARAL_MANAGERS[sym] = vmgr
+    return vmgr
 
 def get_asset_spec(sym):
     sym_u = str(sym).upper()
@@ -2409,6 +2842,31 @@ def fetch_mt5_positions():
 
 
 
+def fetch_mt5_orders():
+    """Retorna a lista de ordens pendentes abertas no MT5 (incluindo o Varal de Ordens)."""
+    with MT5_LOCK:
+        ords = mt5.orders_get()
+    if not ords:
+        return []
+    orders_list = []
+    for o in ords:
+        otype = 'BUY_STOP' if o.type == mt5.ORDER_TYPE_BUY_STOP else ('SELL_STOP' if o.type == mt5.ORDER_TYPE_SELL_STOP else ('BUY_LIMIT' if o.type == mt5.ORDER_TYPE_BUY_LIMIT else 'SELL_LIMIT'))
+        orders_list.append({
+            'ticket': int(o.ticket),
+            'time': int(getattr(o, 'time_setup', 0)) * 1000,
+            'symbol': str(o.symbol),
+            'type': otype,
+            'volume': float(o.volume_current),
+            'price': float(o.price_open),
+            'sl': float(o.sl),
+            'tp': float(o.tp),
+            'magic': int(o.magic),
+            'comment': str(o.comment or '')
+        })
+    return orders_list
+
+
+
 LAST_DAY_STATS_CACHE = None
 LAST_DAY_STATS_TIME = 0.0
 
@@ -2538,6 +2996,8 @@ async def send_account_info(websocket):
 
     positions = await asyncio.to_thread(fetch_mt5_positions)
 
+    orders = await asyncio.to_thread(fetch_mt5_orders)
+
     day_stats_pack = await asyncio.to_thread(fetch_mt5_day_stats, SYMBOL)
 
     await send_json(websocket, {
@@ -2563,6 +3023,10 @@ async def send_account_info(websocket):
             "deals": deals,
 
             "positions": positions,
+
+            "pendingOrders": orders,
+
+            "varalConfig": VARAL_CONFIG,
 
             "dayStats": day_stats_pack["current"],
 
@@ -3121,6 +3585,34 @@ async def ws_handler(websocket):
 
 
 
+            if action == "SET_VARAL_CONFIG":
+                sym = str(data.get("symbol") or SYMBOL)
+                asset_k = "WIN" if "WIN" in sym else ("WDO" if "WDO" in sym else ("BIT" if "BIT" in sym else "WIN"))
+                patch = data.get("config", {})
+                if asset_k in VARAL_CONFIG and isinstance(patch, dict):
+                    VARAL_CONFIG[asset_k].update(patch)
+                    vmgr = get_or_create_varal_manager(sym)
+                    vmgr.update_config(patch)
+                    print(f"🧺 [VARAL] Configurações atualizadas para {asset_k} ({sym}): {VARAL_CONFIG[asset_k]}", flush=True)
+                    await broadcast_to_web({
+                        "type": "VARAL_CONFIG_UPDATE",
+                        "symbol": sym,
+                        "data": VARAL_CONFIG
+                    })
+                continue
+
+            if action == "CLEAR_VARAL":
+                sym = str(data.get("symbol") or SYMBOL)
+                vmgr = get_or_create_varal_manager(sym)
+                vmgr.cancel_pending_orders()
+                vmgr.close_all_positions()
+                vmgr.placed_orders_count = 0
+                print(f"🧺 [VARAL] Ordens pendentes e posições do Varal limpas/zeradas para {sym}", flush=True)
+                await send_account_info(websocket)
+                continue
+
+
+
             if action in TRADE_ACTIONS:
 
                 allowed, reason = check_trade_allowed(state, data, action)
@@ -3152,6 +3644,13 @@ async def ws_handler(websocket):
 
                 if action == "ORDER_SEND":
                     order_magic = data.get("magic") or None
+                    req_timestamp = data.get("timestamp") or data.get("tickTime") or None
+                    if req_timestamp:
+                        try:
+                            req_timestamp = int(req_timestamp)
+                            LAST_TAPE_TIME_MSC[target_sym] = req_timestamp
+                        except (ValueError, TypeError):
+                            req_timestamp = None
                     print(f" 📥 [WEBSOCKET] RECEBIDA SOLICITAÇÃO ORDER_SEND: {target_sym} {data.get('type')} {data.get('contracts', 1)} ctros | Magic={order_magic} SL={data.get('sl')} TP={data.get('tp')}", flush=True)
 
                     if data.get("isLimit"):
@@ -3170,7 +3669,9 @@ async def ws_handler(websocket):
 
                             data.get("tp", 0) or 0,
 
-                            magic=order_magic
+                            magic=order_magic,
+
+                            tick_time_msc=req_timestamp
 
                         )
 
@@ -3193,6 +3694,8 @@ async def ws_handler(websocket):
                                 magic=order_magic,
 
                                 acao="APP_ORDER_SEND",
+
+                                tick_time_msc=req_timestamp
 
                             )
 
@@ -3801,6 +4304,7 @@ async def mt5_stream_loop():
                         flags = int(tick['flags'])
                         aggressor = "BUY" if (flags & mt5.TICK_FLAG_BUY) else ("SELL" if (flags & mt5.TICK_FLAG_SELL) else "CROSS")
                         ts_msc = raw_msc + MT5_BRT_OFFSET_MSC
+                        LAST_TAPE_TIME_MSC[s] = ts_msc
 
                         batch_ticks.append({
                             "id": f"mt5-{s}-{ts_msc}",
@@ -3827,6 +4331,16 @@ async def mt5_stream_loop():
                             mgr.watch_closed_pyramids()
                             mgr.update_trailing_stop_box(new_box)
 
+                            # ROBÔ 2: VARAL DE ORDENS (SOMBRA REAL NO MT5)
+                            # Acionado a cada novo box ('C' para alta / 'V' para baixa) independentemente do Robô Mestre
+                            try:
+                                if not ordens_bloqueadas():
+                                    varal_mgr = get_or_create_varal_manager(s)
+                                    box_dir = "C" if new_box["direction"] == "UP" else "V"
+                                    varal_mgr.on_box_signal(box_dir, new_box["close"], tick_time_msc=ts_msc)
+                            except Exception as _varal_exc:
+                                print(f"[AVISO] Falha ao acionar varal para {s}: {_varal_exc}", flush=True)
+
                             if signal:
                                 print(f" ⚡ SINAL GERADO [{s}]: {signal} ({reason})", flush=True)
                                 await broadcast_to_web({
@@ -3837,7 +4351,9 @@ async def mt5_stream_loop():
                                         "reason": reason,
                                         "boxIndex": new_box["index"],
                                         "price": new_box["close"],
-                                        "timestamp": ts_msc
+                                        "timestamp": ts_msc,
+                                        "flowScore": new_box.get("flow_score", 5),
+                                        "flowScoreBreakdown": new_box.get("flow_score_breakdown", {})
                                     }
                                 })
                                 # Se a ponte estiver armada em qualquer cliente, executa com o magic number do ativo.

@@ -5,71 +5,69 @@
 
 ---
 
-## 1. Evoluções Realizadas na Sessão Atual
+## 1. Evoluções Realizadas na Sessão
 
-### A. Correção Arquitetural do PnL (Lucro & Prejuízo Consolidado)
-- **Diagnóstico:** Anteriormente, o painel dos robôs calculava apenas o lucro flutuante instantâneo das ordens abertas no momento (`posList.reduce(profit)`), enquanto a boleta calculava o realizado fechado da sessão. Isso gerava discrepâncias visuais para o operador.
-- **Implementação Backend (`bot_mt5_ciclo15.py`):**
-  - Implementada a função `fetch_mt5_day_stats(symbol)` com separação estrita por ativo:
-    - 🟦 **Mini-Índice (`WIN`):** Realizado Fechado do dia
-    - 🟩 **Mini-Dólar (`WDO`):** Realizado Fechado do dia
-    - 🟨 **Bitcoin B3 (`BIT`):** Realizado Fechado do dia
-    - 🌐 **Global:** Total líquido fechado da conta inteira
-  - Cache inteligente de 4.0s para consulta de histórico do MT5 (evitando varredura repetitiva de 490+ negócios que travava o stream de ticks).
-  - Broadcast assíncrono paralelo com `asyncio.gather` e timeout individual de 1.5s, eliminando o congelamento de conexões quando múltiplas janelas/telas estão abertas.
-- **Implementação Frontend (`interface_github`):**
-  - Em `MultiAssetRobotsBar.tsx` e `MultiAssetRobotsPanel.tsx`: O cálculo do PnL do robô agora unifica:
-    $$\text{PnL do Robô} = \text{Net Realizado do Ativo (Fechado)} + \text{Flutuante em Aberto}$$
-  - Em `BoletaTicket.tsx`: O chip recolhido da boleta agora exibe o PnL financeiro do dia em R$ em destaque com badge colorido (`+R$ / −R$`).
-  - Sincronização em tempo real entre navegador principal e popouts externos via `BroadcastChannel('MT5_DAY_STATS_SYNC')`.
+### A. Robô 2: Varal de Ordens (Sombra Operacional no MT5)
+- **Conceito & Arquitetura:**
+  - Robô secundário dedicado operando simultaneamente com o Robô 1 (Mestre) em cada ativo.
+  - Opera com Magic Numbers isolados na corretora XP:
+    - 🟦 **Mini-Índice (`WINZ26`):** Magic `150102` (Mestre: `150101`)
+    - 🟩 **Mini-Dólar (`WDOZ26`):** Magic `150202` (Mestre: `150201`)
+    - 🟨 **Bitcoin B3 (`BITX26`):** Magic `150302` (Mestre: `150301`)
+  - **Gatilho Operacional:** Disparado ao fechamento de cada box Renko com base no sinal "C" (Compra) ou "V" (Venda), de forma independente das regras de confluência institucional do robô mestre.
+  - **Modos de Execução Editáveis:**
+    - ⚡ **A Mercado (`MARKET`):** Executa imediatamente a mercado no fechamento de cada bloco ("C" ou "V") para garantir entrada sem que a ordem passe reto.
+    - ⏳ **Ordem Limite / Stop (`LIMIT`):** Projeta ordens pendentes escalonadas à frente do preço (`step_points`, padrão 50 pts) criando o "varal" de ordens.
+  - **Parâmetros Parametrizáveis pela Interface:**
+    - `execution_type`: `MARKET` vs `LIMIT`
+    - `max_orders`: Número máximo de ordens penduradas/ativas (3, 4, 5 ordens)
+    - `step_points`: Distância do espaçamento entre as ordens (padrão 50 pts)
+    - `tp_points`: Alvo de Take Profit configurável por ativo
+    - `sl_points`: Stop Loss com proteção dinâmica contra spread de abertura
+    - `contracts`: Quantidade de contratos por ordem
+  - **Proteção Anti-Rejeição de Stop no MT5 (`Invalid stops`):**
+    - Implementado cálculo de `ref_sl` relativo ao Bid/Ask atual da corretora, impedindo que o Stop Loss seja posicionado dentro do spread em ativos voláteis como o Bitcoin B3.
 
 ---
 
-### B. Eliminação Definitiva do Bug `R$ NaN` e `TP +NaNp`
+### B. Correção da Hora da Fita (`Tape Time`) & Resolução de Reversão de PnL no Replay
 - **Causa Raiz Identificada:**
-  - O backend Python enviava o preço de abertura da posição como `'priceOpen'` (camelCase), enquanto trechos do frontend aguardavam `'price_open'` (snake_case).
-  - Com `pos.price_open` resultando em `undefined`, a diferença de pontos calculava `currentPrice - undefined = NaN`, contaminando o financeiro em R$ e a distância da régua de Take Profit (`TP +NaNp`).
+  1. A checagem de horários operacionais do robô (`check_schedule`) lia o relógio de parede do computador (`datetime.now()`). Durante ensaios de replay realizados após as 17:30 ou à noite, 100% das ordens eram bloqueadas com `BLOQUEADO_POR_HORARIO`.
+  2. Ao término da corrida de replay, a variável `isReplaying` tornava-se `false` e a interface caía no fallback `isRealMT5 = true` (pelo MT5 estar conectado), sobrescrevendo imediatamente o PnL positivo do replay com o extrato da conta MT5 (que continha saldo negativo do dia de testes).
+  3. No cálculo de `stats`, ordens fechadas de replay eram filtradas por `(o.exitTimestamp ?? 0) >= sessionStartRef.current`, descartando ordens que continham horário histórico da fita.
 - **Correções Aplicadas:**
-  1. **Python (`bot_mt5_ciclo15.py`):** Agora envia simultaneamente `priceOpen` e `price_open`, além de `priceCurrent` e `price_current`.
-  2. **React (`App.tsx`):** Unificação segura do parser:
-     ```typescript
-     const openPrice = Number(pos.priceOpen ?? pos.price_open ?? 0);
-     ```
-     Todas as posições agora recebem fallback numérico protegido e validação estrita com `Number.isFinite(...)`.
-  3. **Boleta (`BoletaTicket.tsx`):** A função formatadora `brl(v)` valida se o número é finito antes de invocar `toLocaleString`, exibindo com elegância `R$ 0,00` em vez de `R$ NaN`.
-  4. **Gráfico (`RenkoFlowChart.tsx`):** As etiquetas de Take Profit, Stop Loss e Reteste Limitado foram blindadas com cálculo de distância seguro contra preços não preenchidos.
+  - **Soberania do Horário da Fita:** `LAST_TAPE_TIME_MSC` armazena o milissegundo real de cada tick processado. Em modo replay (`REPLAY_MODE`), o robô valida a janela de pregão exclusivamente pelo horário da fita e não pelo relógio do computador.
+  - **Trava de Fim de Pregão (17:30 da Fita):** Uma vez que o tick da fita atinge `tradingCloseAllTime` (17:30), todas as ordens abertas são liquidadas no preço de mercado daquele exato momento e nenhuma nova ordem é aberta durante os ticks residuais do leilão (17:30 às 18:00+).
+  - **Preservação do Resultado do Replay na Tela:** A trava `hasReplayOrders` garante que, enquanto houver ordens da sessão de replay na tela, o cabeçalho e o painel mantêm o `dayPnl` e as métricas do replay intactos, sem substituí-los pelo extrato da conta do MT5.
 
 ---
 
-### C. Calibração Operacional dos 3 Robôs (Confluência, Pirâmide & Travas)
-- **Mini-Índice (`WINZ26` - Magic `150101`):** Renko `10R` (50 pts) · Limiar Delta $P_{70} = 300$ ctros · Divergência de fluxo $\ge 15\%$ · SL 50 pts / TP 100 pts.
-- **Mini-Dólar (`WDOZ26` - Magic `150201`):** Renko `2.5R` (2.5 pts) · Limiar Delta $P_{70} = 400$ ctros · Filtro anti-absorção ativo · SL 2.5 pts / TP 5.0 pts.
-- **Bitcoin B3 (`BITX26` - Magic `150301`):** Renko `100R` (100 pts) · Limiar Delta $P_{70} = 35$ ctros · SL 200 pts / TP 400 pts.
-- **Regras de Piramidação:** Máximo de 3 adições a favor da tendência com novo delta comprovado; Breakeven automático da Ordem Mãe para $+1$ tick de lucro assim que a pirâmide 1 for acionada.
-- **Travas Diárias:** Teto de perda financeira diária e lock de meta de lucro monitorados individualmente por robô e no consolidado da conta.
+### C. Eliminação do "Bufo" (Rejeição de Ordens) no Fechamento da B3 no MetaTrader 5
+- **Diagnóstico:** Quando o pregão encerra na B3 (após 17:30 / 18:00), a corretora desativa ordens a mercado. O robô continuava tentando enviar requisições de zeragem repetitivas a cada tick, disparando o alerta sonoro de erro no terminal MT5.
+- **Implementação:**
+  - Adicionada verificação prévia de `sym_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED` em `close_all_positions()` do robô mestre e do Varal.
+  - Inclusão do latch de proteção `day_close_executed = True`: a rotina de zeragem de fim de dia é acionada exatamente uma única vez por pregão, cessando tentativas repetitivas.
 
 ---
 
-## 2. Pauta Prioritária para a Próxima Conversa: "Refino de Estratégias"
+## 2. Pauta Prioritária para Calibração das Estratégias
 
-Na próxima sessão com o tema **"Refino de Estratégias"**, os tópicos imediatos de avanço são:
-
-1. **Afinação Dinâmica dos Limiares de Agressão por Horário de Pregão:**
-   - Calibrar o percentil de agressão ($P_{70}$ vs $P_{80}$) conforme a fase do pregão:
-     - *Abertura (09:00 - 10:30):* Alta volatilidade e volume concentrado.
-     - *Almoço (12:00 - 14:00):* Redução de liquidez, exigência de divergência mais rígida para evitar falso rompimento.
-     - *Tarde / Fechamento (16:00 - 18:00):* Ajuste ao fluxo de derivativos e leilão.
-2. **Backtesting Automatizado & Relatório de Curva de Capital (Headless):**
-   - Rodar bateria de testes com base nos extratos reais gravados no disco (`deals_*.csv` e logs de ticks).
-   - Simular diferentes combinações de Take Profit da Pirâmide (1 box vs 2 boxes) e impacto no drawdown máximo.
-3. **Refinamento do Trailing Stop Multiescala:**
-   - Avaliar a sensibilidade do Stop Móvel Renko Caixa a Caixa: manter a 1 box de distância ou permitir folga de 2 boxes em ativos mais voláteis como o Bitcoin B3 (`BITX26`).
-4. **Alocação Dinâmica de Contratos e Gestão de Lotes:**
-   - Parametrizar aumento de lote baseado na pontuação de convicção da agressão (Score de Fluxo de 1 a 10).
+1. **Calibração do Robô 2 (Varal de Ordens):**
+   - **Mini-Índice (`WINZ26`):** Testar modo `MARKET` no fechamento do box (TP 50 pts, SL 100 pts) versus modo `LIMIT` (3 ordens a cada 50 pts).
+   - **Mini-Dólar (`WDOZ26`):** Testar varal com passo de 2.5 pts e TP de 2.5 a 5.0 pts.
+   - **Bitcoin B3 (`BITX26`):** Ajustar folga do Stop Loss para comportar o spread médio de 100 a 200 pts.
+2. **Convivência Robô 1 (Mestre - Fluxo Institucional) vs Robô 2 (Varal - Price Action Puro):**
+   - Avaliar a rentabilidade combinada quando ambos operam o mesmo ativo em paralelo.
+   - Analisar o drawdown consolidado com ordens de ambos os Magics abertas na mesma direção ou em hedge pontual.
+3. **Afinação dos Limiares de Agressão por Horário da Fita:**
+   - Calibrar o percentil de agressão ($P_{70}$ vs $P_{80}$) conforme a fase do pregão reproduzida na fita:
+     - *Abertura (09:00 - 10:30):* Alta liquidez e volatilidade.
+     - *Meio-dia (12:00 - 14:00):* Faixa de consolidação, exigindo maior divergência de fluxo.
+     - *Fechamento (16:00 - 17:30):* Desaceleração pré-leilão.
 
 ---
 
-## 3. Comandos para Iniciar os Serviços
+## 3. Comandos para Execução dos Serviços
 
 ### Terminal 1: Backend MT5 (Python)
 ```powershell
