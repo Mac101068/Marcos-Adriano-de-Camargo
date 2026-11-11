@@ -53,7 +53,7 @@ export const MULTI_ROBOTS: Record<MultiRobotId, MultiRobotSpec> = {
     defaultSlPoints: 200,
     defaultTpPoints: 400,
     tickSize: 20,
-    pointValue: 0.1,
+    pointValue: 0.01,
   },
 };
 
@@ -90,7 +90,7 @@ export type VaralConfigMap = Record<MultiRobotId, VaralItemConfig>;
 
 export const DEFAULT_VARAL_CONFIG: VaralConfigMap = {
   WIN: {
-    enabled: true,
+    enabled: false,
     magic: 150102,
     execution_type: 'MARKET',
     step_points: 50.0,
@@ -100,7 +100,7 @@ export const DEFAULT_VARAL_CONFIG: VaralConfigMap = {
     sl_points: 50.0,
   },
   WDO: {
-    enabled: true,
+    enabled: false,
     magic: 150202,
     execution_type: 'MARKET',
     step_points: 2.5,
@@ -110,7 +110,7 @@ export const DEFAULT_VARAL_CONFIG: VaralConfigMap = {
     sl_points: 2.5,
   },
   BIT: {
-    enabled: true,
+    enabled: false,
     magic: 150302,
     execution_type: 'MARKET',
     step_points: 100.0,

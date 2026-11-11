@@ -80,6 +80,96 @@ function flowDivergence(box: RenkoBox): number {
   return Math.min(1, Math.abs(box.delta ?? 0) / vol);
 }
 
+export interface TimeBasedRegimePhase {
+  phase: string;
+  start: string;
+  end: string;
+  percentile: number;
+  flowDivergenceMin: number;
+  floorMultiple: number;
+  description: string;
+}
+
+export const REGIME_SCHEDULE: TimeBasedRegimePhase[] = [
+  {
+    phase: 'ABERTURA',
+    start: '09:00',
+    end: '10:30',
+    percentile: 0.70,
+    flowDivergenceMin: 0.15,
+    floorMultiple: 1.4,
+    description: 'Abertura: Alta liquidez e volatilidade direcional',
+  },
+  {
+    phase: 'MANHA_REGULAR',
+    start: '10:30',
+    end: '12:00',
+    percentile: 0.75,
+    flowDivergenceMin: 0.18,
+    floorMultiple: 1.5,
+    description: 'Manhã: À vista aberto, fluxo consistente',
+  },
+  {
+    phase: 'MEIO_DIA',
+    start: '12:00',
+    end: '14:00',
+    percentile: 0.80,
+    flowDivergenceMin: 0.25,
+    floorMultiple: 1.8,
+    description: 'Meio-dia: Faixa de consolidação, exigindo maior divergência de fluxo',
+  },
+  {
+    phase: 'TARDE_REGULAR',
+    start: '14:00',
+    end: '16:00',
+    percentile: 0.75,
+    flowDivergenceMin: 0.18,
+    floorMultiple: 1.5,
+    description: 'Tarde: Fluxo pleno com mercado internacional',
+  },
+  {
+    phase: 'FECHAMENTO',
+    start: '16:00',
+    end: '17:30',
+    percentile: 0.80,
+    flowDivergenceMin: 0.20,
+    floorMultiple: 1.6,
+    description: 'Fechamento: Desaceleração pré-leilão',
+  },
+];
+
+export function getTimeBasedFlowRegime(timestamp?: number): {
+  phase: string;
+  timeStr: string;
+  percentile: number;
+  flowDivergenceMin: number;
+  floorMultiple: number;
+  description: string;
+} {
+  const d = timestamp && timestamp > 0 ? new Date(timestamp) : new Date();
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  for (const item of REGIME_SCHEDULE) {
+    if (hm >= item.start && hm < item.end) {
+      return {
+        phase: item.phase,
+        timeStr: hm,
+        percentile: item.percentile,
+        flowDivergenceMin: item.flowDivergenceMin,
+        floorMultiple: item.floorMultiple,
+        description: item.description,
+      };
+    }
+  }
+  return {
+    phase: 'FORA_GRADE',
+    timeStr: hm,
+    percentile: 0.80,
+    flowDivergenceMin: 0.25,
+    floorMultiple: 1.8,
+    description: 'Fora do horário regular de negociação',
+  };
+}
+
 /**
  * Calcula o Score de Convicção Institucional de Fluxo (0 a 10 pontos)
  */
@@ -180,13 +270,16 @@ export function evaluateBoxConvergence(
 
   // Corte do momento: auto-calibrado (percentil da sessão + piso relativo à média do dia) ou limiar estático
   const adaptive = config.adaptiveThresholdEnabled === true && meter !== undefined;
-  // Percentil efetivo configurável (funil seletivo). Sem o campo, mantém o P60 histórico.
-  const SESSION_PERCENTILE = config.adaptiveThresholdPercentile ?? 0.6;
-  // Piso relativo (multiplicador da média do próprio dia, sem valor físico). Sem campo, 1,3×.
-  const FLOOR_MULTIPLE = config.adaptiveFloorMultiple ?? 1.3;
+  const timeRegimeOn = config.timeBasedRegimeEnabled !== false;
+  const timeRegime = getTimeBasedFlowRegime(box.timestamp);
+
+  const SESSION_PERCENTILE = timeRegimeOn ? timeRegime.percentile : (config.adaptiveThresholdPercentile ?? 0.7);
+  const FLOOR_MULTIPLE = timeRegimeOn ? timeRegime.floorMultiple : (config.adaptiveFloorMultiple ?? 1.6);
+  const effectiveDivMin = timeRegimeOn ? timeRegime.flowDivergenceMin : config.flowDivergenceMin;
+
   const limitBuy = adaptive ? meter!.getSelfCalibratedLimit('BUY', SESSION_PERCENTILE, FLOOR_MULTIPLE, config.minDeltaThreshold) : config.minDeltaThreshold;
   const limitSell = adaptive ? meter!.getSelfCalibratedLimit('SELL', SESSION_PERCENTILE, FLOOR_MULTIPLE, config.minDeltaThreshold) : config.minDeltaThreshold;
-  const factorLabel = adaptive ? ' | limiar = auto-calibrado do pregão' : '';
+  const factorLabel = adaptive ? ` | [Fita ${timeRegime.timeStr} · ${timeRegime.phase} · P${Math.round(SESSION_PERCENTILE * 100)}]` : '';
 
   // Filtros de regime: CONSOLIDAÇÃO (range curto) e EXAUSTÃO
   const consolidating =
@@ -202,12 +295,18 @@ export function evaluateBoxConvergence(
   if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
     // Corte opcional e escala-free (undefined = não aplica): só vale box com divergência de
     // fluxo acima do mínimo — volume empatado ou box fantasma de interpolação não sinaliza.
-    if (config.flowDivergenceMin !== undefined && flowDivergence(box) < config.flowDivergenceMin) {
+    if (effectiveDivMin !== undefined && flowDivergence(box) < effectiveDivMin) {
       return { isConvergence: false };
     }
-    // Exige delta institucional representativo (mínimo de 150 a 250 contratos no WIN)
-    const reqBuyDelta = adaptive ? limitBuy : Math.max(50, config.minDeltaThreshold ?? 150);
-    const reqSellDelta = adaptive ? limitSell : Math.max(50, config.minDeltaThreshold ?? 150);
+    // Filtro anti-estouro clímax no Mini-Índice B3 (evita compras no pico de barras anômalas isoladas)
+    if ((config.symbol || '').includes('WIN') && Math.abs(box.delta) > 4500) {
+      return { isConvergence: false, reason: 'Calado por clímax de estouro' };
+    }
+
+    // Exige delta institucional representativo (mínimo calibrado de 300 contratos no WIN)
+    const assetFloor = (config.symbol || '').includes('WIN') ? 300 : ((config.symbol || '').includes('WDO') ? 100 : 35);
+    const reqBuyDelta = adaptive ? Math.max(limitBuy, assetFloor) : Math.max(assetFloor, config.minDeltaThreshold ?? 300);
+    const reqSellDelta = adaptive ? Math.max(limitSell, assetFloor) : Math.max(assetFloor, config.minDeltaThreshold ?? 300);
 
     if (box.direction === 'UP') {
       // 1. Delta deve ser positivo e superior ao limiar institucional
@@ -233,7 +332,7 @@ export function evaluateBoxConvergence(
         signal: 'BUY',
         flowScore: totalScore,
         flowScoreBreakdown: breakdown,
-        reason: `Pirâmide Confluência Alta: Bloco Verde #${box.index} [Score ${totalScore}/10] (${gainUp}) | Δ: +${box.delta} (≥${reqBuyDelta})`,
+        reason: `Pirâmide Confluência Alta: Bloco Verde #${box.index} [Score ${totalScore}/10] (${gainUp}) | Δ: +${box.delta} (≥${reqBuyDelta})${factorLabel}`,
       };
     } else if (box.direction === 'DOWN') {
       // 1. Delta deve ser negativo e superior ao limiar institucional
@@ -259,7 +358,7 @@ export function evaluateBoxConvergence(
         signal: 'SELL',
         flowScore: totalScore,
         flowScoreBreakdown: breakdown,
-        reason: `Pirâmide Confluência Baixa: Bloco Vermelho #${box.index} [Score ${totalScore}/10] (${gainDown}) | Δ: ${box.delta} (≤-${reqSellDelta})`,
+        reason: `Pirâmide Confluência Baixa: Bloco Vermelho #${box.index} [Score ${totalScore}/10] (${gainDown}) | Δ: ${box.delta} (≤-${reqSellDelta})${factorLabel}`,
       };
     }
     return { isConvergence: false };

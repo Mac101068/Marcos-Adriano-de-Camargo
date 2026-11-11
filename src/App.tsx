@@ -29,6 +29,7 @@ import { migrateDeltaThresholdTo50 } from './utils/deltaThreshold50Migration';
 import { migrateAutoCalibratedFunnel } from './utils/autoCalibrationMigration';
 
 import { migrateFunnelSelA } from './utils/funnelSelAMigration';
+import { migrateAntiBurstCycle } from './utils/antiBurstMigration';
 
 import {
 
@@ -54,6 +55,9 @@ import {
   assetSymbols,
 
   chartSymbolFor,
+  isOrderForAsset,
+  isSymbolForAsset,
+  isPriceSaneForAsset,
 
   type AssetId,
 
@@ -497,6 +501,10 @@ export default function App() {
     // Depois das duas acima: esta reescreve só o `symbol`, e precisa ver o `assetId` já preenchido.
 
     chartContractRef.current = migrateChartVigenteContract();
+
+    // Migração anti-estouro/anti-ruído: restaura piso de 300 contratos no WIN, reativa filtros de
+    // consolidação e exaustão e purga ordens antigas com lucro espúrio > R$ 10.000 gravadas no cache.
+    migrateAntiBurstCycle();
 
     // Fase A (banco de dados único): garante que TODO config ativo tenha uma estratégia por trás,
 
@@ -1444,12 +1452,14 @@ export default function App() {
     list.map((o) => {
 
       if (o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT') return o;
+      if (!isOrderForAsset(o, asset)) return o;
 
       const isPending = o.status === 'PENDING_LIMIT';
 
       const activeCtros = o.remainingContracts || o.contracts;
 
-      const pts = isPending ? 0 : o.type === 'BUY' ? price - o.entryPrice : o.entryPrice - price;
+      const sanePrice = isPriceSaneForAsset(price, asset) && isPriceSaneForAsset(o.entryPrice, asset);
+      const pts = isPending || !sanePrice ? 0 : o.type === 'BUY' ? price - o.entryPrice : o.entryPrice - price;
 
       const fin = pointsToBRL(pts, activeCtros, asset) + (o.partialFinancial || 0);
 
@@ -1811,6 +1821,26 @@ export default function App() {
     }
   };
 
+  const handleResetRiskLock = (targetAssetId?: MultiRobotId) => {
+    const assetKey = targetAssetId || focusedRobotAsset || 'WIN';
+    const spec = MULTI_ROBOTS[assetKey];
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          action: 'RESET_RISK_LOCK',
+          symbol: spec?.symbol || chartSymbolFor(asset),
+        })
+      );
+      setLatestToast({
+        id: `reset-risk-${Date.now()}`,
+        type: 'INFO',
+        title: '🔓 TRAVA DE RISCO REARMADA',
+        description: `Limites diários de perda resetados para ${spec?.label || asset.name}. Robô liberado para novas operações.`,
+        timestamp: Date.now(),
+      });
+    }
+  };
+
 
 
   // Instâncias dos motores de cálculo
@@ -1888,6 +1918,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
   useEffect(() => {
     activeAssetIdRef.current = asset.id;
   }, [asset.id]);
+
+  const activeAssetRef = useRef<AssetSpec>(asset);
+  useEffect(() => {
+    activeAssetRef.current = asset;
+  }, [asset]);
+
+  const currentPriceRef = useRef<number>(currentPrice);
+  useEffect(() => {
+    currentPriceRef.current = currentPrice;
+  }, [currentPrice]);
 
   const simulatorRef = useRef<B3MarketSimulator>(new B3MarketSimulator(referencePrice(asset), asset));
 
@@ -1986,6 +2026,18 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Higienização de ordens ativas: garante que ordens de outros ativos NUNCA permaneçam em memória
+  useEffect(() => {
+    setOrders((currentOrders) => {
+      const saneOrders = currentOrders.filter((o) => isOrderForAsset(o, asset));
+      if (saneOrders.length !== currentOrders.length) {
+        OrderAuditService.saveIntradayOrders(saneOrders, asset.id);
+        return saneOrders;
+      }
+      return currentOrders;
+    });
+  }, [asset]);
 
   // Salva o histórico visível na sessão do navegador para nunca sumir em edições, HMR ou F5
   useEffect(() => {
@@ -2646,7 +2698,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 updatedPrev = updatedPrev.map((o) => {
 
-                  if ((o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType) {
+                  if ((o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType && isOrderForAsset(o, asset)) {
+                    if (!isPriceSaneForAsset(tick.price, asset) || !isPriceSaneForAsset(o.entryPrice, asset)) return o;
 
                     const pts = o.type === 'BUY' ? tick.price - o.entryPrice : o.entryPrice - tick.price;
 
@@ -3538,10 +3591,14 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
         let updated = prevOrders.map((ord) => {
+          const isManagedByMT5 = (Boolean(ord.ticket) || ord.isRealMT5) && mt5State.status === 'CONNECTED' && !isReplayMode;
 
           // SE FOR ORDEM LIMITADA PENDENTE DE PULLBACK
-
           if (ord.status === 'PENDING_LIMIT' && ord.limitPrice !== undefined) {
+            // Se gerenciada pelo MT5, a corretora/terminal é quem comanda execução e expiração real
+            if (isManagedByMT5) {
+              return ord;
+            }
 
             // TRAVA DE FIM DE PREGÃO (hora da estratégia): limitada que não virou posição é cancelada
 
@@ -3767,69 +3824,37 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-            // 0. TRAVA DE FIM DE PREGÃO (hora da estratégia): liquida a posição a mercado — nenhuma
-
-            // ordem do simulador atravessa o fechamento do WIN$N (17:45), senão fica pendurada para sempre
-
-            if (sessionLock) {
-
+            // 0. TRAVA DE FIM DE PREGÃO (apenas simulação local/replay; MT5 real é gerenciado pela ponte)
+            if (sessionLock && !isManagedByMT5) {
               changed = true;
-
               dayClosedCount += 1;
-
               const points = isBuy ? curPrice - ord.entryPrice : ord.entryPrice - curPrice;
-
               const activeCtros = ord.remainingContracts || ord.contracts;
-
               const fin = pointsToBRL(points, activeCtros, asset) + (ord.partialFinancial || 0);
 
-
-
               const lockEvt = OrderAuditService.createEvent(
-
                 'DAY_CLOSE_FORCED',
-
                 `Fechamento obrigatório do pregão (${points >= 0 ? '+' : ''}${points} pts)`,
-
                 `Trava das ${closeLockLabel}: posição ${ord.role === 'MAIN' ? 'principal (surfe)' : `pirâmide #${ord.pyramidLevel || 1}`} liquidada a mercado a ${curPrice} pts antes do encerramento do WIN$N. Resultado: R$ ${fin.toFixed(2)}.`,
-
                 curPrice,
-
                 activeCtros
-
               );
 
-
-
               return {
-
                 ...ord,
-
                 status: fin >= 0 ? ('CLOSED_PROFIT' as const) : ('CLOSED_LOSS' as const),
-
                 exitPrice: curPrice,
-
                 exitTimestamp: isReplayMode ? tick.timestamp : Date.now(),
-
                 exitTimeStr: isReplayMode ? (tick.timeStr || new Date(tick.timestamp).toTimeString().split(' ')[0]) : new Date().toTimeString().split(' ')[0],
-
                 exitReason: 'DAY_CLOSE' as const,
-
                 pointsResult: points,
-
                 financialResult: fin,
-
                 auditTrail: ord.auditTrail ? [...ord.auditTrail, lockEvt] : [lockEvt],
-
               };
-
             }
 
-
-
-            // 1. CHECAGEM DE REALIZAÇÃO PARCIAL
-
-            if (!isPyramidMode && config.enablePartialExit && !ord.partialExecuted && ord.contracts > 1) {
+            // 1. CHECAGEM DE REALIZAÇÃO PARCIAL (apenas simulação local/replay; no MT5 real a saída é executada via bridge/broker)
+            if (!isManagedByMT5 && !isPyramidMode && config.enablePartialExit && !ord.partialExecuted && ord.contracts > 1) {
 
               const reachedPartial = isBuy
 
@@ -4061,11 +4086,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-            // 3. CHECAGEM DE TAKE PROFIT (apenas se configurado > 0)
-            //    ZERO = SEM ALVO. Um alvo em 0 não pode disparar: com preço sempre maior que zero,
-            //    uma comparação solta fecharia a posição no primeiro tick. A guarda `> 0` é a regra.
-
-            const hitTP = ord.takeProfit > 0 && (isBuy ? curPrice >= ord.takeProfit : curPrice <= ord.takeProfit);
+            // 3. CHECAGEM DE TAKE PROFIT (apenas se configurado > 0 e NÃO for gerenciado pelo MT5 real)
+            //    Para posições do MT5, a liquidação no TP é feita pela corretora e sincronizada pelo MT5_EQUITY_UPDATE.
+            //    Liquidar localmente antes do broker causa conflito cíclico (abrir/fechar/abrir) e faz as ordens piscarem.
+            const hitTP = !isManagedByMT5 && ord.takeProfit > 0 && (isBuy ? curPrice >= ord.takeProfit : curPrice <= ord.takeProfit);
 
             if (hitTP) {
 
@@ -4181,9 +4205,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
 
 
-            // 4. CHECAGEM DE STOP LOSS (apenas se configurado > 0)
-
-            const hitSL = currentSL > 0 && (isBuy ? curPrice <= currentSL : curPrice >= currentSL);
+            // 4. CHECAGEM DE STOP LOSS (apenas se configurado > 0 e NÃO for gerenciado pelo MT5 real)
+            //    Para posições do MT5, a liquidação no SL é feita pela corretora e sincronizada pelo MT5_EQUITY_UPDATE.
+            const hitSL = !isManagedByMT5 && currentSL > 0 && (isBuy ? curPrice <= currentSL : curPrice >= currentSL);
 
             if (hitSL) {
 
@@ -4796,6 +4820,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             // Sincroniza posições reais do MetaTrader 5 diretamente na boleta e no gráfico
             if (Array.isArray(payload.data?.positions)) {
               setOrders((prev) => {
+                const curActiveAsset = activeAssetRef.current;
+                const curPrice = currentPriceRef.current;
                 const livePositions: Array<{
                   ticket: number;
                   symbol: string;
@@ -4803,6 +4829,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   volume: number;
                   priceOpen?: number;
                   price_open?: number;
+                  priceCurrent?: number;
+                  price_current?: number;
                   sl: number;
                   tp: number;
                   profit: number;
@@ -4810,37 +4838,47 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   magic?: number;
                   time?: number;
                 }> = payload.data.positions;
+                const dealsList: any[] = Array.isArray(payload.data?.deals) ? payload.data.deals : [];
 
-                const activeSym = chartSymbolFor(asset).toUpperCase().trim();
-                const relevantLive = livePositions.filter((p) => {
-                  const s = String(p.symbol || '').toUpperCase().trim();
-                  return s === activeSym || s.startsWith(asset.id);
-                });
-
+                const relevantLive = livePositions.filter((p) => isSymbolForAsset(p.symbol, curActiveAsset));
                 const liveTicketSet = new Set(relevantLive.map((p) => p.ticket));
 
                 // 1. Fecha ordens locais com ticket MT5 que não existem mais na lista de posições reais
                 let updated = prev.map((o) => {
+                  if (!isOrderForAsset(o, curActiveAsset)) return o;
                   if (o.status === 'OPEN' && o.ticket && !liveTicketSet.has(o.ticket)) {
-                    const isWin = (o.pointsResult ?? 0) >= 0;
+                    const exitDeal = dealsList.slice().reverse().find((d) => (d.order === o.ticket || d.ticket === o.ticket) && isSymbolForAsset(d.symbol, curActiveAsset));
+                    const safeEntry = isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice;
+                    const rawExit = exitDeal && Number(exitDeal.price) > 0 ? Number(exitDeal.price) : curPrice;
+                    const safeExit = isPriceSaneForAsset(rawExit, curActiveAsset) ? rawExit : safeEntry;
+                    const finRes = exitDeal ? Number(exitDeal.profit || 0) : (o.financialResult ?? 0);
+                    const ptsRes = isPriceSaneForAsset(safeExit, curActiveAsset) && isPriceSaneForAsset(safeEntry, curActiveAsset)
+                      ? (o.type === 'BUY' ? (safeExit - safeEntry) : (safeEntry - safeExit))
+                      : (o.pointsResult ?? 0);
+                    const isWin = finRes >= 0;
                     return {
                       ...o,
                       status: (isWin ? 'CLOSED_PROFIT' : 'CLOSED_LOSS') as TradeOrder['status'],
-                      exitPrice: currentPrice,
+                      exitPrice: safeExit,
                       exitTimestamp: Date.now(),
                       exitTimeStr: new Date().toLocaleTimeString(),
-                      exitReason: 'FLIP_REVERSAL' as const,
+                      exitReason: (isWin ? 'TAKE_PROFIT' : 'STOP_LOSS') as TradeOrder['exitReason'],
+                      pointsResult: Number.isFinite(ptsRes) ? ptsRes : 0,
+                      financialResult: Number.isFinite(finRes) ? finRes : 0,
                     };
                   }
-                  // Descarta ordens locais abertas sem ticket que já tenham mais de 6 segundos sem confirmação do MT5
-                  if (o.status === 'OPEN' && !o.ticket && (Date.now() - o.timestamp > 6000)) {
+                  // Descarta ordens locais abertas sem ticket apenas se foram disparadas para o MT5 (isRealMT5)
+                  // e passaram mais de 30 segundos sem confirmação do terminal (rejeitadas pela corretora).
+                  // Ordens puramente simuladas / paper jamais são descartadas aqui.
+                  if (o.isRealMT5 && o.status === 'OPEN' && !o.ticket && (Date.now() - o.timestamp > 30000)) {
+                    const safeExit = isPriceSaneForAsset(curPrice, curActiveAsset) ? curPrice : (isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice);
                     return {
                       ...o,
                       status: 'CLOSED_LOSS' as TradeOrder['status'],
-                      exitPrice: currentPrice,
+                      exitPrice: safeExit,
                       exitTimestamp: Date.now(),
                       exitTimeStr: new Date().toLocaleTimeString(),
-                      exitReason: 'FLIP_REVERSAL' as const,
+                      exitReason: 'STOP_LOSS' as const,
                     };
                   }
                   return o;
@@ -4856,24 +4894,29 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     existingIdx = updated.findIndex(
                       (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') &&
                              !o.ticket &&
-                             o.type === pos.type
+                             o.type === pos.type &&
+                             isOrderForAsset(o, curActiveAsset)
                     );
                   }
 
                   const openPrice = Number(pos.priceOpen ?? pos.price_open ?? 0);
+                  const posCurPrice = Number(pos.priceCurrent ?? pos.price_current ?? curPrice);
                   const posSl = Number(pos.sl ?? 0);
                   const posTp = Number(pos.tp ?? 0);
                   const posProfit = Number(pos.profit ?? 0);
                   const isBuy = pos.type === 'BUY';
-                  const pnlPts = openPrice > 0 ? (isBuy ? (currentPrice - openPrice) : (openPrice - currentPrice)) : 0;
+                  const saneOpen = isPriceSaneForAsset(openPrice, curActiveAsset) ? openPrice : (isPriceSaneForAsset(curPrice, curActiveAsset) ? curPrice : curActiveAsset.basePrice);
+                  const saneCur = isPriceSaneForAsset(posCurPrice, curActiveAsset) ? posCurPrice : saneOpen;
+                  const pnlPts = isBuy ? (saneCur - saneOpen) : (saneOpen - saneCur);
 
                   if (existingIdx >= 0) {
                     updated[existingIdx] = {
                       ...updated[existingIdx],
                       ticket: pos.ticket,
+                      symbol: pos.symbol || updated[existingIdx].symbol || chartSymbolFor(curActiveAsset),
                       source: 'MT5_LIVE',
                       isRealMT5: true,
-                      entryPrice: openPrice > 0 ? openPrice : updated[existingIdx].entryPrice,
+                      entryPrice: isPriceSaneForAsset(openPrice, curActiveAsset) ? openPrice : updated[existingIdx].entryPrice,
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
                       status: 'OPEN',
@@ -4886,11 +4929,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     const newOrd: TradeOrder = {
                       id: `mt5-${pos.ticket}`,
                       ticket: pos.ticket,
+                      symbol: pos.symbol || chartSymbolFor(curActiveAsset),
                       timestamp: pos.time ? pos.time * 1000 : Date.now(),
                       timeStr: new Date(pos.time ? pos.time * 1000 : Date.now()).toLocaleTimeString(),
                       type: pos.type,
                       role: String(pos.comment || '').toLowerCase().includes('pyr') ? 'PYRAMID' : 'MAIN',
-                      entryPrice: openPrice > 0 ? openPrice : currentPrice,
+                      entryPrice: saneOpen,
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
                       status: 'OPEN',
@@ -5386,6 +5430,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               positions: payload.data.positions ?? prev.positions,
 
+              pendingOrders: payload.data?.pendingOrders ?? prev.pendingOrders,
+
+              varalConfig: payload.data?.varalConfig ?? prev.varalConfig,
+
               dayStats: payload.data?.dayStats ?? prev.dayStats,
 
               dayStatsBySymbol: payload.data?.dayStatsBySymbol ?? (prev as any).dayStatsBySymbol,
@@ -5408,6 +5456,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
             // Sincroniza posições vivas a cada pulso de equity broadcast (atualiza boleta e caixas)
             if (Array.isArray(payload.data?.positions)) {
               setOrders((prev) => {
+                const curActiveAsset = activeAssetRef.current;
+                const curPrice = currentPriceRef.current;
                 const livePositions: Array<{
                   ticket: number;
                   symbol: string;
@@ -5415,6 +5465,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   volume: number;
                   priceOpen?: number;
                   price_open?: number;
+                  priceCurrent?: number;
+                  price_current?: number;
                   sl: number;
                   tp: number;
                   profit: number;
@@ -5422,25 +5474,46 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   magic?: number;
                   time?: number;
                 }> = payload.data.positions;
+                const dealsList: any[] = Array.isArray(payload.data?.deals) ? payload.data.deals : [];
 
-                const activeSym = chartSymbolFor(asset).toUpperCase().trim();
-                const relevantLive = livePositions.filter((p) => {
-                  const s = String(p.symbol || '').toUpperCase().trim();
-                  return s === activeSym || s.startsWith(asset.id);
-                });
-
+                const relevantLive = livePositions.filter((p) => isSymbolForAsset(p.symbol, curActiveAsset));
                 const liveTicketSet = new Set(relevantLive.map((p) => p.ticket));
 
                 let updated = prev.map((o) => {
+                  if (!isOrderForAsset(o, curActiveAsset)) return o;
                   if (o.status === 'OPEN' && o.ticket && !liveTicketSet.has(o.ticket)) {
-                    const isWin = (o.pointsResult ?? 0) >= 0;
+                    const exitDeal = dealsList.slice().reverse().find((d) => (d.order === o.ticket || d.ticket === o.ticket) && isSymbolForAsset(d.symbol, curActiveAsset));
+                    const safeEntry = isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice;
+                    const rawExit = exitDeal && Number(exitDeal.price) > 0 ? Number(exitDeal.price) : curPrice;
+                    const safeExit = isPriceSaneForAsset(rawExit, curActiveAsset) ? rawExit : safeEntry;
+                    const finRes = exitDeal ? Number(exitDeal.profit || 0) : (o.financialResult ?? 0);
+                    const ptsRes = isPriceSaneForAsset(safeExit, curActiveAsset) && isPriceSaneForAsset(safeEntry, curActiveAsset)
+                      ? (o.type === 'BUY' ? (safeExit - safeEntry) : (safeEntry - safeExit))
+                      : (o.pointsResult ?? 0);
+                    const isWin = finRes >= 0;
                     return {
                       ...o,
                       status: (isWin ? 'CLOSED_PROFIT' : 'CLOSED_LOSS') as TradeOrder['status'],
-                      exitPrice: currentPrice,
+                      exitPrice: safeExit,
                       exitTimestamp: Date.now(),
                       exitTimeStr: new Date().toLocaleTimeString(),
-                      exitReason: 'FLIP_REVERSAL' as const,
+                      exitReason: (isWin ? 'TAKE_PROFIT' : 'STOP_LOSS') as TradeOrder['exitReason'],
+                      pointsResult: Number.isFinite(ptsRes) ? ptsRes : 0,
+                      financialResult: Number.isFinite(finRes) ? finRes : 0,
+                    };
+                  }
+                  // Descarta ordens locais abertas sem ticket apenas se foram disparadas para o MT5 (isRealMT5)
+                  // e passaram mais de 30 segundos sem confirmação do terminal (rejeitadas pela corretora).
+                  // Ordens puramente simuladas / paper jamais são descartadas aqui.
+                  if (o.isRealMT5 && o.status === 'OPEN' && !o.ticket && (Date.now() - o.timestamp > 30000)) {
+                    const safeExit = isPriceSaneForAsset(curPrice, curActiveAsset) ? curPrice : (isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice);
+                    return {
+                      ...o,
+                      status: 'CLOSED_LOSS' as TradeOrder['status'],
+                      exitPrice: safeExit,
+                      exitTimestamp: Date.now(),
+                      exitTimeStr: new Date().toLocaleTimeString(),
+                      exitReason: 'STOP_LOSS' as const,
                     };
                   }
                   return o;
@@ -5452,24 +5525,29 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     existingIdx = updated.findIndex(
                       (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') &&
                              !o.ticket &&
-                             o.type === pos.type
+                             o.type === pos.type &&
+                             isOrderForAsset(o, curActiveAsset)
                     );
                   }
 
                   const openPrice = Number(pos.priceOpen ?? pos.price_open ?? 0);
+                  const posCurPrice = Number(pos.priceCurrent ?? pos.price_current ?? curPrice);
                   const posSl = Number(pos.sl ?? 0);
                   const posTp = Number(pos.tp ?? 0);
                   const posProfit = Number(pos.profit ?? 0);
                   const isBuy = pos.type === 'BUY';
-                  const pnlPts = openPrice > 0 ? (isBuy ? (currentPrice - openPrice) : (openPrice - currentPrice)) : 0;
+                  const saneOpen = isPriceSaneForAsset(openPrice, curActiveAsset) ? openPrice : (isPriceSaneForAsset(curPrice, curActiveAsset) ? curPrice : curActiveAsset.basePrice);
+                  const saneCur = isPriceSaneForAsset(posCurPrice, curActiveAsset) ? posCurPrice : saneOpen;
+                  const pnlPts = isBuy ? (saneCur - saneOpen) : (saneOpen - saneCur);
 
                   if (existingIdx >= 0) {
                     updated[existingIdx] = {
                       ...updated[existingIdx],
                       ticket: pos.ticket,
+                      symbol: pos.symbol || updated[existingIdx].symbol || chartSymbolFor(curActiveAsset),
                       source: 'MT5_LIVE',
                       isRealMT5: true,
-                      entryPrice: openPrice > 0 ? openPrice : updated[existingIdx].entryPrice,
+                      entryPrice: isPriceSaneForAsset(openPrice, curActiveAsset) ? openPrice : updated[existingIdx].entryPrice,
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
                       status: 'OPEN',
@@ -5482,11 +5560,12 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                     const newOrd: TradeOrder = {
                       id: `mt5-${pos.ticket}`,
                       ticket: pos.ticket,
+                      symbol: pos.symbol || chartSymbolFor(curActiveAsset),
                       timestamp: pos.time ? pos.time * 1000 : Date.now(),
                       timeStr: new Date(pos.time ? pos.time * 1000 : Date.now()).toLocaleTimeString(),
                       type: pos.type,
                       role: String(pos.comment || '').toLowerCase().includes('pyr') ? 'PYRAMID' : 'MAIN',
-                      entryPrice: openPrice > 0 ? openPrice : currentPrice,
+                      entryPrice: saneOpen,
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
                       status: 'OPEN',
@@ -5556,6 +5635,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               });
 
             }
+
+          } else if (payload.type === 'RISK_LOCK_RESET_OK') {
+
+            setLatestToast({
+              id: `risk-reset-ack-${Date.now()}`,
+              type: 'INFO',
+              title: '✅ EA DESBLOQUEADO (TRAVA RESETADA)',
+              description: 'A ponte MT5 confirmou a liberação dos limites de perda. Novos sinais voltam a ser operados.',
+              timestamp: Date.now(),
+            });
 
           } else if (payload.type === 'ORDER_RESULT') {
 
@@ -6348,10 +6437,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         if (o.status !== 'OPEN') return o;
 
         if (side && o.type !== side) return o;
+        if (!isOrderForAsset(o, asset)) return o;
 
         const activeCtros = o.remainingContracts || o.contracts;
-
-        const pts = o.type === 'BUY' ? currentPrice - o.entryPrice : o.entryPrice - currentPrice;
+        const safePrice = isPriceSaneForAsset(currentPrice, asset) ? currentPrice : (isPriceSaneForAsset(o.entryPrice, asset) ? o.entryPrice : asset.basePrice);
+        const pts = isPriceSaneForAsset(o.entryPrice, asset) ? (o.type === 'BUY' ? safePrice - o.entryPrice : o.entryPrice - safePrice) : 0;
 
         const fin = pointsToBRL(pts, activeCtros, asset) + (o.partialFinancial || 0);
 
@@ -7507,8 +7597,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         const finalPrice = lastTick ? lastTick.price : currentPrice;
         setOrders((prev) =>
           prev.map((o) => {
-            if (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') {
-              const pts = o.type === 'BUY' ? finalPrice - o.entryPrice : o.entryPrice - finalPrice;
+            if ((o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && isOrderForAsset(o, asset)) {
+              const safeFinal = isPriceSaneForAsset(finalPrice, asset) ? finalPrice : (isPriceSaneForAsset(o.entryPrice, asset) ? o.entryPrice : asset.basePrice);
+              const pts = isPriceSaneForAsset(o.entryPrice, asset) ? (o.type === 'BUY' ? safeFinal - o.entryPrice : o.entryPrice - safeFinal) : 0;
               const rc = o.remainingContracts ?? o.contracts ?? 1;
               const fin = pointsToBRL(pts, rc, asset) + (o.partialFinancial || 0);
               const closeEvt = OrderAuditService.createEvent(
@@ -8493,11 +8584,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
   const stats: TerminalStats = React.useMemo(() => {
 
-    const isReplayOrPaperStats = isReplaying || isSimulating || orders.some((o) => !o.isRealMT5);
+    const isReplayOrPaperStats = isReplaying || isSimulating || orders.some((o) => !o.isRealMT5 && isOrderForAsset(o, asset));
 
     const closed = orders.filter(
 
-      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (isReplayOrPaperStats || (o.exitTimestamp ?? 0) >= sessionStartRef.current)
+      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && isOrderForAsset(o, asset) && (isReplayOrPaperStats || (o.exitTimestamp ?? 0) >= sessionStartRef.current)
 
     );
 
@@ -8562,8 +8653,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     const canHaveLivePositions = mt5State.status === 'CONNECTED' || isReplaying || isSimulating;
 
     const sideBook = (type: 'BUY' | 'SELL'): HedgeSideBook => {
-      const filled = canHaveLivePositions ? orders.filter((o) => o.status === 'OPEN' && o.type === type) : [];
-      const pending = canHaveLivePositions ? orders.filter((o) => o.status === 'PENDING_LIMIT' && o.type === type).length : 0;
+      const filled = canHaveLivePositions ? orders.filter((o) => o.status === 'OPEN' && o.type === type && isOrderForAsset(o, asset)) : [];
+      const pending = canHaveLivePositions ? orders.filter((o) => o.status === 'PENDING_LIMIT' && o.type === type && isOrderForAsset(o, asset)).length : 0;
       let ctros = 0;
       let avgNum = 0;
       let livePts = 0;
@@ -8572,8 +8663,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       filled.forEach((o) => {
         const rc = o.remainingContracts ?? o.contracts ?? 1;
-        const safeEntry = Number(o.entryPrice) > 0 ? Number(o.entryPrice) : (currentPrice > 0 ? currentPrice : asset.basePrice);
-        const safeCurPrice = currentPrice > 0 ? currentPrice : safeEntry;
+        const safeEntry = isPriceSaneForAsset(o.entryPrice, asset) ? Number(o.entryPrice) : (isPriceSaneForAsset(currentPrice, asset) ? currentPrice : asset.basePrice);
+        const safeCurPrice = isPriceSaneForAsset(currentPrice, asset) ? currentPrice : safeEntry;
         ctros += rc;
         avgNum += safeEntry * rc;
         const pts = type === 'BUY' ? safeCurPrice - safeEntry : safeEntry - safeCurPrice;
@@ -8599,10 +8690,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // Ordens fechadas da sessão: DEVEM PERMANECER VISÍVEIS após o encerramento do replay
     // (para permitir a análise e auditoria na boleta), sendo zeradas apenas ao iniciar
     // um novo replay ou com o retorno do mercado real (MT5 conectado).
-    const isReplayOrPaper = isReplaying || isSimulating || orders.some((o) => !o.isRealMT5);
+    const isReplayOrPaper = isReplaying || isSimulating || orders.some((o) => !o.isRealMT5 && isOrderForAsset(o, asset));
 
     const closed = orders.filter(
-      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (isReplayOrPaper || (o.exitTimestamp ?? 0) >= sessionStartRef.current)
+      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && isOrderForAsset(o, asset) && (isReplayOrPaper || (o.exitTimestamp ?? 0) >= sessionStartRef.current)
     );
 
     const localRealizedProfit = closed.reduce((a, o) => a + Math.max(0, o.financialResult || 0), 0);
@@ -8610,7 +8701,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     const buy = sideBook('BUY');
     const sell = sideBook('SELL');
 
-    const traded = orders.filter((o) => o.status !== 'PENDING_LIMIT' && (isReplayOrPaper || o.timestamp >= sessionStartRef.current));
+    const traded = orders.filter((o) => o.status !== 'PENDING_LIMIT' && isOrderForAsset(o, asset) && (isReplayOrPaper || o.timestamp >= sessionStartRef.current));
 
     const localBuyContractsToday = traded.filter((o) => o.type === 'BUY').reduce((a, o) => a + (o.contracts || 1), 0);
     const localSellContractsToday = traded.filter((o) => o.type === 'SELL').reduce((a, o) => a + (o.contracts || 1), 0);
@@ -8618,12 +8709,24 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     // Quando conectado ao MetaTrader 5 SEM estar em replay:
     // os contratos e o resultado são buscados do MT5. Se houver estatísticas por ativo, usamos do ativo corrente.
     // Se a tela contém ordens de uma sessão de replay/estudo, preserva os números locais até nova limpeza ou início real.
-    const hasReplayOrders = orders.length > 0 && orders.some((o) => !o.isRealMT5);
+    const hasReplayOrders = (isReplaying || isSimulating) && orders.length > 0 && orders.some((o) => !o.isRealMT5 && isOrderForAsset(o, asset));
     const isRealMT5 = mt5State.status === 'CONNECTED' && !isReplaying && !isSimulating && !hasReplayOrders;
     const statsBySym = (mt5State as any).dayStatsBySymbol;
-    const assetPrefix = (asset.id || 'WIN').substring(0, 3).toUpperCase();
-    const symStats = statsBySym ? (statsBySym[assetPrefix] || statsBySym[asset.id] || statsBySym[asset.primarySymbol]) : undefined;
-    const mt5Stats = isRealMT5 ? (symStats || mt5State.dayStats) : undefined;
+    const isBitAsset = asset.id.includes('BTC') || asset.id.includes('BIT') || asset.prefixes.includes('BIT');
+    const assetPrefix = isBitAsset ? 'BIT' : (asset.id || 'WIN').substring(0, 3).toUpperCase();
+    const symStats = statsBySym
+      ? (statsBySym[assetPrefix] || (isBitAsset ? (statsBySym['BIT'] || statsBySym['BTCBR'] || statsBySym['BTC']) : undefined) || statsBySym[asset.id] || statsBySym[asset.primarySymbol])
+      : undefined;
+    const fallbackAssetStats = {
+      buyContractsToday: 0,
+      sellContractsToday: 0,
+      totalContractsToday: 0,
+      realizedProfit: 0,
+      realizedLoss: 0,
+      netRealized: 0,
+      dealsCount: 0,
+    };
+    const mt5Stats = isRealMT5 ? (symStats || fallbackAssetStats) : undefined;
 
     const buyContractsToday = mt5Stats ? mt5Stats.buyContractsToday : localBuyContractsToday;
     const sellContractsToday = mt5Stats ? mt5Stats.sellContractsToday : localSellContractsToday;
@@ -8699,6 +8802,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     const seenTickets = new Set<number>();
     const list = orders.filter((o) => {
       if (o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT') return false;
+      if (!isOrderForAsset(o, asset)) return false;
       if (o.ticket) {
         if (seenTickets.has(o.ticket)) return false;
         seenTickets.add(o.ticket);
@@ -8710,7 +8814,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       if (a.ticket && b.ticket) return a.ticket - b.ticket;
       return a.timestamp - b.timestamp;
     });
-  }, [orders, mt5State.status, isReplaying, isSimulating]);
+  }, [orders, asset, mt5State.status, isReplaying, isSimulating]);
 
 
 
@@ -9793,6 +9897,8 @@ ${
                   onManualMultiRobotOrder={handleManualMultiRobotOrder}
 
                   onCloseMultiRobotPosition={handleCloseMultiRobotPosition}
+
+                  onResetRiskLock={handleResetRiskLock}
 
                   focusedRobotAsset={focusedRobotAsset}
 

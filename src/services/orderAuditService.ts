@@ -1,5 +1,5 @@
 import { TradeOrder, OrderAuditEvent, IntradayAuditSummary } from '../types/trading';
-import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, isStaleOrderPrice, type AssetId } from '../assets/assetRegistry';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, isStaleOrderPrice, isOrderForAsset, type AssetId } from '../assets/assetRegistry';
 
 /**
  * Prefixo-base do livro de auditoria. Desde a Fase 2 cada ativo tem o SEU livro
@@ -45,7 +45,9 @@ export class OrderAuditService {
    */
   static saveIntradayOrders(orders: TradeOrder[], assetId: AssetId = DEFAULT_ASSET_ID): void {
     try {
-      localStorage.setItem(auditKeyForAsset(assetId), JSON.stringify(orders));
+      const spec = ASSETS[assetId];
+      const safeOrders = spec ? orders.filter((o) => isOrderForAsset(o, spec)) : orders;
+      localStorage.setItem(auditKeyForAsset(assetId), JSON.stringify(safeOrders));
     } catch {
       // Ignora erro de quota em navegadores restritos
     }
@@ -64,16 +66,16 @@ export class OrderAuditService {
       if (raw) {
         const parsed = JSON.parse(raw) as TradeOrder[];
         if (Array.isArray(parsed)) {
-          // Purga ordens mock hardcoded antigas de demonstração
+          // Purga ordens mock hardcoded antigas de demonstração e ordens de OUTROS ativos
           const clean = parsed.filter((o) => {
             const id = o.id || '';
-            return (
-              !id.startsWith('ord-mother-') &&
-              !id.startsWith('ord-pyramid-') &&
-              !id.startsWith('ord-pyr-') &&
-              !id.startsWith('init-ord-') &&
-              !id.startsWith('demo-')
-            );
+            const isMock =
+              id.startsWith('ord-mother-') ||
+              id.startsWith('ord-pyramid-') ||
+              id.startsWith('ord-pyr-') ||
+              id.startsWith('init-ord-') ||
+              id.startsWith('demo-');
+            return !isMock && isOrderForAsset(o, asset);
           });
           // Sanitiza ordens abertas longe demais do preço de referência do ativo
           const sanitized = clean.map((o) => {

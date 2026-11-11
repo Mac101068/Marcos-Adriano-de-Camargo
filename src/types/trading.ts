@@ -115,6 +115,7 @@ export interface OrderAuditEvent {
 export interface TradeOrder {
   id: string;
   ticket?: number;
+  symbol?: string;
   timestamp: number;
   timeStr: string;
   fillTimestamp?: number;

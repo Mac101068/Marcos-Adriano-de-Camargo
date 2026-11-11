@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { AutomationConfig } from '../types/trading';
 import type { FunnelMetricsSnapshot, SideFunnelMetric } from '../utils/funnelMetrics';
+import { getTimeBasedFlowRegime } from '../utils/convergenceEvaluator';
 
 /**
  * FAIXA DO FUNIL — o limiar CALCULADO do pregão, exposto PARA AJUSTAR.
@@ -114,6 +115,18 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
         >
           {auto ? 'AUTO-CALIBRADO' : 'FIXO'}
         </span>
+
+        {auto && (() => {
+          const tReg = getTimeBasedFlowRegime();
+          return (
+            <span
+              className={`${chip} shrink-0 bg-amber-500/15 border-amber-500/30 text-amber-300 font-mono`}
+              title={`Fase Ativa por Horário da Fita: ${tReg.description}`}
+            >
+              ⏱️ {tReg.phase} (P{Math.round(tReg.percentile * 100)} · Div ≥{Math.round(tReg.flowDivergenceMin * 100)}%)
+            </span>
+          );
+        })()}
 
         <span className="shrink-0 text-zinc-500">{isPyramid ? 'Pirâmide' : 'Reteste'}</span>
 

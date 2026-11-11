@@ -131,7 +131,7 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       partialPoints: 50,
       breakevenOffsetPoints: 5,
       trailingDistancePoints: 50,
-      minDeltaThreshold: 50,
+      minDeltaThreshold: 300,
       contracts: 1,
       rangePoints: 100,
       stepperStep: 5,
@@ -186,7 +186,7 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
     watermarkCaption: 'Bitcoin Futuro · B3',
     // Prefixos ordenados por especificidade (maiores primeiro)
     prefixes: ['BTCBR', 'BITX', 'WBRA', 'BTC', 'BIT'],
-    pointValue: 0.1,
+    pointValue: 0.01, // 1 tick de 20 pts = R$ 0,20 -> 1 pt = R$ 0,01
     tickSize: 20,
     decimals: 0,
     basePrice: 440000,
@@ -214,7 +214,7 @@ export const ASSETS: Record<AssetId, AssetSpec> = {
       maxTP: 10000,
     },
     status: 'ativo',
-    contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts',
+    contractNote: 'Futuro de Bitcoin B3 (BITX26 / BIT$) · Variação mínima de 20 pts (R$ 0,20 por tick = R$ 0,01 por ponto)',
   },
 };
 
@@ -477,4 +477,69 @@ export function sessionClock(asset: AssetSpec): {
   const [openHour, openMinute] = parse(asset.session.open, [8, 55]);
   const [closeHour, closeMinute] = parse(asset.session.close, [17, 45]);
   return { openHour, openMinute, closeHour, closeMinute };
+}
+
+/** Verifica se um símbolo textual pertence a este ativo (ex: WINZ26 -> WIN) */
+export function isSymbolForAsset(sym?: string | null, asset?: AssetSpec | null): boolean {
+  if (!asset || !sym) return false;
+  const s = String(sym).toUpperCase().trim();
+  const activeSym = chartSymbolFor(asset).toUpperCase().trim();
+  return s === activeSym || asset.prefixes.some((p) => s.startsWith(p.toUpperCase()));
+}
+
+/**
+ * Verifica se um preço é matematicamente são e plausível para determinado ativo.
+ * Rejeita contaminações grosseiras (ex: preço de dólar 5.500 no índice ou 170.000 no dólar).
+ */
+export function isPriceSaneForAsset(price?: number | null, asset?: AssetSpec | null): boolean {
+  if (!asset || price == null || !Number.isFinite(price) || price <= 0) return false;
+  if (asset.id === 'WIN') return price >= 50000 && price <= 300000;
+  if (asset.id === 'WDO') return price >= 1000 && price <= 20000;
+  if (asset.id === 'BTCBR' || asset.id === 'BIT') return price >= 50000 && price <= 3000000;
+  const diffPct = Math.abs(price - asset.basePrice) / asset.basePrice;
+  return diffPct < 0.45;
+}
+
+/**
+ * Validação rigorosa e soberana se uma ordem pertence a um determinado ativo.
+ * Impede 100% contaminação cruzada de ordens (ex: WDO no WIN ou WIN no BIT).
+ */
+export function isOrderForAsset(
+  order: { entryPrice?: number; symbol?: string; magicNumber?: number } | null | undefined,
+  asset: AssetSpec
+): boolean {
+  if (!order || !asset) return false;
+  const p = Number(order.entryPrice);
+
+  // 1. Sanidade Estrita por Faixa de Preço (Bloqueio Físico Inviolável)
+  // WIN opera entre 50.000 e 300.000 pts (normalmente ~174.000)
+  // WDO opera entre 1.000 e 20.000 pts (normalmente ~5.500)
+  // BIT opera acima de 100.000 pts (normalmente ~412.000)
+  if (Number.isFinite(p) && p > 0) {
+    if (!isPriceSaneForAsset(p, asset)) return false;
+  }
+
+  // 2. Símbolo explícito
+  if (order.symbol) {
+    return isSymbolForAsset(order.symbol, asset);
+  }
+
+  // 3. Magic Number
+  if (order.magicNumber) {
+    if (asset.id === 'WIN' && (order.magicNumber === 150101 || order.magicNumber === 150102)) return true;
+    if (asset.id === 'WDO' && (order.magicNumber === 150201 || order.magicNumber === 150202)) return true;
+    if ((asset.id === 'BTCBR' || asset.id === 'BIT') && (order.magicNumber === 150301 || order.magicNumber === 150302)) return true;
+    if (order.magicNumber === 102030) {
+      if (asset.id === 'WIN') return p >= 50000;
+      if (asset.id === 'WDO') return p > 0 && p < 20000;
+      return false;
+    }
+  }
+
+  // 4. Sem símbolo e sem magic: só aceita se o preço for estritamente são para este ativo
+  if (Number.isFinite(p) && p > 0) {
+    return isPriceSaneForAsset(p, asset);
+  }
+
+  return false;
 }

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { TradeOrder, OrderAuditEvent } from '../types/trading';
-import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, pointsToBRL } from '../assets/assetRegistry';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, pointsToBRL, isPriceSaneForAsset } from '../assets/assetRegistry';
 import { OrderAuditService } from '../services/orderAuditService';
 import {
   ShieldCheck,
@@ -393,8 +393,16 @@ export const IntradayOrderAudit: React.FC<IntradayOrderAuditProps> = ({
                   let pts = order.pointsResult;
                   let fin = order.financialResult;
                   if (isOpen) {
-                    pts = order.type === 'BUY' ? currentPrice - order.entryPrice : order.entryPrice - currentPrice;
-                    fin = pointsToBRL(pts, order.remainingContracts || order.contracts, asset) + (order.partialFinancial || 0);
+                    const isSane = isPriceSaneForAsset(currentPrice, asset) && isPriceSaneForAsset(order.entryPrice, asset);
+                    if (isSane) {
+                      pts = order.type === 'BUY' ? currentPrice - order.entryPrice : order.entryPrice - currentPrice;
+                      fin = order.isRealMT5 && Number.isFinite(order.financialResult)
+                        ? (order.financialResult || 0)
+                        : pointsToBRL(pts, order.remainingContracts || order.contracts, asset) + (order.partialFinancial || 0);
+                    } else {
+                      pts = order.pointsResult || 0;
+                      fin = order.financialResult || 0;
+                    }
                   }
 
                   const isWin = (pts || 0) > 0;

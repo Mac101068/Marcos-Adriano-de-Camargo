@@ -17,6 +17,7 @@ interface MultiAssetRobotsPanelProps {
   onExecuteSignal: (assetId: MultiRobotId, signal: 'BUY' | 'SELL') => void;
   onManualOrder: (assetId: MultiRobotId, type: 'BUY' | 'SELL') => void;
   onClosePosition: (assetId: MultiRobotId) => void;
+  onResetRiskLock?: (assetId: MultiRobotId) => void;
 }
 
 const fmtBRL = (v: number) =>
@@ -36,9 +37,17 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
   onExecuteSignal,
   onManualOrder,
   onClosePosition,
+  onResetRiskLock,
 }) => {
   const [selectedAsset, setSelectedAsset] = useState<MultiRobotId>(initialAssetId);
-  const [activeStrategyTab, setActiveStrategyTab] = useState<'MASTER' | 'VARAL'>('MASTER');
+  const [activeStrategyTabByAsset, setActiveStrategyTabByAsset] = useState<Record<MultiRobotId, 'MASTER' | 'VARAL'>>({
+    WIN: 'MASTER',
+    WDO: 'MASTER',
+    BIT: 'MASTER',
+  });
+  const activeStrategyTab = activeStrategyTabByAsset[selectedAsset] || 'MASTER';
+  const setActiveStrategyTab = (tab: 'MASTER' | 'VARAL') =>
+    setActiveStrategyTabByAsset((prev) => ({ ...prev, [selectedAsset]: tab }));
 
   React.useEffect(() => {
     if (initialAssetId) {
@@ -97,29 +106,43 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
           const tabNet = tabStat ? tabStat.netRealized : 0;
           const tabDayPnl = tabNet + tabProfit;
           const hasActivity = (tabStat && tabStat.totalContractsToday > 0) || tabPos.length > 0;
+          const isVaralActive = !!tabVaral.enabled;
 
           return (
             <button
               key={id}
               onClick={() => setSelectedAsset(id)}
-              className={`flex-1 py-1.5 px-2 text-center font-bold text-[10px] transition-all cursor-pointer border-b-2 flex items-center justify-center gap-1.5 ${
+              className={`flex-1 py-1.5 px-2 text-center font-bold text-[10px] transition-all cursor-pointer border-b-2 flex flex-col items-center justify-center gap-0.5 ${
                 isSelected
                   ? 'border-emerald-500 bg-slate-900 text-white'
                   : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/40'
               }`}
             >
-              <span>{id}</span>
-              <span className="text-[9px] text-slate-500 font-mono">({tabSpec.scaleLabel})</span>
-              {hasActivity && (
+              <div className="flex items-center gap-1.5">
+                <span>{id}</span>
+                <span className="text-[9px] text-slate-500 font-mono">({tabSpec.scaleLabel})</span>
                 <span
-                  className={`text-[8.5px] font-mono px-1 rounded ${
-                    tabDayPnl >= 0 ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    isVaralActive ? 'bg-purple-400 ring-2 ring-purple-500/40 animate-pulse' : 'bg-slate-700'
                   }`}
-                >
-                  {tabDayPnl >= 0 ? '+' : ''}
-                  {tabDayPnl.toFixed(0)}
+                  title={isVaralActive ? `Robô 2 (Varal ${id}): ATIVO` : `Robô 2 (Varal ${id}): PAUSADO`}
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                {hasActivity && (
+                  <span
+                    className={`text-[8.5px] font-mono px-1 rounded ${
+                      tabDayPnl >= 0 ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'
+                    }`}
+                  >
+                    {tabDayPnl >= 0 ? '+' : ''}
+                    {tabDayPnl.toFixed(0)}
+                  </span>
+                )}
+                <span className={`text-[8px] font-mono font-semibold ${isVaralActive ? 'text-purple-300' : 'text-slate-600'}`}>
+                  V:{isVaralActive ? 'ON' : 'OFF'}
                 </span>
-              )}
+              </div>
             </button>
           );
         })}
@@ -140,17 +163,21 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
         </button>
         <button
           onClick={() => setActiveStrategyTab('VARAL')}
-          className={`flex-1 py-1 px-1.5 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer ${
+          className={`flex-1 py-1 px-1.5 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
             activeStrategyTab === 'VARAL'
               ? 'bg-purple-600/90 text-white shadow-sm'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
           }`}
         >
           <Layers className="w-3 h-3 text-purple-300" />
-          <span>Estratégia 2: Varal MT5</span>
-          {currentVaral.enabled && (
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" />
-          )}
+          <span>Estratégia 2: Varal ({selectedAsset})</span>
+          <span className={`px-1 py-0.2 rounded text-[8px] font-mono font-bold ${
+            currentVaral.enabled
+              ? 'bg-emerald-950 text-emerald-400 border border-emerald-700/60'
+              : 'bg-slate-950 text-slate-500 border border-slate-800'
+          }`}>
+            {currentVaral.enabled ? 'ATIVO' : 'PAUSADO'}
+          </span>
         </button>
       </div>
 
@@ -371,6 +398,18 @@ export const MultiAssetRobotsPanel: React.FC<MultiAssetRobotsPanelProps> = ({
                   Vender {selectedAsset}
                 </button>
               </div>
+
+              {/* Botão de Rearmar Trava de Perda MT5 */}
+              {onResetRiskLock && (
+                <button
+                  onClick={() => onResetRiskLock(selectedAsset)}
+                  className="w-full mt-1.5 py-1 rounded bg-amber-950/60 hover:bg-amber-900/80 border border-amber-700/60 text-amber-300 font-bold text-[9.5px] transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                  title="Rearma o robô caso o Stop Loss Diário tenha bloqueado novas entradas"
+                >
+                  <RefreshCw className="w-3 h-3 text-amber-400" />
+                  <span>🔓 Desbloquear / Rearmar Trava de Perda MT5</span>
+                </button>
+              )}
             </div>
           </>
         )}

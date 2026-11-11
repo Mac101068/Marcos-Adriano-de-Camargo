@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { TradeOrder, TerminalStats } from '../types/trading';
-import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, pointsToBRL } from '../assets/assetRegistry';
+import { ASSETS, AssetSpec, DEFAULT_ASSET_ID, pointsToBRL, isPriceSaneForAsset, isOrderForAsset } from '../assets/assetRegistry';
 import {
   CheckCircle2,
   TrendingUp,
@@ -48,7 +48,7 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
   const equityData = useMemo(() => {
     // Ordena do mais antigo para o mais recente para construir a série temporal
     const closedTrades = orders
-      .filter((o) => o.status !== 'OPEN')
+      .filter((o) => o.status !== 'OPEN' && isOrderForAsset(o, asset))
       .slice()
       .reverse();
 
@@ -587,8 +587,14 @@ export const OrdersAndStats: React.FC<OrdersAndStatsProps> = ({ orders, stats, c
                   let pts = order.pointsResult;
                   let fin = order.financialResult;
                   if (isOpen) {
-                    pts = order.type === 'BUY' ? currentPrice - order.entryPrice : order.entryPrice - currentPrice;
-                    fin = pointsToBRL(pts, order.contracts, asset);
+                    const isSane = isPriceSaneForAsset(currentPrice, asset) && isPriceSaneForAsset(order.entryPrice, asset);
+                    if (isSane) {
+                      pts = order.type === 'BUY' ? currentPrice - order.entryPrice : order.entryPrice - currentPrice;
+                      fin = order.isRealMT5 && Number.isFinite(order.financialResult) ? order.financialResult : pointsToBRL(pts, order.contracts, asset);
+                    } else {
+                      pts = order.pointsResult || 0;
+                      fin = order.financialResult || 0;
+                    }
                   }
 
                   const isWin = (pts || 0) > 0;

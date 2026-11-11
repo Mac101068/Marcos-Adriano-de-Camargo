@@ -172,6 +172,7 @@ interface RenkoFlowChartProps {
   varalConfig?: Record<string, any>;
   onChangeVaralConfig?: (assetId: MultiRobotId, patch: Partial<any>) => void;
   onClearVaral?: (assetId: MultiRobotId) => void;
+  onResetRiskLock?: (assetId: MultiRobotId) => void;
   /** Níveis relevantes do pregão (utils/priceLevels), desenhados como tracejado cinza discreto. */
   priceLevels?: PriceLevel[];
   /** VWAP acumulada do dia amostrada nos tijolos — a curva laranja. */
@@ -334,6 +335,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   varalConfig,
   onChangeVaralConfig,
   onClearVaral,
+  onResetRiskLock,
   priceLevels = [],
   vwapCurve,
   asset = ASSETS[DEFAULT_ASSET_ID],
@@ -4078,6 +4080,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 onExecuteSignal={onExecuteMultiRobotSignal || (() => {})}
                 onManualOrder={onManualMultiRobotOrder || (() => {})}
                 onClosePosition={onCloseMultiRobotPosition || (() => {})}
+                onResetRiskLock={onResetRiskLock}
               />
             ) : (
               <ShadowRobotPanel onPatchConfig={onPatchShadowConfig} />
