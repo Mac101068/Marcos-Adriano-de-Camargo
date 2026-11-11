@@ -168,6 +168,10 @@ interface RenkoFlowChartProps {
   onCloseMultiRobotPosition?: (assetId: MultiRobotId) => void;
   focusedRobotAsset?: MultiRobotId;
   onOpenMultiRobotWindow?: (assetId: MultiRobotId) => void;
+  varalPendingOrders?: any[];
+  varalConfig?: Record<string, any>;
+  onChangeVaralConfig?: (assetId: MultiRobotId, patch: Partial<any>) => void;
+  onClearVaral?: (assetId: MultiRobotId) => void;
   /** Níveis relevantes do pregão (utils/priceLevels), desenhados como tracejado cinza discreto. */
   priceLevels?: PriceLevel[];
   /** VWAP acumulada do dia amostrada nos tijolos — a curva laranja. */
@@ -326,6 +330,10 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
   onCloseMultiRobotPosition,
   focusedRobotAsset = 'WIN',
   onOpenMultiRobotWindow,
+  varalPendingOrders = [],
+  varalConfig,
+  onChangeVaralConfig,
+  onClearVaral,
   priceLevels = [],
   vwapCurve,
   asset = ASSETS[DEFAULT_ASSET_ID],
@@ -4060,9 +4068,13 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 initialAssetId={focusedRobotAsset}
                 signals={multiRobotSignals}
                 positions={multiRobotPositions}
+                pendingOrders={varalPendingOrders}
+                varalConfig={varalConfig}
                 robotStates={multiRobotStates}
                 dayStatsBySymbol={dayStatsBySymbol}
                 onChangeRobotState={onChangeRobotState || (() => {})}
+                onChangeVaralConfig={onChangeVaralConfig}
+                onClearVaral={onClearVaral}
                 onExecuteSignal={onExecuteMultiRobotSignal || (() => {})}
                 onManualOrder={onManualMultiRobotOrder || (() => {})}
                 onClosePosition={onCloseMultiRobotPosition || (() => {})}

@@ -837,14 +837,14 @@ export default function App() {
   const pendingUiUpdateRef = useRef<{
     scheduled: boolean;
     latestPrice: number;
-    latestTick: Tick | null;
+    pendingTicks: Tick[];
     boxesChanged: boolean;
     rangeBoxesChanged: boolean;
     timeBoxesChanged: boolean;
   }>({
     scheduled: false,
     latestPrice: 0,
-    latestTick: null,
+    pendingTicks: [],
     boxesChanged: false,
     rangeBoxesChanged: false,
     timeBoxesChanged: false,
@@ -1769,6 +1769,48 @@ export default function App() {
     }
   };
 
+  const handleUpdateVaralConfig = (assetId: MultiRobotId, patch: any) => {
+    const spec = MULTI_ROBOTS[assetId];
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          action: 'SET_VARAL_CONFIG',
+          symbol: spec.symbol,
+          config: patch,
+        })
+      );
+    }
+    setMt5State((prev) => ({
+      ...prev,
+      varalConfig: {
+        ...(prev.varalConfig || {}),
+        [assetId]: {
+          ...((prev.varalConfig && prev.varalConfig[assetId]) || {}),
+          ...patch,
+        },
+      },
+    }));
+  };
+
+  const handleClearVaral = (assetId: MultiRobotId) => {
+    const spec = MULTI_ROBOTS[assetId];
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          action: 'CLEAR_VARAL',
+          symbol: spec.symbol,
+        })
+      );
+      setLatestToast({
+        id: `clear-varal-${Date.now()}`,
+        type: 'INFO',
+        title: `VARAL LIMPO: ${spec.label}`,
+        description: `Ordens pendentes canceladas e posições do Varal zeradas no MT5.`,
+        timestamp: Date.now(),
+      });
+    }
+  };
+
 
 
   // Instâncias dos motores de cálculo
@@ -2375,18 +2417,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
       }
 
-      // Trava de fim de pregão (hora `tradingCloseAllTime` da estratégia, padrão 17:30): vale
-
-      // SÓ no replay — a sessão simulada encerra como o pregão de verdade. No simulador ao vivo
-
-      // ela não existe (interruptor de regime do Ciclo 12: "simulador tem que rodar" 24h). Com
-
-      // o MT5 conectado a trava é ignorada pelo app — liquidar posição real exigiria ordem na
-
-      // corretora (quem faz isso lá é a ponte Python, que obedece a mesma hora do CLOSE_ALL_TIME gerado).
-
+      // Trava de fim de pregão (hora `tradingCloseAllTime` da estratégia, padrão 17:30):
+      // No Replay ou simulador, fecha obrigatoriamente às 17:30 no preço das 17:30 para proteger o lucro do dia.
       const closeLockLabel = sessionCloseLockLabel(config.tradingCloseAllTime);
-      const sessionLock = mt5State.status !== 'CONNECTED' && isSessionCloseLock(tick.timestamp, config.tradingCloseAllTime);
+      const isReplayMode = isReplayingRef.current || config.replayMode;
+      const sessionLock = (isReplayMode || mt5State.status !== 'CONNECTED') && isSessionCloseLock(tick.timestamp, config.tradingCloseAllTime, isReplayMode);
       const engine = engineRef.current;
 
       // Processa no motor de Renko (escala do box da config) e Fluxo
@@ -2408,7 +2443,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       // =========================================================================
       const buf = pendingUiUpdateRef.current;
       buf.latestPrice = tick.price;
-      buf.latestTick = tick;
+      buf.pendingTicks.push(tick);
       if (renkoRes.newBoxClosed) buf.boxesChanged = true;
       if (rangeRes.newBarClosed) buf.rangeBoxesChanged = true;
       if (timeRes.newBarClosed) buf.timeBoxesChanged = true;
@@ -2418,8 +2453,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         requestAnimationFrame(() => {
           buf.scheduled = false;
           if (buf.latestPrice > 0) setCurrentPrice(buf.latestPrice);
-          if (buf.latestTick) {
-            setTicks((prev) => [buf.latestTick!, ...prev.slice(0, 99)]);
+          if (buf.pendingTicks.length > 0) {
+            const batch = buf.pendingTicks;
+            buf.pendingTicks = [];
+            // Novos ticks entram na frente (mais recentes primeiro) sem descartar negócios intermediários
+            setTicks((prev) => [...batch.reverse(), ...prev].slice(0, 150));
           }
           const eng = engineRef.current;
           setCvd(eng.getCvd());
@@ -2900,6 +2938,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                     magic: mainRobotMagic(config),
 
+                    timestamp: tick.timestamp,
+
                   });
 
                 } else {
@@ -3051,6 +3091,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                     magic: mainRobotMagic(config),
 
+                    timestamp: tick.timestamp,
+
                   });
 
                 }
@@ -3194,6 +3236,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
                   comment: isPullbackMode ? `Reteste ${signalType} ${mt5TagShort}` : `${mt5TagShort} ${signalType}`,
 
                   magic: mainRobotMagic(config),
+
+                  timestamp: tick.timestamp,
 
                 });
 
@@ -3527,9 +3571,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 status: 'EXPIRED_PULLBACK' as const,
 
-                exitTimestamp: Date.now(),
+                exitTimestamp: isReplayMode ? tick.timestamp : Date.now(),
 
-                exitTimeStr: new Date().toTimeString().split(' ')[0],
+                exitTimeStr: isReplayMode ? (tick.timeStr || new Date(tick.timestamp).toTimeString().split(' ')[0]) : new Date().toTimeString().split(' ')[0],
 
                 exitReason: 'DAY_CLOSE' as const,
 
@@ -3683,9 +3727,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 status: 'EXPIRED_PULLBACK' as const,
 
-                exitTimestamp: Date.now(),
+                exitTimestamp: isReplayMode ? tick.timestamp : Date.now(),
 
-                exitTimeStr: new Date().toTimeString().split(' ')[0],
+                exitTimeStr: isReplayMode ? (tick.timeStr || new Date(tick.timestamp).toTimeString().split(' ')[0]) : new Date().toTimeString().split(' ')[0],
 
                 exitReason: 'EXPIRED_PULLBACK' as const,
 
@@ -3765,9 +3809,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
                 exitPrice: curPrice,
 
-                exitTimestamp: Date.now(),
+                exitTimestamp: isReplayMode ? tick.timestamp : Date.now(),
 
-                exitTimeStr: new Date().toTimeString().split(' ')[0],
+                exitTimeStr: isReplayMode ? (tick.timeStr || new Date(tick.timestamp).toTimeString().split(' ')[0]) : new Date().toTimeString().split(' ')[0],
 
                 exitReason: 'DAY_CLOSE' as const,
 
@@ -4728,6 +4772,10 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
               dayStatsBySymbol: payload.data?.dayStatsBySymbol ?? (prev as any).dayStatsBySymbol,
 
+              pendingOrders: payload.data?.pendingOrders ?? prev.pendingOrders,
+
+              varalConfig: payload.data?.varalConfig ?? prev.varalConfig,
+
               ...(!authResultSeen ? { bridgeAuthOk: true, bridgeLegacy: true } : {}),
 
             }));
@@ -4918,6 +4966,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
               timestamp: Date.now(),
 
             });
+
+          } else if (payload.type === 'VARAL_CONFIG_UPDATE') {
+
+            const updatedCfg = payload.data;
+            if (updatedCfg) {
+              setMt5State((prev) => ({
+                ...prev,
+                varalConfig: updatedCfg,
+              }));
+            }
 
           } else if (payload.type === 'STRATEGY_SYNC_BROADCAST') {
 
@@ -6596,7 +6654,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     const closedRun = orders.filter(
 
-      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
+      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT'
 
     );
 
@@ -8309,7 +8367,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     }
 
     pendingUiUpdateRef.current.latestPrice = targetState ? targetState.currentPrice : referencePrice(next);
-    pendingUiUpdateRef.current.latestTick = null;
+    pendingUiUpdateRef.current.pendingTicks = [];
     pendingUiUpdateRef.current.boxesChanged = false;
     pendingUiUpdateRef.current.rangeBoxesChanged = false;
     pendingUiUpdateRef.current.timeBoxesChanged = false;
@@ -8435,9 +8493,11 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
   const stats: TerminalStats = React.useMemo(() => {
 
+    const isReplayOrPaperStats = isReplaying || isSimulating || orders.some((o) => !o.isRealMT5);
+
     const closed = orders.filter(
 
-      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (o.exitTimestamp ?? 0) >= sessionStartRef.current
+      (o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT' && (isReplayOrPaperStats || (o.exitTimestamp ?? 0) >= sessionStartRef.current)
 
     );
 
@@ -8557,7 +8617,9 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
 
     // Quando conectado ao MetaTrader 5 SEM estar em replay:
     // os contratos e o resultado são buscados do MT5. Se houver estatísticas por ativo, usamos do ativo corrente.
-    const isRealMT5 = mt5State.status === 'CONNECTED' && !isReplaying && !isSimulating;
+    // Se a tela contém ordens de uma sessão de replay/estudo, preserva os números locais até nova limpeza ou início real.
+    const hasReplayOrders = orders.length > 0 && orders.some((o) => !o.isRealMT5);
+    const isRealMT5 = mt5State.status === 'CONNECTED' && !isReplaying && !isSimulating && !hasReplayOrders;
     const statsBySym = (mt5State as any).dayStatsBySymbol;
     const assetPrefix = (asset.id || 'WIN').substring(0, 3).toUpperCase();
     const symStats = statsBySym ? (statsBySym[assetPrefix] || statsBySym[asset.id] || statsBySym[asset.primarySymbol]) : undefined;
@@ -9086,6 +9148,16 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
     </div>
   );
 
+  const sessionTotalFinancialVolume = useMemo(() => {
+    const pv = asset.pointValue || 0.2;
+    const ticksArr = allTicksRef.current.length > 0 ? allTicksRef.current : ticks;
+    let sum = 0;
+    for (let i = 0; i < ticksArr.length; i++) {
+      sum += (ticksArr[i].price || 0) * pv * (ticksArr[i].volume || 0);
+    }
+    return sum;
+  }, [ticks, asset]);
+
   return (
 
     <div className="flex flex-col h-[100dvh] w-screen bg-[#0a0a0a] text-slate-100 overflow-hidden font-sans">
@@ -9097,6 +9169,8 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
         activeTab={activeTab}
 
         setActiveTab={setActiveTab}
+
+        totalFinancialVolume={sessionTotalFinancialVolume}
 
         isSimulating={isSimulating}
 
@@ -9723,6 +9797,14 @@ ${
                   focusedRobotAsset={focusedRobotAsset}
 
                   onOpenMultiRobotWindow={handleOpenMultiRobotWindow}
+
+                  varalPendingOrders={mt5State.pendingOrders}
+
+                  varalConfig={mt5State.varalConfig}
+
+                  onChangeVaralConfig={handleUpdateVaralConfig}
+
+                  onClearVaral={handleClearVaral}
 
                   priceLevels={sessionLevels}
 

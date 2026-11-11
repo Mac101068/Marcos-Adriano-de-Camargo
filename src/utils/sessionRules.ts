@@ -67,11 +67,18 @@ export function sessionCloseLockLabel(closeAllTime?: string): string {
 }
 
 /** O timestamp cai dentro da janela de fechamento obrigatório do pregão? */
-export function isSessionCloseLock(timestamp: number, closeAllTime?: string): boolean {
+export function isSessionCloseLock(timestamp: number, closeAllTime?: string, isReplay: boolean = false): boolean {
   // Simulador ao vivo: a zeragem compulsória não existe (interruptor de regime, Ciclo 12)
-  if (!enforceTimeGates) return false;
+  if (!enforceTimeGates && !isReplay) return false;
   if (!Number.isFinite(timestamp) || timestamp <= 0) return false;
   const d = new Date(timestamp);
   const minutes = d.getHours() * 60 + d.getMinutes();
-  return minutes >= sessionCloseLockStartMin(closeAllTime) && minutes < sessionCloseLockEndMin(closeAllTime);
+  const startMin = sessionCloseLockStartMin(closeAllTime);
+  if (isReplay) {
+    // No replay, uma vez atingido o horário de encerramento do pregão da fita (ex: 17:30),
+    // a trava permanece ativa por todo o período restante (leilão/fim de tarde),
+    // impedindo abertura de novas posições e garantindo liquidação definitiva.
+    return minutes >= startMin;
+  }
+  return minutes >= startMin && minutes < sessionCloseLockEndMin(closeAllTime);
 }

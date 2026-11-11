@@ -191,6 +191,14 @@ export interface AutomationConfig {
    */
   adaptiveThresholdPercentile?: number;
   /**
+   * Habilita a afinação dinâmica dos limiares de agressão (P70 vs P80 e divergência)
+   * por fase do pregão segundo o Tape Time da fita:
+   * - Abertura (09:00 - 10:30): P70 e divergência 15% (alta liquidez e volatilidade)
+   * - Meio-dia (12:00 - 14:00): P80 e divergência 25% (consolidação / almoço)
+   * - Fechamento (16:00 - 17:30): P80 e divergência 20% (desaceleração pré-leilão)
+   */
+  timeBasedRegimeEnabled?: boolean;
+  /**
    * Piso RELATIVO do limiar auto-calibrado (multiplicador da média de agressão do mesmo lado no
    * DIA inteiro; 1–5). O corte do funil é o maior entre o percentil da janela e piso × média-do-dia:
    * num pregão morto o piso impede o funil de afrouxar junto com o dia (dia lateral sem agressão
@@ -432,6 +440,21 @@ export interface MT5ConnectionState {
   scriptRobotMagic?: number;
   /** R$/ponto que o script .py usa nos relatórios em dinheiro (ACCOUNT_INFO.pointValue) */
   scriptPointValue?: number;
+  /** Ordens pendentes no book do MT5 (incluindo degraus do Varal) */
+  pendingOrders?: Array<{
+    ticket: number;
+    time: number;
+    symbol: string;
+    type: 'BUY_STOP' | 'SELL_STOP' | 'BUY_LIMIT' | 'SELL_LIMIT';
+    volume: number;
+    price: number;
+    sl: number;
+    tp: number;
+    magic: number;
+    comment: string;
+  }>;
+  /** Configurações ativas do Varal de Ordens (Robô 2 real) */
+  varalConfig?: Record<string, any>;
 }
 
 export interface TerminalStats {

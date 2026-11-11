@@ -40,6 +40,7 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   minDeltaThreshold: 50, // Δ físico: agora só VALE NO AQUECIMENTO (<10 boxes do dia). No bench (10 réplicas × 10d) Δ50 dominou Δ100; abaixo de ~50 é platô
   adaptiveThresholdEnabled: true, // LIGADO por padrão: o corte é AUTO-CALIBRADO pelo próprio pregão (percentil P70 + piso 1,6× a média do dia; zero valor físico). Base real WINZ26 (11 pregões): PF 3,71→4,17 e R$/trade 15,9→21,4 mantendo os 11 pregões positivos — sobe a qualidade por trade (expectancy), o que tira um EA do empate
   adaptiveThresholdPercentile: 0.7, // Percentil da agressão do próprio dia que vira corte (SEL-A: P70). O piso costuma mandar; no bench o percentil é alavanca fraca
+  timeBasedRegimeEnabled: true, // Afinação dinâmica por horário da fita (Abertura P70, Meio-dia P80, Fechamento P80)
   adaptiveFloorMultiple: 1.6, // Piso: mínimo de 1,6× a média das agressões do dia (SEL-A) para dia morto não afrouxar o funil
   flowDivergenceMin: 0.5, // Divergência de fluxo mínima (escala-free): só vale box com |Δ| ≥ 50% do volume do tijolo (SEL-A). Mais seletivo que os 40% do Ciclo 17 — PF e R$/trade maiores mantendo todos os pregões positivos. 0/undefined desliga
   regimeLookbackBoxes: 20, // Janela do medidor de regime (boxes recentes)
@@ -575,6 +576,7 @@ export class EaConfigService {
       minDeltaThreshold: config.minDeltaThreshold,
       adaptiveThresholdEnabled: config.adaptiveThresholdEnabled,
       adaptiveThresholdPercentile: config.adaptiveThresholdPercentile,
+      timeBasedRegimeEnabled: config.timeBasedRegimeEnabled ?? true,
       adaptiveFloorMultiple: config.adaptiveFloorMultiple,
       regimeLookbackBoxes: config.regimeLookbackBoxes,
       flowDivergenceMin: config.flowDivergenceMin,

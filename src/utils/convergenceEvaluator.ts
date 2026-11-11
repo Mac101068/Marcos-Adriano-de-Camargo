@@ -12,11 +12,22 @@ import { SessionRegimeMeter } from './sessionRegime';
  * 3. Filtro de Exaustão de Fluxo
  */
 
+export interface FlowScoreBreakdown {
+  deltaScore: number;
+  divergenceScore: number;
+  cvdScore: number;
+  erScore: number;
+  speedScore: number;
+  totalScore: number;
+}
+
 export interface ConvergenceResult {
   isConvergence: boolean;
   type?: 'BUY_CONVERGENCE' | 'SELL_CONVERGENCE' | 'DIVERGENCE';
   signal?: 'BUY' | 'SELL';
   reason?: string;
+  flowScore?: number;
+  flowScoreBreakdown?: FlowScoreBreakdown;
 }
 
 export interface ConvergenceSeriesLabels {
@@ -67,6 +78,93 @@ function flowDivergence(box: RenkoBox): number {
   const vol = box.totalVolume ?? 0;
   if (vol <= 0) return 0;
   return Math.min(1, Math.abs(box.delta ?? 0) / vol);
+}
+
+/**
+ * Calcula o Score de Convicção Institucional de Fluxo (0 a 10 pontos)
+ */
+export function computeFlowConvictionScore(
+  box: RenkoBox,
+  previousBoxes: RenkoBox[],
+  config: AutomationConfig,
+  direction: 'UP' | 'DOWN',
+  meter?: SessionRegimeMeter
+): { totalScore: number; breakdown: FlowScoreBreakdown } {
+  const delta = Math.abs(box.delta ?? 0);
+  const side = direction === 'UP' ? 'BUY' : 'SELL';
+  const baseThresh = config.minDeltaThreshold ?? 150;
+
+  // 1. Delta vs percentis do regime
+  let ptsDelta = 0;
+  if (meter) {
+    const p90 = meter.getSelfCalibratedLimit(side, 0.90, 1.6, baseThresh);
+    const p80 = meter.getSelfCalibratedLimit(side, 0.80, 1.4, baseThresh);
+    const p70 = meter.getSelfCalibratedLimit(side, 0.70, 1.2, baseThresh);
+    if (delta >= p90) ptsDelta = 3;
+    else if (delta >= p80) ptsDelta = 2;
+    else if (delta >= p70) ptsDelta = 1;
+  } else {
+    if (delta >= baseThresh * 2.0) ptsDelta = 3;
+    else if (delta >= baseThresh * 1.5) ptsDelta = 2;
+    else if (delta >= baseThresh) ptsDelta = 1;
+  }
+
+  // 2. Divergência
+  const div = flowDivergence(box);
+  let ptsDiv = 0;
+  if (div >= 0.35) ptsDiv = 2;
+  else if (div >= 0.20) ptsDiv = 1;
+
+  // 3. CVD
+  let ptsCvd = 0;
+  const cvd = box.cvdAtClose ?? 0;
+  if (previousBoxes.length > 0) {
+    const allPrevCvd = previousBoxes.map((b) => b.cvdAtClose);
+    if (direction === 'UP' && cvd >= Math.max(...allPrevCvd)) ptsCvd = 2;
+    else if (direction === 'DOWN' && cvd <= Math.min(...allPrevCvd)) ptsCvd = 2;
+    else if (allPrevCvd.length >= 2) {
+      const lastFew = allPrevCvd.slice(-3);
+      if (direction === 'UP' && lastFew.every((v, i, a) => i === 0 || v >= a[i - 1])) ptsCvd = 1;
+      else if (direction === 'DOWN' && lastFew.every((v, i, a) => i === 0 || v <= a[i - 1])) ptsCvd = 1;
+    }
+  } else {
+    ptsCvd = 1;
+  }
+
+  // 4. Efficiency Ratio
+  const er = efficiencyRatio(previousBoxes, box, 10);
+  let ptsEr = 0;
+  if (er >= 0.70) ptsEr = 2;
+  else if (er >= 0.45) ptsEr = 1;
+
+  // 5. Velocidade
+  let ptsSpeed = 0;
+  const tStart = box.timeStart ?? 0;
+  const tEnd = box.timestamp ?? 0;
+  if (tStart > 0 && tEnd > tStart) {
+    const curDur = (tEnd - tStart) / 1000;
+    const recentDurs = previousBoxes
+      .slice(-10)
+      .filter((b) => (b.timestamp ?? 0) > (b.timeStart ?? 0))
+      .map((b) => ((b.timestamp ?? 0) - (b.timeStart ?? 0)) / 1000);
+    if (recentDurs.length > 0) {
+      const avgDur = recentDurs.reduce((a, b) => a + b, 0) / recentDurs.length;
+      if (curDur <= avgDur * 0.4 && curDur >= 0.1) ptsSpeed = 1;
+    } else if (curDur < 10) {
+      ptsSpeed = 1;
+    }
+  }
+
+  const totalScore = Math.min(10, Math.max(0, ptsDelta + ptsDiv + ptsCvd + ptsEr + ptsSpeed));
+  const breakdown: FlowScoreBreakdown = {
+    deltaScore: ptsDelta,
+    divergenceScore: ptsDiv,
+    cvdScore: ptsCvd,
+    erScore: ptsEr,
+    speedScore: ptsSpeed,
+    totalScore,
+  };
+  return { totalScore, breakdown };
 }
 
 export function evaluateBoxConvergence(
@@ -128,11 +226,14 @@ export function evaluateBoxConvergence(
           return { isConvergence: false };
         }
       }
+      const { totalScore, breakdown } = computeFlowConvictionScore(box, previousBoxes, config, 'UP', meter);
       return {
         isConvergence: true,
         type: 'BUY_CONVERGENCE',
         signal: 'BUY',
-        reason: `Pirâmide Confluência Alta: Bloco Verde #${box.index} (${gainUp}) | Δ: +${box.delta} (≥${reqBuyDelta})`,
+        flowScore: totalScore,
+        flowScoreBreakdown: breakdown,
+        reason: `Pirâmide Confluência Alta: Bloco Verde #${box.index} [Score ${totalScore}/10] (${gainUp}) | Δ: +${box.delta} (≥${reqBuyDelta})`,
       };
     } else if (box.direction === 'DOWN') {
       // 1. Delta deve ser negativo e superior ao limiar institucional
@@ -151,11 +252,14 @@ export function evaluateBoxConvergence(
           return { isConvergence: false };
         }
       }
+      const { totalScore, breakdown } = computeFlowConvictionScore(box, previousBoxes, config, 'DOWN', meter);
       return {
         isConvergence: true,
         type: 'SELL_CONVERGENCE',
         signal: 'SELL',
-        reason: `Pirâmide Confluência Baixa: Bloco Vermelho #${box.index} (${gainDown}) | Δ: ${box.delta} (≤-${reqSellDelta})`,
+        flowScore: totalScore,
+        flowScoreBreakdown: breakdown,
+        reason: `Pirâmide Confluência Baixa: Bloco Vermelho #${box.index} [Score ${totalScore}/10] (${gainDown}) | Δ: ${box.delta} (≤-${reqSellDelta})`,
       };
     }
     return { isConvergence: false };

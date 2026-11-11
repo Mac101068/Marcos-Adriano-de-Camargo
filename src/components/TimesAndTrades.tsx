@@ -15,19 +15,66 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd, asse
 
   const instLimit = asset?.id === 'WDO' ? 20 : (asset?.id === 'BTCBR' ? 5 : 40);
 
-  // Estatísticas da fita
+  // Estatísticas da fita com volume financeiro em R$
   const stats = useMemo(() => {
     let buyVol = 0;
     let sellVol = 0;
+    let buyFin = 0;
+    let sellFin = 0;
+    const pv = asset ? asset.pointValue : 0.2;
     ticks.forEach((t) => {
-      if (t.aggressor === 'BUY') buyVol += t.volume;
-      else if (t.aggressor === 'SELL') sellVol += t.volume;
+      const p = t.price || 0;
+      const v = t.volume || 0;
+      const fin = p * pv * v;
+      if (t.aggressor === 'BUY') {
+        buyVol += v;
+        buyFin += fin;
+      } else if (t.aggressor === 'SELL') {
+        sellVol += v;
+        sellFin += fin;
+      }
     });
     const total = buyVol + sellVol || 1;
+    const totalFin = buyFin + sellFin;
+    const deltaFin = buyFin - sellFin;
     const buyPct = Math.round((buyVol / total) * 100);
     const sellPct = 100 - buyPct;
-    return { buyVol, sellVol, total, buyPct, sellPct };
-  }, [ticks]);
+    return { buyVol, sellVol, total, buyPct, sellPct, buyFin, sellFin, totalFin, deltaFin };
+  }, [ticks, asset]);
+
+  // Formatação de Volume Financeiro em R$
+  const getFinancialVolume = (price: number, volume: number) => {
+    const pv = asset ? asset.pointValue : 0.2;
+    const total = price * pv * volume;
+    if (!Number.isFinite(total) || total <= 0) return '-';
+    if (total >= 1_000_000) return `R$ ${(total / 1_000_000).toFixed(2)}M`;
+    if (total >= 1_000) return `R$ ${(total / 1_000).toFixed(0)}k`;
+    return `R$ ${total.toFixed(0)}`;
+  };
+
+  // Classificação do Lote (Perfil do Player)
+  const getLotBadge = (volume: number) => {
+    if (volume >= instLimit) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+          🏛️ INSTITUCIONAL
+        </span>
+      );
+    }
+    const midLimit = Math.max(3, Math.floor(instLimit / 3));
+    if (volume >= midLimit) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-500/15 text-sky-300 border border-sky-500/20">
+          MÉDIO
+        </span>
+      );
+    }
+    return (
+      <span className="px-1.5 py-0.5 rounded text-[10px] text-slate-500 font-normal">
+        VAREJO
+      </span>
+    );
+  };
 
   // Filtra ticks
   const filteredTicks = useMemo(() => {
@@ -36,19 +83,44 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd, asse
         if (onlyInstitutional) return t.volume >= instLimit;
         return t.volume >= minVolumeFilter;
       })
-      .slice(0, 80); // Mostra os 80 mais recentes
+      .slice(0, 100); // Mostra os 100 mais recentes
   }, [ticks, minVolumeFilter, onlyInstitutional, instLimit]);
 
   return (
     <div className="flex flex-col h-full bg-slate-950 border border-slate-800/80 rounded-lg overflow-hidden">
       {/* Cabeçalho de Controle e Filtros */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-slate-900 border-b border-slate-800 text-xs">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
           <Zap className="w-4 h-4 text-emerald-400" />
           <span className="font-semibold text-slate-100">
             Times & Trades {asset ? `· ${asset.label}` : 'MT5'}
           </span>
           <span className="text-slate-400 font-mono text-[11px]">· {ticks.length} negócios</span>
+
+          {/* Volume Financeiro Total em Tempo Real */}
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 font-mono text-[11px] shadow-xs">
+            <span className="text-slate-400">Vol Fin:</span>
+            <span className="font-bold text-emerald-400">
+              {stats.totalFin >= 1_000_000
+                ? `R$ ${(stats.totalFin / 1_000_000).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}M`
+                : stats.totalFin >= 1_000
+                ? `R$ ${(stats.totalFin / 1_000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}k`
+                : `R$ ${stats.totalFin.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            </span>
+          </div>
+
+          {/* Saldo Financeiro Líquido (Delta) */}
+          <div className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 font-mono text-[11px] shadow-xs">
+            <span className="text-slate-400">Delta Fin:</span>
+            <span className={`font-bold ${stats.deltaFin >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {stats.deltaFin > 0 ? '+' : ''}
+              {Math.abs(stats.deltaFin) >= 1_000_000
+                ? `R$ ${(stats.deltaFin / 1_000_000).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}M`
+                : Math.abs(stats.deltaFin) >= 1_000
+                ? `R$ ${(stats.deltaFin / 1_000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}k`
+                : `R$ ${stats.deltaFin.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            </span>
+          </div>
         </div>
 
         {/* Filtros de Tamanho de Lote */}
@@ -115,7 +187,12 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd, asse
         <div className="flex items-center justify-between text-xs font-mono mb-1">
           <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
             <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>Compra: {stats.buyVol.toLocaleString('pt-BR')} ctros ({stats.buyPct}%)</span>
+            <span>
+              Compra: {stats.buyVol.toLocaleString('pt-BR')} ctros ({stats.buyPct}%)
+              <span className="text-emerald-400/80 font-normal ml-1 hidden md:inline">
+                · {stats.buyFin >= 1_000_000 ? `R$ ${(stats.buyFin / 1_000_000).toFixed(2)}M` : `R$ ${(stats.buyFin / 1_000).toFixed(0)}k`}
+              </span>
+            </span>
           </div>
           <div className="text-slate-300 font-bold">
             Saldo CVD:{' '}
@@ -125,7 +202,12 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd, asse
             </span>
           </div>
           <div className="flex items-center gap-1.5 text-rose-400 font-semibold">
-            <span>Venda: {stats.sellVol.toLocaleString('pt-BR')} ctros ({stats.sellPct}%)</span>
+            <span>
+              <span className="text-rose-400/80 font-normal mr-1 hidden md:inline">
+                {stats.sellFin >= 1_000_000 ? `R$ ${(stats.sellFin / 1_000_000).toFixed(2)}M` : `R$ ${(stats.sellFin / 1_000).toFixed(0)}k`} ·
+              </span>
+              Venda: {stats.sellVol.toLocaleString('pt-BR')} ctros ({stats.sellPct}%)
+            </span>
             <ArrowDownRight className="w-3.5 h-3.5" />
           </div>
         </div>
@@ -152,8 +234,8 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd, asse
               <th className="py-1.5 px-3">Preço</th>
               <th className="py-1.5 px-3 text-right">Qtd</th>
               <th className="py-1.5 px-3 text-center">Agressor</th>
-              <th className="hidden sm:table-cell py-1.5 px-3">Compradora</th>
-              <th className="hidden sm:table-cell py-1.5 px-3">Vendedora</th>
+              <th className="py-1.5 px-3 text-center">Perfil</th>
+              <th className="hidden sm:table-cell py-1.5 px-3 text-right">Vol Fin (R$)</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/40">
@@ -206,11 +288,11 @@ export const TimesAndTrades: React.FC<TimesAndTradesProps> = ({ ticks, cvd, asse
                         {isBuy ? 'COMPRA' : 'VENDA'}
                       </span>
                     </td>
-                    <td className="hidden sm:table-cell py-1 px-3 text-slate-300 text-[11px] truncate max-w-[130px]">
-                      {tick.buyerBroker || '-'}
+                    <td className="py-1 px-3 text-center">
+                      {getLotBadge(tick.volume)}
                     </td>
-                    <td className="hidden sm:table-cell py-1 px-3 text-slate-300 text-[11px] truncate max-w-[130px]">
-                      {tick.sellerBroker || '-'}
+                    <td className="hidden sm:table-cell py-1 px-3 text-slate-300 text-[11px] text-right font-mono">
+                      {getFinancialVolume(tick.price, tick.volume)}
                     </td>
                   </tr>
                 );

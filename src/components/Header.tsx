@@ -72,6 +72,7 @@ interface HeaderProps {
   activeStrategyId?: string | null;
   activeStrategyLive?: boolean;
   onOpenStudio?: () => void;
+  totalFinancialVolume?: number;
 }
 
 interface MenuItem {
@@ -446,6 +447,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeStrategyId,
   activeStrategyLive,
   onOpenStudio,
+  totalFinancialVolume,
 }) => {
   const chartItems: MenuItem[] = [
     { tab: 'chart', label: 'Terminal & Gráficos', icon: Activity },
@@ -493,6 +495,21 @@ export const Header: React.FC<HeaderProps> = ({
           live={activeStrategyLive}
           onOpen={onOpenStudio}
         />
+        {totalFinancialVolume !== undefined && totalFinancialVolume > 0 && (
+          <div
+            title="Volume Financeiro Total negociado na sessão em tempo real"
+            className="hidden sm:flex items-center gap-1.5 h-6 px-2 rounded-md border border-slate-800 bg-slate-900/90 font-mono text-[10px] shadow-xs"
+          >
+            <span className="text-slate-400">Vol Fin:</span>
+            <span className="font-bold text-emerald-400">
+              {totalFinancialVolume >= 1_000_000
+                ? `R$ ${(totalFinancialVolume / 1_000_000).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}M`
+                : totalFinancialVolume >= 1_000
+                ? `R$ ${(totalFinancialVolume / 1_000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}k`
+                : `R$ ${totalFinancialVolume.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Zone 2: Menu superior agrupado — encostado no título, ocupando a linha livre */}

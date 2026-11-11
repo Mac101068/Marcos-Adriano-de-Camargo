@@ -75,3 +75,50 @@ export interface RobotRuntimeState {
   tpPoints: number;
 }
 
+export interface VaralItemConfig {
+  enabled: boolean;
+  magic: number;
+  execution_type: 'MARKET' | 'LIMIT';
+  step_points: number;
+  max_orders: number;
+  contracts: number;
+  tp_points: number;
+  sl_points: number;
+}
+
+export type VaralConfigMap = Record<MultiRobotId, VaralItemConfig>;
+
+export const DEFAULT_VARAL_CONFIG: VaralConfigMap = {
+  WIN: {
+    enabled: true,
+    magic: 150102,
+    execution_type: 'MARKET',
+    step_points: 50.0,
+    max_orders: 3,
+    contracts: 1,
+    tp_points: 50.0,
+    sl_points: 50.0,
+  },
+  WDO: {
+    enabled: true,
+    magic: 150202,
+    execution_type: 'MARKET',
+    step_points: 2.5,
+    max_orders: 3,
+    contracts: 1,
+    tp_points: 2.5,
+    sl_points: 2.5,
+  },
+  BIT: {
+    enabled: true,
+    magic: 150302,
+    execution_type: 'MARKET',
+    step_points: 100.0,
+    max_orders: 3,
+    contracts: 1,
+    tp_points: 100.0,
+    sl_points: 100.0,
+  },
+};
+
+
