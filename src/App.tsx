@@ -30,6 +30,7 @@ import { migrateAutoCalibratedFunnel } from './utils/autoCalibrationMigration';
 
 import { migrateFunnelSelA } from './utils/funnelSelAMigration';
 import { migrateAntiBurstCycle } from './utils/antiBurstMigration';
+import { usePanelWindows } from './hooks/usePanelWindows';
 
 import {
 
@@ -378,17 +379,14 @@ function synthesizeTicksFromBoxes(bxList: RenkoBox[]): Tick[] {
 
 export default function App() {
 
-  const [activeTab, setActiveTab] = useState<'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'studio' | 'admin'>('chart');
-
-  /**
-
-   * Token de atalho entre telas: o chip da escala no gráfico pede o BLOCO DO RENKO dos Parâmetros,
-
-   * o AutomationPanel rola até o campo, pisca e devolve o token (null). Um clique, duas ações.
-
-   */
-
-  const [paramFocus, setParamFocus] = useState<'renkoBox' | null>(null);
+  const {
+    activeTab, setActiveTab, paramFocus, setParamFocus,
+    dadosPanelOpen, setDadosPanelOpen,
+    boxWindowOpen, setBoxWindowOpen,
+    shadowWindowOpen, setShadowWindowOpen,
+    moreNavOpen, setMoreNavOpen,
+    handleToggleDadosPanel, handleToggleBoxWindow, handleToggleShadowWindow,
+  } = usePanelWindows();
 
   const goToRenkoParam = () => {
 
@@ -858,97 +856,6 @@ export default function App() {
     timeBoxesChanged: false,
   });
 
-
-
-  // Janela flutuante "Dados" (controles do painel Renko) — visível por padrão, persistida
-
-  const [dadosPanelOpen, setDadosPanelOpen] = useState<boolean>(() => {
-
-    try {
-
-      const saved = localStorage.getItem('fluxo_dados_window_v1');
-
-      if (saved !== null) return saved !== '0';
-
-    } catch {
-
-      // storage indisponível: cai na regra de tela abaixo
-
-    }
-
-    // Sem preferência salva (primeiro acesso, ou aparelho novo): no celular a janela nasce
-
-    // FECHADA porque ela cobre o gráfico inteiro — no desktop continua abrindo sozinha.
-
-    return typeof window === 'undefined' || window.innerWidth >= 640;
-
-  });
-
-  useEffect(() => {
-
-    try {
-
-      localStorage.setItem('fluxo_dados_window_v1', dadosPanelOpen ? '1' : '0');
-
-    } catch {
-
-      // Ignora erro de storage
-
-    }
-
-  }, [dadosPanelOpen]);
-
-  const handleToggleDadosPanel = () => {
-
-    setDadosPanelOpen((v) => {
-
-      // Ao reabrir pelo menu, leva o operador para a aba do gráfico onde a janela vive
-
-      if (!v) setActiveTab('chart');
-
-      return !v;
-
-    });
-
-  };
-
-  // Janela flutuante "Box Renko" (card do box ativo) — fechada por padrão para não poluir o gráfico
-  const [boxWindowOpen, setBoxWindowOpen] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('fluxo_renko_box_window_v1') === '1';
-    } catch {
-      return false;
-    }
-  });
-
-  useEffect(() => {
-
-    try {
-
-      localStorage.setItem('fluxo_renko_box_window_v1', boxWindowOpen ? '1' : '0');
-
-    } catch {
-
-      // Ignora erro de storage
-
-    }
-
-  }, [boxWindowOpen]);
-
-  const handleToggleBoxWindow = () => {
-
-    setBoxWindowOpen((v) => {
-
-      // Ao reabrir pelo menu, leva o operador para a aba do gráfico onde a janela vive
-
-      if (!v) setActiveTab('chart');
-
-      return !v;
-
-    });
-
-  };
-
   // =========================================================================================
 
   // ROBÔ 2 (SOMBRA) na interface: janela flutuante no gráfico + chip na 3ª linha.
@@ -970,48 +877,6 @@ export default function App() {
   }
 
   const shadowSnap = shadowWindowRef.current.snap;
-
-  // Janela flutuante do Robô 2 — escondida por padrão (o chip da tira é o atalho), persistida
-
-  const [shadowWindowOpen, setShadowWindowOpen] = useState<boolean>(() => {
-
-    try {
-
-      return localStorage.getItem('fluxo_shadow_window_open_v1') === '1';
-
-    } catch {
-
-      return false;
-
-    }
-
-  });
-
-  useEffect(() => {
-
-    try {
-
-      localStorage.setItem('fluxo_shadow_window_open_v1', shadowWindowOpen ? '1' : '0');
-
-    } catch {
-
-      // Ignora erro de storage
-
-    }
-
-  }, [shadowWindowOpen]);
-
-  const handleToggleShadowWindow = () => {
-
-    setShadowWindowOpen((v) => {
-
-      if (!v) setActiveTab('chart');
-
-      return !v;
-
-    });
-
-  };
 
   // =========================================================================
   // GESTÃO MULTI-ROBÔS / COPILOTO (WIN, WDO, BIT)
@@ -1035,10 +900,6 @@ export default function App() {
       localStorage.setItem('fluxo_multi_robot_states_v1', JSON.stringify(multiRobotStates));
     } catch {}
   }, [multiRobotStates]);
-
-  // Menu "Mais" da barra inferior móvel — agrupa as abas secundárias sem rolagem lateral
-
-  const [moreNavOpen, setMoreNavOpen] = useState<boolean>(false);
 
   const mobileMoreTabsActive = ['simulador', 'comparativo', 'avaliacao', 'audit', 'settings', 'studio', 'docs', 'admin', 'python'].includes(activeTab);
 
@@ -1835,7 +1696,7 @@ export default function App() {
         id: `reset-risk-${Date.now()}`,
         type: 'INFO',
         title: '🔓 TRAVA DE RISCO REARMADA',
-        description: `Limites diários de perda resetados para ${spec?.label || asset.name}. Robô liberado para novas operações.`,
+        description: `Limites diários de perda resetados para ${spec?.label || asset.label}. Robô liberado para novas operações.`,
         timestamp: Date.now(),
       });
     }
@@ -2472,7 +2333,7 @@ const engineRef = useRef<RenkoFlowEngine>(new RenkoFlowEngine(50, asset));
       // Trava de fim de pregão (hora `tradingCloseAllTime` da estratégia, padrão 17:30):
       // No Replay ou simulador, fecha obrigatoriamente às 17:30 no preço das 17:30 para proteger o lucro do dia.
       const closeLockLabel = sessionCloseLockLabel(config.tradingCloseAllTime);
-      const isReplayMode = isReplayingRef.current || config.replayMode;
+      const isReplayMode = isReplayingRef.current;
       const sessionLock = (isReplayMode || mt5State.status !== 'CONNECTED') && isSessionCloseLock(tick.timestamp, config.tradingCloseAllTime, isReplayMode);
       const engine = engineRef.current;
 
