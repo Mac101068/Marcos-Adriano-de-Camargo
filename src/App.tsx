@@ -4340,6 +4340,10 @@ export default function App() {
 
               brokerCompany: payload.data.broker,
 
+              server: payload.data.server ?? prev.server,
+
+              tradeMode: payload.data.tradeMode ?? prev.tradeMode,
+
               balance: payload.data.balance,
 
               equity: payload.data.equity ?? prev.equity,

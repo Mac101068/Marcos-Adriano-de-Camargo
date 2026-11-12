@@ -390,6 +390,10 @@ export interface MT5ConnectionState {
   pingMs?: number;
   accountLogin?: number;
   brokerCompany?: string;
+  /** Servidor da conta no MT5 (ex.: "XPMT5-DEMO"): é o que separa demo de real. */
+  server?: string;
+  /** trade_mode do MT5: 0 = demo, 1 = concurso, 2 = real. */
+  tradeMode?: number;
   balance?: number;
   equity?: number;
   floatingProfit?: number;

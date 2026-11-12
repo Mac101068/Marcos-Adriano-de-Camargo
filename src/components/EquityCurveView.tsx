@@ -64,6 +64,13 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
 }) => {
   const isMt5Online = mt5State?.status === 'CONNECTED';
 
+  // Rótulo da fonte MT5: a conta diz o próprio modo. Sem o dado, não afirmamos "Real".
+  const mt5SourceLabel =
+    mt5State?.tradeMode === 0 ? 'MT5 Demo (XP)'
+    : mt5State?.tradeMode === 1 ? 'MT5 Concurso (XP)'
+    : mt5State?.tradeMode === 2 ? 'MT5 Real (XP Live)'
+    : 'MT5 XP';
+
   // Fonte de dados: se MT5 estiver online, padrão é MT5_LIVE, senão SIM
   const [viewSource, setViewSource] = useState<'MT5_LIVE' | 'SIM'>(() => {
     return isMt5Online ? 'MT5_LIVE' : 'SIM';
@@ -643,7 +650,7 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
             }`}
           >
             <span className={`w-2 h-2 rounded-full ${isMt5Online ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-            <span>MT5 Real (XP Live)</span>
+            <span>{mt5SourceLabel}</span>
             {isMt5Online && mt5State?.deals && (
               <span className="text-[10px] px-1 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/60 font-mono">
                 {mt5FilteredDeals.length}
@@ -1414,7 +1421,7 @@ export const EquityCurveView: React.FC<EquityCurveViewProps> = ({
         <div className="flex items-center justify-between mb-2">
           <h4 className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5 uppercase tracking-wide">
             <Info className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Matriz de Risco & Consistência {viewSource === 'MT5_LIVE' ? '· MT5 Real' : '· Simulação 10R'}</span>
+            <span>Matriz de Risco & Consistência {viewSource === 'MT5_LIVE' ? `· ${mt5SourceLabel}` : '· Simulação 10R'}</span>
           </h4>
 
           <button
