@@ -186,6 +186,9 @@ import { EaConfigService } from './services/eaConfigService';
 
 import { OrderAuditService } from './services/orderAuditService';
 
+import { createDirectionalRobot, DirectionalRobot } from './services/directionalRobotService';
+import { DEFAULT_ASSET_ID } from './assets/assetRegistry';
+
 // Purga imediata no carregamento do módulo: garante que o storage local esteja higienizado
 if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
   try {
@@ -537,6 +540,36 @@ export default function App() {
    */
 
   const asset = React.useMemo(() => resolveAsset(config.symbol, config.assetId), [config.symbol, config.assetId]);
+
+  // Robôs direcionais (Passo 3): RoboCompra (magic 100001) e RoboVenda (magic 100002).
+  // Nascem pausados. Nunca enviam ordem real à ponte — apenas registram intenções e auditam.
+  const directionalRobots = React.useMemo(() => {
+    const buy = createDirectionalRobot({
+      direction: 'BUY',
+      magic: 100001,
+      asset: ASSETS[DEFAULT_ASSET_ID],
+      baseConfig: {
+        contracts: config.contracts,
+        stopLossPoints: config.stopLossPoints,
+        takeProfitPoints: config.takeProfitPoints,
+        onCloseOpposite: config.onCloseOpposite ?? false,
+        directionLock: config.directionLock,
+      } as Partial<AutomationConfig>,
+    });
+    const sell = createDirectionalRobot({
+      direction: 'SELL',
+      magic: 100002,
+      asset: ASSETS[DEFAULT_ASSET_ID],
+      baseConfig: {
+        contracts: config.contracts,
+        stopLossPoints: config.stopLossPoints,
+        takeProfitPoints: config.takeProfitPoints,
+        onCloseOpposite: config.onCloseOpposite ?? false,
+        directionLock: config.directionLock,
+      } as Partial<AutomationConfig>,
+    });
+    return { buy, sell };
+  }, [config.contracts, config.stopLossPoints, config.takeProfitPoints, config.onCloseOpposite, config.directionLock]);
 
   /**
 
@@ -2078,6 +2111,10 @@ export default function App() {
       // Processa no motor de Renko (escala do box da config) e Fluxo
       const renkoRes = engine.processTick(tick, config);
 
+      // Passo 3: mark-to-market dos robôs direcionais (SL/TP + PnL flutuante, sem ponte)
+      directionalRobots.buy.onTick(tick.price);
+      directionalRobots.sell.onTick(tick.price);
+
       // Alimenta as séries experimentais (Range e Tempo) com o mesmo fluxo de ticks
       if (allTicksRef.current.length < 50000) allTicksRef.current.push(tick);
       const rangeEng = rangeEngineRef.current;
@@ -2254,6 +2291,12 @@ export default function App() {
           const signalType = result.signal; // 'BUY' (bloco verde) ou 'SELL' (bloco vermelho)
 
           const oppositeType = signalType === 'BUY' ? 'SELL' : 'BUY';
+
+          // Passo 3: despacha sinal para os robôs direcionais (intenção simulada + auditoria, sem ponte)
+          // O robô de compra só reage a sinais BUY, o de venda só a sinais SELL.
+          // Sinal contrário com onCloseOpposite fecha posições do robô alvo.
+          directionalRobots.buy.onSignal(signalType, result.closedBox.index, tick.price);
+          directionalRobots.sell.onSignal(signalType, result.closedBox.index, tick.price);
 
 
 
@@ -9846,6 +9889,11 @@ ${
                   focusParam={paramFocus}
 
                   onFocusParamConsumed={() => setParamFocus(null)}
+
+                  directionalSnapshots={{
+                    buy: directionalRobots.buy.getSnapshot(),
+                    sell: directionalRobots.sell.getSnapshot(),
+                  }}
 
                 />
 

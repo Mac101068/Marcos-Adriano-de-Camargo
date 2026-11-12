@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AutomationConfig, ConfigPreset } from '../types/trading';
+import type { DirectionalRobotSnapshot } from '../services/directionalRobotService';
 import {
   chartSymbolFor,
   pointsToBRL,
@@ -78,6 +79,8 @@ interface AutomationPanelProps {
    */
   focusParam?: 'renkoBox' | null;
   onFocusParamConsumed?: () => void;
+  /** Snapshots dos robôs direcionais (Passo 3): compra e venda. */
+  directionalSnapshots?: { buy: DirectionalRobotSnapshot; sell: DirectionalRobotSnapshot };
 }
 
 /** Quantos tijolos cabem em N pontos (com o box editável, a conta nunca é mais "÷ 50"). */
@@ -176,6 +179,7 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
   onResetData,
   focusParam,
   onFocusParamConsumed,
+  directionalSnapshots,
 }) => {
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [customProfiles, setCustomProfiles] = useState<ConfigPreset[]>(() =>
@@ -2135,6 +2139,77 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           </button>
         </div>
       </CollapsibleSection>
+
+      {/* ========================================================================= */
+      /* CARTÕES: ROBÔS DIRECIONAIS (Passo 3 — sem envio de ordem real à ponte) */
+      /* ========================================================================= */}
+      {directionalSnapshots && (
+        <div className="bg-slate-950/60 rounded-lg border border-slate-800 p-3.5 mt-4">
+          <h3 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-1.5">
+            <Activity className="w-3 h-3 text-emerald-400" />
+            Robôs Direcionais — C/V Hedge (Simulação)
+          </h3>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            {[
+              {
+                key: 'buy',
+                label: 'RoboCompra',
+                role: 'BUY_ROBOT',
+                magic: 100001,
+                color: 'emerald',
+                snap: directionalSnapshots.buy,
+              },
+              {
+                key: 'sell',
+                label: 'RoboVenda',
+                role: 'SELL_ROBOT',
+                magic: 100002,
+                color: 'rose',
+                snap: directionalSnapshots.sell,
+              },
+            ].map(({ key, label, role, magic, color, snap }) => (
+              <div
+                key={key}
+                className={`p-2.5 rounded border \${snap.paused ? 'bg-slate-900 border-slate-700' : 'bg-\${color}-500/10 border-\${color}-500/30'}`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-\${color}-400 uppercase tracking-wider">{label}</span>
+                  <span className={`text-[10px] font-mono \${snap.paused ? 'text-slate-500' : 'text-\${color}-400'}`}>
+                    {snap.paused ? 'PAUSADO' : 'ATIVO'} · magic {magic}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Último sinal:</span>
+                    <span className="font-mono text-slate-200">
+                      {snap.lastSignal ? `\${snap.lastSignal.direction} box#\${snap.lastSignal.boxIndex} @\${snap.lastSignal.price}` : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Intenções:</span>
+                    <span className="font-mono text-emerald-300">{snap.totalIntents}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Posições abertas:</span>
+                    <span className="font-mono text-slate-200">{snap.openPositions.length}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">PnL realizado:</span>
+                    <span className={`font-mono \${snap.pnlFinancial >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      R$ {snap.pnlFinancial.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Fechamentos:</span>
+                    <span className="font-mono text-slate-200">{snap.totalCloses}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
