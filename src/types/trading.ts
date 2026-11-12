@@ -1,5 +1,8 @@
 import type { AssetId } from '../assets/assetRegistry';
 
+export type DirectionLock = 'BOTH' | 'BUY_ONLY' | 'SELL_ONLY';
+export type RobotRole = 'MAIN' | 'BUY_ROBOT' | 'SELL_ROBOT';
+
 // ==============================================================================
 // IDENTIDADE DOS ROBÔS (Fase 2 do multi-robô) — o `magic` é a placa do EA no MT5:
 // cada robô carimba suas ordens com um número próprio e a ponte só mexe na posição
@@ -104,7 +107,10 @@ export interface OrderAuditEvent {
     | 'MANUAL_CLOSED'
     | 'ORDER_EXPIRED'
     | 'FLIP_REVERSAL_CLOSED'
-    | 'DAY_CLOSE_FORCED';
+    | 'DAY_CLOSE_FORCED'
+    // Robôs direcionais (hedge): o sinal do robô CONTRÁRIO fechou só as posições deste robô
+    // (onCloseOpposite → CLOSE_POSITIONS com o magic do robô alvo). Ver directionalRobotService.
+    | 'OPPOSITE_ROBOT_SIGNAL';
   title: string;
   details: string;
   price?: number;
@@ -127,7 +133,7 @@ export interface TradeOrder {
   exitPrice?: number;
   exitTimestamp?: number;
   exitTimeStr?: string;
-  exitReason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'BREAKEVEN' | 'TRAILING_STOP' | 'MANUAL' | 'EXPIRED_PULLBACK' | 'FLIP_REVERSAL' | 'DAY_CLOSE' | 'FINANCIAL_LOCK';
+  exitReason?: 'TAKE_PROFIT' | 'STOP_LOSS' | 'BREAKEVEN' | 'TRAILING_STOP' | 'MANUAL' | 'EXPIRED_PULLBACK' | 'FLIP_REVERSAL' | 'DAY_CLOSE' | 'FINANCIAL_LOCK' | 'OPPOSITE_ROBOT_SIGNAL';
   source?: 'ROBOT_EA' | 'MANUAL' | 'MT5_LIVE';
   magicNumber?: number;
   contracts: number;
@@ -275,8 +281,35 @@ export interface AutomationConfig {
   maxSimultaneousPositions: number;
   hedgeOppositeAction: 'ALLOW_SIMULTANEOUS' | 'CLOSE_OPPOSITE' | 'IGNORE_NEW';
   orderFillingMode: 'ORDER_FILLING_IOC' | 'ORDER_FILLING_RETURN' | 'ORDER_FILLING_FOK';
-  magicNumber: number; // Número Mágico do EA para rastreamento no MT5
+  /**
+   * Número Mágico do EA para rastreamento no MT5.
+   *
+   * LEGADO NA ESTRATÉGIA (remoção gradual, Passo 2 robôs direcionais): o magic é IDENTIDADE
+   * RUNTIME do robô, não parâmetro de estratégia. O campo continua no tipo e continua sendo LIDO
+   * de estratégias salvas antigas (compatibilidade), mas `strategyLibraryService` o trata como
+   * chave de runtime: ativar/editar estratégia não troca mais o magic do Robô 1, e os robôs
+   * direcionais (RoboCompra 100001 / RoboVenda 100002) recebem o magic na ATIVAÇÃO
+   * (`createDirectionalRobot`), nunca da estratégia.
+   */
+  magicNumber: number;
   orderComment: string; // Identificador da ordem na boleta da B3
+
+  /**
+   * Trava de direção da ESTRATÉGIA (conta hedge). undefined = 'BOTH' — estratégia salva antes do
+   * campo continua operando os dois lados, exatamente como antes. Um robô direcional rejeita
+   * qualquer ordem que conflite com esta trava.
+   */
+  directionLock?: DirectionLock;
+  /**
+   * Sinal contrário fecha as posições do robô ALVO (só as do magic dele) — campo de estratégia.
+   * undefined/false = comportamento atual (nenhum fechamento cruzado entre robôs).
+   */
+  onCloseOpposite?: boolean;
+  /**
+   * Papel do robô dono deste config. É RUNTIME (identidade, como o magic): nunca vem da estratégia.
+   * undefined = 'MAIN' = Robô 1 de hoje, nada muda para ele.
+   */
+  robotRole?: RobotRole;
   
   // Configurações de Entrada no Pullback / Reteste da Abertura
   entryTriggerType: 'MARKET_ON_CLOSE' | 'PULLBACK_ENTRY'; // A mercado no fechamento vs Ordem limitada no retorno

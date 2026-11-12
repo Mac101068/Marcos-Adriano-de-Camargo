@@ -526,9 +526,9 @@ export function isOrderForAsset(
 
   // 3. Magic Number
   if (order.magicNumber) {
-    if (asset.id === 'WIN' && (order.magicNumber === 150101 || order.magicNumber === 150102)) return true;
-    if (asset.id === 'WDO' && (order.magicNumber === 150201 || order.magicNumber === 150202)) return true;
-    if (asset.id === 'BTCBR' && (order.magicNumber === 150301 || order.magicNumber === 150302)) return true;
+    if (asset.id === 'WIN' && (order.magicNumber === 150101 || order.magicNumber === 150102 || order.magicNumber === 100001 || order.magicNumber === 100002)) return true;
+    if (asset.id === 'WDO' && (order.magicNumber === 150201 || order.magicNumber === 150202 || order.magicNumber === 100001 || order.magicNumber === 100002)) return true;
+    if (asset.id === 'BTCBR' && (order.magicNumber === 150301 || order.magicNumber === 150302 || order.magicNumber === 100001 || order.magicNumber === 100002)) return true;
     if (order.magicNumber === 102030) {
       if (asset.id === 'WIN') return p >= 50000;
       if (asset.id === 'WDO') return p > 0 && p < 20000;

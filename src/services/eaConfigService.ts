@@ -85,6 +85,9 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   orderFillingMode: 'ORDER_FILLING_RETURN',
   magicNumber: 102030,
   orderComment: 'Pyramid10R_Flow',
+  directionLock: 'BOTH',
+  onCloseOpposite: false,
+  robotRole: 'MAIN',
   entryTriggerType: 'MARKET_ON_CLOSE',
   pullbackTarget: 'BOX_OPEN',
   pullbackCustomPoints: 25,
@@ -418,6 +421,9 @@ export class EaConfigService {
               ? DEFAULT_EA_CONFIG.mt5Host
               : parsed.mt5Host,
           enablePartialExit: stratMode === 'PYRAMID_FLOW_CONFLUENCE' ? false : (parsed.enablePartialExit ?? true),
+          directionLock: parsed.directionLock ?? DEFAULT_EA_CONFIG.directionLock,
+          onCloseOpposite: parsed.onCloseOpposite ?? DEFAULT_EA_CONFIG.onCloseOpposite,
+          robotRole: parsed.robotRole ?? DEFAULT_EA_CONFIG.robotRole,
           // Robô 2: sempre reassemble — storage antigo não tem o campo, e um objeto parcial
           // não pode deixar `scaleR` undefined (a sombra derivaria pts de undefined).
           shadowRobot: normalizeShadowRobot(parsed.shadowRobot),

@@ -19,6 +19,11 @@ const STORAGE_KEY = 'fluxo_strategy_library_v1';
  * FASE A (banco de dados único): campos de RUNTIME/CONEXÃO que vivem só no config ativo —
  * nunca vão para a `SavedStrategy`. Todo o RESTO do `AutomationConfig` é campo de estratégia e
  * tem como fonte autoritativa a biblioteca.
+ *
+ * NOTA (Passo 2 robôs direcionais): `magicNumber` e `robotRole` são identidades RUNTIME do robô.
+ * Estratégias salvas antigas ainda podem ter o campo gravado no JSON (para retrocompatibilidade),
+ * mas ele pertence ao runtime do robô ativo e nunca deve sobrescrever a identidade do robô
+ * (ex: Robô 1 = 102030, RoboCompra = 100001, RoboVenda = 100002).
  */
 const RUNTIME_KEYS: ReadonlySet<keyof AutomationConfig> = new Set<keyof AutomationConfig>([
   'active',
@@ -30,6 +35,8 @@ const RUNTIME_KEYS: ReadonlySet<keyof AutomationConfig> = new Set<keyof Automati
   'strategyId',
   'assetId',
   'symbol',
+  'magicNumber',
+  'robotRole',
 ]);
 
 /** Só os campos de runtime presentes em `cfg` (para re-aplicar por cima da estratégia). */
