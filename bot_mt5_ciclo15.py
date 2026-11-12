@@ -619,7 +619,9 @@ def check_trade_allowed(state, data, action):
         comment.startswith("MAE_") or
         comment.startswith("PIR_") or
         comment.startswith("VARAL_") or
-        data.get("magic") in (MANUAL_ORDER_MAGIC, 150101, 150201, 150301, 150102, 150202, 150302)
+        comment.startswith("RCOMP_") or
+        comment.startswith("RVEND_") or
+        data.get("magic") in (MANUAL_ORDER_MAGIC, 100001, 100002, 150101, 150201, 150301, 150102, 150202, 150302)
     )
 
     if action in ENTRY_ACTIONS and not state["armed"] and not is_operator_order:

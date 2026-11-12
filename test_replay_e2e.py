@@ -37,6 +37,51 @@ def checa(nome, ok, detalhe=""):
         FALHAS.append(nome)
 
 
+def teste_arm_robos_direcionais():
+    """Seção H: os robôs direcionais são exceção do ARM (magics 100001/100002).
+
+    O cartão do robô direcional é o consentimento do operador, então RCOMP_/RVEND_ e os magics
+    100001/100002 despacham sem esperar o ARM — igual boleta, Copiloto e varais. O que este bloco
+    protege é a ORDEM das camadas: a trava de ambiente continua ACIMA do ARM, e a exceção não pode
+    virar porta aberta para qualquer entrada sem identidade.
+
+    Fica em função própria para poder rodar sozinho (as seções A-G leem a fita inteira):
+        .\\venv\\Scripts\\python.exe -c "import test_replay_e2e as t; t.teste_arm_robos_direcionais()"
+    """
+    print("\nH. ARM: os robôs direcionais são exceção (magics 100001/100002)")
+    ambiente_antigo, modo_antigo = ponte.ORDERS_BLOCKED, ponte.REPLAY_MODE
+    try:
+        ponte.ORDERS_BLOCKED = False
+        ponte.REPLAY_MODE = False
+
+        def pede_entrada(data):
+            st = {"authenticated": True, "armed": False, "order_times": []}
+            return ponte.check_trade_allowed(st, data, "ORDER_SEND")
+
+        lib, mot = pede_entrada({"contracts": 1, "magic": 100001, "comment": "RCOMP_WIN"})
+        checa("RoboCompra (100001) entra sem ARM", lib, mot)
+        lib, mot = pede_entrada({"contracts": 1, "magic": 100002, "comment": "RVEND_WIN"})
+        checa("RoboVenda (100002) entra sem ARM", lib, mot)
+        lib, mot = pede_entrada({"contracts": 1, "comment": "RCOMP_WIN"})
+        checa("o prefixo RCOMP_ basta, sem magic no payload", lib, mot)
+        lib, mot = pede_entrada({"contracts": 1})
+        checa("entrada sem identidade NÃO passa sem ARM (exceção não é porta aberta)", not lib, mot)
+
+        ponte.ORDERS_BLOCKED = True
+        lib, mot = pede_entrada({"contracts": 1, "magic": 100001, "comment": "RCOMP_WIN"})
+        checa("a trava de ambiente segue ACIMA do ARM para o 100001",
+              not lib and "ORDERS_BLOCKED=1" in mot, mot)
+        lib, mot = pede_entrada({"contracts": 1, "magic": 100002, "comment": "RVEND_WIN"})
+        checa("a trava de ambiente segue ACIMA do ARM para o 100002",
+              not lib and "ORDERS_BLOCKED=1" in mot, mot)
+
+        st = {"authenticated": True, "armed": False, "order_times": []}
+        lib, mot = ponte.check_trade_allowed(st, {"magic": 100001}, "CLOSE_POSITIONS")
+        checa("a zeragem do 100001 segue liberada mesmo na trava", lib, mot)
+    finally:
+        ponte.ORDERS_BLOCKED, ponte.REPLAY_MODE = ambiente_antigo, modo_antigo
+
+
 class WsFake:
     """WebSocket mínimo: a ponte só usa `send(json)` e `remote_address` neste caminho."""
 
@@ -238,6 +283,9 @@ async def principal():
         ponte.ORDERS_BLOCKED, ponte.REPLAY_MODE = ambiente_antigo, modo_antigo
         checa("a conferação não deixa trava ligada para os próximos testes",
               ponte.ordens_bloqueadas() == bool(ambiente_antigo or modo_antigo))
+
+
+    teste_arm_robos_direcionais()
 
 
 if __name__ == "__main__":
