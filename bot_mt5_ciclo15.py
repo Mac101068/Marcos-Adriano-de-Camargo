@@ -3193,6 +3193,8 @@ async def send_account_info(websocket):
             "login": acc.login if acc else 0,
 
             "broker": acc.company if acc else "MetaTrader 5",
+            "server": acc.server if acc else "",
+            "tradeMode": acc.trade_mode if acc else -1,
 
             "balance": acc.balance if acc else 0.0,
 
