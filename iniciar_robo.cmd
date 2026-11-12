@@ -84,4 +84,7 @@ echo   A trava do ambiente so cai reiniciando a ponte SEM este script.
 echo   Nao faca isso a menos que queira operar de verdade.
 echo --------------------------------------------------------
 echo.
+
+if defined _web start "" http://localhost:3000
+
 pause
