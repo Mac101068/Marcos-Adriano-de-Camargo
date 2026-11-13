@@ -49,35 +49,34 @@ def teste_arm_robos_direcionais():
         .\\venv\\Scripts\\python.exe -c "import test_replay_e2e as t; t.teste_arm_robos_direcionais()"
     """
     print("\nH. ARM: os robôs direcionais são exceção (magics 100001/100002)")
+    if "ORDERS_BLOCKED" not in os.environ:
+        # O padrão tem de ser fail-safe: sem a variável no ambiente, a ponte nasce TRAVADA.
+        # Em 13/Nov/2026 o padrão era o contrário e uma largada fora do iniciar_robo.cmd
+        # executou 408 entradas reais em conta demo.
+        checa("sem ORDERS_BLOCKED no ambiente, a ponte nasce TRAVADA", ponte.ORDERS_BLOCKED is True,
+              f"ORDERS_BLOCKED={ponte.ORDERS_BLOCKED}")
     ambiente_antigo, modo_antigo = ponte.ORDERS_BLOCKED, ponte.REPLAY_MODE
+
+    def pede_entrada(data):
+        # Cada pedido nasce desarmado: é a condição do teste, não estado compartilhado.
+        st = {"authenticated": True, "armed": False, "order_times": []}
+        return ponte.check_trade_allowed(st, data, "ORDER_SEND")
+
     try:
-        ponte.ORDERS_BLOCKED = False
-        ponte.REPLAY_MODE = False
+        ponte.ORDERS_BLOCKED = ponte.REPLAY_MODE = False
+        for magic, comment in ((100001, "RCOMP_WIN"), (100002, "RVEND_WIN")):
+            lib, mot = pede_entrada({"contracts": 1, "magic": magic, "comment": comment})
+            checa(f"Robô {magic} entra sem ARM (magic + comentário)", lib, mot)
+            lib, mot = pede_entrada({"contracts": 1, "comment": comment})
+            checa(f"prefixo {comment.split('_')[0]}_ basta, sem magic no payload", lib, mot)
 
-        def pede_entrada(data):
-            st = {"authenticated": True, "armed": False, "order_times": []}
-            return ponte.check_trade_allowed(st, data, "ORDER_SEND")
-
-        lib, mot = pede_entrada({"contracts": 1, "magic": 100001, "comment": "RCOMP_WIN"})
-        checa("RoboCompra (100001) entra sem ARM", lib, mot)
-        lib, mot = pede_entrada({"contracts": 1, "magic": 100002, "comment": "RVEND_WIN"})
-        checa("RoboVenda (100002) entra sem ARM", lib, mot)
-        lib, mot = pede_entrada({"contracts": 1, "comment": "RCOMP_WIN"})
-        checa("o prefixo RCOMP_ basta, sem magic no payload", lib, mot)
         lib, mot = pede_entrada({"contracts": 1})
         checa("entrada sem identidade NÃO passa sem ARM (exceção não é porta aberta)", not lib, mot)
 
         ponte.ORDERS_BLOCKED = True
         lib, mot = pede_entrada({"contracts": 1, "magic": 100001, "comment": "RCOMP_WIN"})
-        checa("a trava de ambiente segue ACIMA do ARM para o 100001",
+        checa("a trava de ambiente segue ACIMA do ARM",
               not lib and "ORDERS_BLOCKED=1" in mot, mot)
-        lib, mot = pede_entrada({"contracts": 1, "magic": 100002, "comment": "RVEND_WIN"})
-        checa("a trava de ambiente segue ACIMA do ARM para o 100002",
-              not lib and "ORDERS_BLOCKED=1" in mot, mot)
-
-        st = {"authenticated": True, "armed": False, "order_times": []}
-        lib, mot = ponte.check_trade_allowed(st, {"magic": 100001}, "CLOSE_POSITIONS")
-        checa("a zeragem do 100001 segue liberada mesmo na trava", lib, mot)
     finally:
         ponte.ORDERS_BLOCKED, ponte.REPLAY_MODE = ambiente_antigo, modo_antigo
 

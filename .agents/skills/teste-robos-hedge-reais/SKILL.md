@@ -35,8 +35,8 @@ Este manual define o procedimento padrão para ensaiar, verificar isolamento de 
    - Trava de Direção (`directionLock`): `BUY_ONLY` no RoboCompra, `SELL_ONLY` no RoboVenda.
    - `onCloseOpposite`: Inicia como `false`. Ligar apenas no teste específico de encerramento por sinal contrário.
    - Verificar que a boleta (`999999`) e o Robô 1 (`102030`) permanecem completamente isolados.
-   - Os robôs direcionais são **exceção do ARM**: `100001` e `100002` despacham mesmo com a ponte em `EM SEGURO`, igual à boleta (`999999`), ao Copiloto e aos varais — o cartão do robô é o consentimento explícito do operador.
-   - A barreira contra ordem real em conta real é a **trava de ambiente**: `ORDERS_BLOCKED=1` (definida no `iniciar_robo.cmd`) ou o modo `Replay` da tela. Ela segura a ENTRADA dos dois magics **acima** do ARM, inclusive com `ARM` liberado. Saídas (parcial, stop, zeragem) seguem liberadas de propósito.
+   - Os robôs direcionais são **exceção do ARM**: `100001`/`100002` (comentários `RCOMP_`/`RVEND_`) despacham com a ponte em `EM SEGURO`, igual à boleta, ao Copiloto e aos varais — o cartão do robô é o consentimento do operador.
+   - Contra ordem real vale a **trava de ambiente**, que desde 13/Nov/2026 vem **ligada por padrão** (`ORDERS_BLOCKED` ausente = travada; operar de verdade exige `ORDERS_BLOCKED=0` explícito). O modo Replay da tela também trava. Ela segura a ENTRADA dos dois magics acima do ARM; saídas seguem liberadas. Coberto pela seção H do `test_replay_e2e.py`.
 
 ---
 

@@ -410,6 +410,12 @@ MAGIC_NUMBER = 102030
 
 MANUAL_ORDER_MAGIC = 999999
 
+# Magics que o operador dispara direto: boleta manual (999999), robôs direcionais (100001 compra,
+# 100002 venda) e varais (1501xx/1502xx/1503xx). Eles NÃO esperam o ARM — o clique no cartão é o
+# consentimento. A trava de ambiente (ordens_bloqueadas) continua segurando a entrada acima disso.
+OPERATOR_MAGICS = (MANUAL_ORDER_MAGIC, 100001, 100002,
+                   150101, 150201, 150301, 150102, 150202, 150302)
+
 ORDER_COMMENT = "Renko10R_Flow"
 
 
@@ -492,14 +498,16 @@ ENTRY_ACTIONS = {"ORDER_SEND"}
 TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_POSITIONS"}
 
 
-# Trava de execução por ambiente. PADRÃO = DESLIGADA (não muda o comportamento de hoje); com
-# ORDERS_BLOCKED=1 a ponte serve tudo (ticks, histórico, sinais, diário) mas nenhuma ordem de
-# entrada sai, mesmo com cliente ARMADO. Existe por dois motivos, e o segundo é o que quebra
-# replay de validação: (1) reiniciar a ponte com a tela do operador aberta re-autentica com
+# Trava de execução por ambiente. PADRÃO = LIGADA (fail-safe): a ponte nasce sem enviar entrada
+# nenhuma e operar de verdade exige dizer sim explicitamente, com ORDERS_BLOCKED=0. A trava serve a
+# dois propósitos: (1) reiniciar a ponte com a tela do operador aberta re-autentica com
 # `armed: config.active`, ou seja, o robô volta armado sem ninguém ter dito sim naquela sessão;
-# (2) a tela pode querer rodar um replay do pregão enquanto o loop vivo continua vendo ticks reais
-# -- sem esta trava o SINAL GERADO do loop vivo executa ordem real no meio do ensaio.
-ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "").strip().lower() in ("1", "true", "sim", "on")
+# (2) a tela pode rodar um replay do pregão enquanto o loop vivo continua vendo ticks reais --
+# sem esta trava o SINAL GERADO do loop vivo executa ordem real no meio do ensaio.
+# O padrão era DESLIGADA, e em 13/Nov/2026 isso cobrou o preço: uma ponte iniciada fora do
+# iniciar_robo.cmd (console/atalho) nasceu sem a variável e executou 408 entradas reais, sem
+# deixar rastro no log -- só o script redireciona a saída. Invertido, qualquer largada nasce travada.
+ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "1").strip().lower() in ("1", "true", "sim", "on")
 
 # Versão ACIONÁVEL da mesma trava, para não precisar reiniciar a ponte a cada sessão de estudo:
 # a tela manda {"action":"SET_REPLAY_MODE","on":true} e o processo passa a segurar as entradas.
@@ -611,17 +619,11 @@ def check_trade_allowed(state, data, action):
                        "de propósito: encerrar posição reduz risco e você precisa poder se proteger "
                        "no meio de um ensaio")
 
-    # Ordens manuais da boleta ou do modo Copiloto disparadas pelo operador:
+    # Ordens disparadas pelo operador (boleta, Copiloto, varal, robôs direcionais): passam pelo ARM.
     comment = str(data.get("comment", ""))
-    is_operator_order = bool(
-        comment.startswith("COPILOT") or
-        comment.startswith("WEB_") or
-        comment.startswith("MAE_") or
-        comment.startswith("PIR_") or
-        comment.startswith("VARAL_") or
-        comment.startswith("RCOMP_") or
-        comment.startswith("RVEND_") or
-        data.get("magic") in (MANUAL_ORDER_MAGIC, 100001, 100002, 150101, 150201, 150301, 150102, 150202, 150302)
+    is_operator_order = (
+        comment.startswith(("COPILOT", "WEB_", "MAE_", "PIR_", "VARAL_", "RCOMP_", "RVEND_"))
+        or data.get("magic") in OPERATOR_MAGICS
     )
 
     if action in ENTRY_ACTIONS and not state["armed"] and not is_operator_order:
@@ -3810,6 +3812,18 @@ async def ws_handler(websocket):
 
                     print(f" ⛔ ORDEM REJEITADA de {peer} ({action}): {reason}", flush=True)
 
+                    # A rejeição também entra na trilha de ordens: sem esta linha o CSV não
+                    # distingue "a tela não tentou" de "a trava barrou" -- foi o que fez a
+                    # auditoria de 13/Nov ler zero barradas enquanto o log mostrava cinco.
+                    if action in ENTRY_ACTIONS and ordens_bloqueadas():
+                        try:
+                            _mgr_rej = get_or_create_order_manager(data.get("symbol") or SYMBOL)
+                            _mgr_rej._audit_ordem("APP_ORDER_SEND", data.get("type", "BUY"),
+                                                  data.get("contracts", 1), None, None, None,
+                                                  None, None, False, "BLOQUEADO_POR_TRAVA")
+                        except Exception:
+                            pass
+
                     await send_json(websocket, {
 
                         "type": "RISK_REJECT",
@@ -4738,12 +4752,12 @@ async def main():
     # rodar replay/validação, é aqui que ele confere que nenhuma ordem de entrada sai nesta sessão.
     if ORDERS_BLOCKED:
         print(" 🛑 TRAVA DE EXECUÇÃO ATIVA (ORDERS_BLOCKED): a ponte serve ticks, histórico, sinais e "
-              "diário, mas NÃO envia nenhuma ordem de entrada -- modo replay/validação. Essa trava do "
-              "ambiente só cai reiniciando o processo sem a variável.", flush=True)
+              "diário, mas NÃO envia nenhuma ordem de entrada -- modo replay/validação. Este é o "
+              "PADRÃO: para operar de verdade reinicie o processo com ORDERS_BLOCKED=0.", flush=True)
     else:
-        print(" ▶️  TRAVA DE EXECUÇÃO desligada: entradas liberadas para clientes ARMADOS (pregão ao "
-              "vivo). Para ensaiar sem tocar na conta, ligue o MODO REPLAY na tela (ou rode com "
-              "ORDERS_BLOCKED=1).", flush=True)
+        print(" ▶️  TRAVA DE EXECUÇÃO desligada (ORDERS_BLOCKED=0): entradas liberadas para clientes "
+              "ARMADOS (pregão ao vivo). Para voltar ao ensaio, reinicie sem ORDERS_BLOCKED ou "
+              "ligue o MODO REPLAY na tela.", flush=True)
 
     # Extrato da corretora no disco assim que a ponte enxerga a conta, e de 5 em 5 minutos:
     # se o processo cair, o pregão já está auditado até aquele ponto.

@@ -1,6 +1,9 @@
 @echo off
 title RoboFluxoB3 - Conexao MetaTrader 5 ao Vivo (Ciclo 15)
 chcp 65001 > nul
+REM Trava de execucao: este lancador nao redireciona log, entao a trava precisa ser
+REM explicita. Sem ela a ponte nasce liberada e envia ordem real (13/Nov/2026).
+set "ORDERS_BLOCKED=1"
 echo =====================================================================
 echo  RoboFluxoB3 - Ponte de Conexao MetaTrader 5 (WINZ26 / B3 - Ciclo 15)
 echo =====================================================================
