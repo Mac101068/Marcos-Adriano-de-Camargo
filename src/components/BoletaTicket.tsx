@@ -679,7 +679,7 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
       </div>
 
       {/* Ações */}
-      <div className="px-2 pb-2 flex items-center gap-1.5">
+      <div className="px-2 pb-1.5 flex items-center gap-1.5">
         <button
           onClick={() => onManualOrder?.('BUY')}
           disabled={!onManualOrder}
@@ -702,6 +702,28 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
           <ArrowDown className="w-3 h-3 stroke-[2.5]" />
           <span>VENDA</span>
         </button>
+      </div>
+
+      {/* Contratos Abertos na Compra e na Venda */}
+      <div className="px-2 pb-1.5 grid grid-cols-2 gap-1.5 font-mono">
+        <div
+          className="flex items-center justify-between px-2 py-1 rounded bg-emerald-950/40 border border-emerald-800/50"
+          title={`Contratos abertos em COMPRA: ${hedgeBook?.buy.contracts || 0} ct (${hedgeBook?.buy.filled || 0} ordens)`}
+        >
+          <span className="text-[9px] font-bold text-emerald-400">COMPRA:</span>
+          <span className="text-[11px] font-bold text-emerald-300">
+            {hedgeBook?.buy.contracts || 0} <span className="text-[9px] font-normal text-emerald-500/80">ct</span>
+          </span>
+        </div>
+        <div
+          className="flex items-center justify-between px-2 py-1 rounded bg-rose-950/40 border border-rose-800/50"
+          title={`Contratos abertos em VENDA: ${hedgeBook?.sell.contracts || 0} ct (${hedgeBook?.sell.filled || 0} ordens)`}
+        >
+          <span className="text-[9px] font-bold text-rose-400">VENDA:</span>
+          <span className="text-[11px] font-bold text-rose-300">
+            {hedgeBook?.sell.contracts || 0} <span className="text-[9px] font-normal text-rose-500/80">ct</span>
+          </span>
+        </div>
       </div>
       {/* ZERAR TUDO em cima dos ZERAR por lado, sem borda entre eles: os três zerar formam
           um bloco só, logo abaixo de COMPRA/VENDA. Fecha os dois lados de uma vez. */}

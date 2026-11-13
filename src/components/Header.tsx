@@ -25,6 +25,7 @@ import {
   Palette,
   Layers,
   CalendarClock,
+  Bot,
 } from 'lucide-react';
 import { MT5ConnectionState } from '../types/trading';
 import { UserProfile } from '../types/auth';
@@ -32,7 +33,7 @@ import { SubscriptionStatusBadge } from './SubscriptionStatusBadge';
 import { AlertChip } from './AlertChip';
 import { ALLOW_UNCONFIRMED_PREVIEW, ASSETS, assetSymbols, chartSymbolFor, SYMBOL_ROLE_LABEL, type AssetId, type AssetSpec } from '../assets/assetRegistry';
 
-type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'python' | 'docs' | 'settings' | 'studio' | 'admin';
+type TabId = 'chart' | 'tape' | 'equity' | 'simulador' | 'comparativo' | 'avaliacao' | 'stats' | 'audit' | 'eas' | 'python' | 'docs' | 'settings' | 'studio' | 'admin';
 
 interface HeaderProps {
   activeTab: TabId;
@@ -457,6 +458,7 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   const analysisItems: MenuItem[] = [
+    { tab: 'eas', label: 'Robôs EAs (Hedge)', icon: Bot, title: 'Painel dedicado dos Robôs Hedge Direcionais (RoboCompra Magic 100001 e RoboVenda Magic 100002)' },
     { tab: 'stats', label: 'Ordens & Performance', icon: CheckCircle2, badge: openOrdersCount, title: 'Ordens abertas e estatísticas de performance' },
     { tab: 'comparativo', label: 'Comparativo 3 Séries', icon: BarChart3, title: 'Coletor de eficiência: Pontos x Range x Tempo na mesma estratégia (contabilidade interna)' },
     { tab: 'avaliacao', label: 'Avaliação Técnica', icon: ClipboardCheck, title: 'Diagnóstico da base do coletor: win rate, fator de lucro, expectativa e recortes por motivo de saída, papel, direção e horário de entrada' },
@@ -516,6 +518,21 @@ export const Header: React.FC<HeaderProps> = ({
       <nav className="hidden lg:flex items-center gap-1 bg-slate-900/80 p-0.5 rounded-lg border border-slate-800 flex-1 justify-start ml-1">
         <MenuGroup label="Gráficos" icon={LineChart} items={chartItems} activeTab={activeTab} onSelect={setActiveTab} />
         <MenuGroup label="Análise" icon={BarChart2} items={analysisItems} activeTab={activeTab} onSelect={setActiveTab} />
+        
+        {/* Botão de Destaque Dedicado para a Aba dos Robôs EAs */}
+        <button
+          onClick={() => setActiveTab('eas')}
+          title="Acessar o Painel Central dos Robôs Hedge EAs (RoboCompra 100001 e RoboVenda 100002)"
+          className={`flex items-center gap-1.5 h-6 px-2.5 rounded-md text-[10px] leading-none font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'eas'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-indigo-400 hover:text-indigo-200 hover:bg-indigo-950/40'
+          }`}
+        >
+          <Bot className="w-3.5 h-3.5" />
+          Hedge EAs
+        </button>
+
         <MenuGroup label="Sistema" icon={Settings} items={systemItems} activeTab={activeTab} onSelect={setActiveTab} rightAlign />
 
         {/* Atalho da janela "Dados" — controles do painel Renko em janela flutuante */}

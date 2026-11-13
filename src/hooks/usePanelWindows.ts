@@ -16,6 +16,7 @@ export type PanelTab =
   | 'avaliacao'
   | 'stats'
   | 'audit'
+  | 'eas'
   | 'python'
   | 'docs'
   | 'settings'

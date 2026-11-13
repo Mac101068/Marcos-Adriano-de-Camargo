@@ -197,6 +197,7 @@ if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined')
 }
 
 import { IntradayOrderAudit } from './components/IntradayOrderAudit';
+import { DirectionalEAsPanel } from './components/DirectionalEAsPanel';
 
 import { ProjectDossierPdfModal } from './components/ProjectDossierPdfModal';
 
@@ -542,12 +543,7 @@ export default function App() {
   const asset = React.useMemo(() => resolveAsset(config.symbol, config.assetId), [config.symbol, config.assetId]);
 
   // Robôs direcionais (Passo 3): RoboCompra (magic 100001) e RoboVenda (magic 100002).
-  // Nunca enviam ordem real à ponte sem o robô estar ativado.
-  const [directionalSnapshots, setDirectionalSnapshots] = useState<{
-    buy: DirectionalRobotSnapshot;
-    sell: DirectionalRobotSnapshot;
-  } | null>(null);
-
+  // Persistidos em localStorage (resistem ao F5 e sincronizam via BroadcastChannel).
   const directionalRobotsRef = useRef<{ buy: DirectionalRobot; sell: DirectionalRobot } | null>(null);
   if (!directionalRobotsRef.current) {
     directionalRobotsRef.current = {
@@ -556,9 +552,9 @@ export default function App() {
         magic: 100001,
         asset,
         baseConfig: {
-          contracts: config.contracts,
-          stopLossPoints: config.stopLossPoints,
-          takeProfitPoints: config.takeProfitPoints,
+          contracts: config.contracts || 1,
+          stopLossPoints: 100,
+          takeProfitPoints: 50,
           onCloseOpposite: config.onCloseOpposite ?? false,
           directionLock: config.directionLock,
         } as Partial<AutomationConfig>,
@@ -568,9 +564,9 @@ export default function App() {
         magic: 100002,
         asset,
         baseConfig: {
-          contracts: config.contracts,
-          stopLossPoints: config.stopLossPoints,
-          takeProfitPoints: config.takeProfitPoints,
+          contracts: config.contracts || 1,
+          stopLossPoints: 100,
+          takeProfitPoints: 50,
           onCloseOpposite: config.onCloseOpposite ?? false,
           directionLock: config.directionLock,
         } as Partial<AutomationConfig>,
@@ -578,6 +574,14 @@ export default function App() {
     };
   }
   const directionalRobots = directionalRobotsRef.current;
+
+  const [directionalSnapshots, setDirectionalSnapshots] = useState<{
+    buy: DirectionalRobot;
+    sell: DirectionalRobot;
+  }>(() => ({
+    buy: directionalRobots.buy.getSnapshot(),
+    sell: directionalRobots.sell.getSnapshot(),
+  }));
 
   // Atualiza snapshots dos robôs para re-renderizar painel e boleta
   const syncDirectionalSnapshots = useCallback(() => {
@@ -598,6 +602,13 @@ export default function App() {
       target.pause();
     }
     syncDirectionalSnapshots();
+    try {
+      saasChannelRef.current?.postMessage({
+        type: 'DIRECTIONAL_ROBOT_SYNC',
+        magic,
+        paused: target.paused,
+      });
+    } catch {}
   }, [syncDirectionalSnapshots]);
 
   /**
@@ -893,10 +904,44 @@ export default function App() {
           if (data.speed) setSimulationSpeed(data.speed);
         } else if (data.type === 'REPLAY_DAYS_SYNC') {
           if (data.days) setReplayDays(data.days);
+        } else if (data.type === 'DIRECTIONAL_ROBOT_SYNC') {
+          if (directionalRobotsRef.current) {
+            directionalRobotsRef.current.buy.loadState();
+            directionalRobotsRef.current.sell.loadState();
+            syncDirectionalSnapshots();
+          }
         }
       };
 
+      const handleStorageEvent = (e: StorageEvent) => {
+        if (e.key && e.key.startsWith('fluxo_quant_b3_directional_robot_v1_') && directionalRobotsRef.current) {
+          directionalRobotsRef.current.buy.loadState();
+          directionalRobotsRef.current.sell.loadState();
+          syncDirectionalSnapshots();
+        }
+      };
+      window.addEventListener('storage', handleStorageEvent);
+
+      const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+        if (!directionalRobotsRef.current) return;
+        const b = directionalRobotsRef.current.buy;
+        const s = directionalRobotsRef.current.sell;
+        // Persiste imediatamente o estado atualizado antes de qualquer reload (F5)
+        b.saveState();
+        s.saveState();
+        const hasOpenPositions =
+          b.positions.some((p) => p.status === 'OPEN') ||
+          s.positions.some((p) => p.status === 'OPEN');
+        if ((!b.paused || !s.paused) && hasOpenPositions) {
+          e.preventDefault();
+          e.returnValue = 'Robô Hedge ativo com posições abertas! O estado será restaurado, mas confirme se deseja recarregar a tela.';
+        }
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
+
       return () => {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+        window.removeEventListener('storage', handleStorageEvent);
         channel.close();
       };
     }
@@ -1277,12 +1322,54 @@ export default function App() {
     assetMigrationRef.current = migrateAssetBaseline(asset);
 
     const saved = OrderAuditService.loadIntradayOrders(asset);
+    let baseOrders: TradeOrder[] = [];
     if (saved && saved.length > 0) {
-      // No boot do app (sem MT5 conectado), NUNCA restauramos ordens com status OPEN ou PENDING_LIMIT
-      return saved.filter((o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT');
+      // No boot do app (sem MT5 conectado), NUNCA restauramos ordens com status OPEN ou PENDING_LIMIT da estratégia geral
+      baseOrders = saved.filter((o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT');
     }
 
-    return [];
+    // Restaura no livro visual as posições abertas ou fechadas dos Robôs Hedge (100001 / 100002) que resistiram ao F5
+    const dirPos = [
+      ...directionalRobots.buy.positions,
+      ...directionalRobots.sell.positions,
+    ];
+    for (const p of dirPos) {
+      const existingIdx = baseOrders.findIndex((o) => o.id === p.id);
+      const mappedOrder: TradeOrder = {
+        id: p.id,
+        symbol: p.symbol,
+        timestamp: p.openedAt,
+        timeStr: new Date(p.openedAt).toTimeString().split(' ')[0],
+        fillTimestamp: p.openedAt,
+        fillTimeStr: new Date(p.openedAt).toTimeString().split(' ')[0],
+        type: p.type,
+        role: 'MAIN',
+        entryPrice: p.entryPrice,
+        contracts: p.contracts,
+        remainingContracts: p.contracts,
+        stopLoss: p.stopLoss && p.stopLoss > 0 ? p.stopLoss : (p.type === 'BUY' ? p.entryPrice - 100 : p.entryPrice + 100),
+        takeProfit: p.takeProfit && p.takeProfit > 0 ? p.takeProfit : (p.type === 'BUY' ? p.entryPrice + 50 : p.entryPrice - 50),
+        isBreakevenActive: p.isBreakevenActive,
+        highestPriceSinceEntry: p.highestPriceSinceEntry,
+        lowestPriceSinceEntry: p.lowestPriceSinceEntry,
+        status: p.status === 'OPEN' ? 'OPEN' : (p.status === 'CLOSED_PROFIT' ? 'CLOSED_TP' : 'CLOSED_SL'),
+        exitPrice: p.exitPrice,
+        exitTimestamp: p.exitTimestamp,
+        exitTimeStr: p.exitTimestamp ? new Date(p.exitTimestamp).toTimeString().split(' ')[0] : undefined,
+        pointsResult: p.pointsResult,
+        financialResult: p.financialResult,
+        source: 'ROBOT_EA',
+        magicNumber: p.magic,
+        triggerReason: `Robô ${p.magic === 100001 ? 'RoboCompra' : 'RoboVenda'} (magic ${p.magic})`,
+      };
+      if (existingIdx >= 0) {
+        baseOrders[existingIdx] = mappedOrder;
+      } else {
+        baseOrders.unshift(mappedOrder);
+      }
+    }
+
+    return baseOrders;
   });
 
   const [latestToast, setLatestToast] = useState<{
@@ -2140,36 +2227,101 @@ export default function App() {
       // Processa no motor de Renko (escala do box da config) e Fluxo
       const renkoRes = engine.processTick(tick, config);
 
-      // Passo 3: mark-to-market dos robôs direcionais (SL/TP + PnL flutuante, sem ponte)
+      // Passo 3: mark-to-market dos robôs direcionais (Trailing Stop, Breakeven, SL/TP + PnL flutuante)
       directionalRobots.buy.onTick(tick.price);
       directionalRobots.sell.onTick(tick.price);
 
-      // Sincroniza fechamentos de SL/TP dos robôs direcionais com a tabela global de ordens no replay/simulador
-      if (isReplayMode) {
-        setOrders((prev) => {
-          let changed = false;
-          const updated = prev.map((o) => {
-            if (o.status !== 'OPEN' || !o.id.startsWith('dir-')) return o;
-            const targetRobot = o.magicNumber === 100001 ? directionalRobots.buy : directionalRobots.sell;
-            const pos = targetRobot.positions.find((p) => p.id === o.id);
-            if (pos && pos.status !== 'OPEN') {
-              changed = true;
-              return {
-                ...o,
-                status: pos.status === 'CLOSED_PROFIT' ? ('CLOSED_TP' as const) : ('CLOSED_SL' as const),
-                exitPrice: pos.exitPrice,
-                exitTimestamp: pos.exitTimestamp,
-                exitTimeStr: pos.exitTimestamp ? new Date(pos.exitTimestamp).toTimeString().split(' ')[0] : undefined,
-                pointsResult: pos.pointsResult,
-                financialResult: pos.financialResult,
-                exitReason: pos.status === 'CLOSED_PROFIT' ? ('TAKE_PROFIT' as const) : ('STOP_LOSS' as const),
-              };
-            }
-            return o;
-          });
-          return changed ? updated : prev;
+      // Sincroniza estado (SL/TP, Trailing Stop/Breakeven e fechamentos) dos robôs direcionais com a tabela global de ordens e gráfico em TODOS os modos
+      setOrders((prev) => {
+        let changed = false;
+        let updated = prev.map((o) => {
+          if (!o.magicNumber || (o.magicNumber !== 100001 && o.magicNumber !== 100002)) return o;
+          const targetRobot = o.magicNumber === 100001 ? directionalRobots.buy : directionalRobots.sell;
+          const pos = targetRobot.positions.find((p) => p.id === o.id);
+          if (!pos) return o;
+
+          const saneSL = pos.stopLoss && pos.stopLoss > 0 ? pos.stopLoss : (pos.type === 'BUY' ? pos.entryPrice - 100 : pos.entryPrice + 100);
+          const saneTP = pos.takeProfit && pos.takeProfit > 0 ? pos.takeProfit : (pos.type === 'BUY' ? pos.entryPrice + 50 : pos.entryPrice - 50);
+
+          if (pos.status !== 'OPEN' && o.status === 'OPEN') {
+            changed = true;
+            return {
+              ...o,
+              stopLoss: saneSL,
+              takeProfit: saneTP,
+              isBreakevenActive: Boolean(pos.isBreakevenActive),
+              status: pos.status === 'CLOSED_PROFIT' ? ('CLOSED_TP' as const) : ('CLOSED_SL' as const),
+              exitPrice: pos.exitPrice,
+              exitTimestamp: pos.exitTimestamp,
+              exitTimeStr: pos.exitTimestamp ? new Date(pos.exitTimestamp).toTimeString().split(' ')[0] : undefined,
+              pointsResult: pos.pointsResult,
+              financialResult: pos.financialResult,
+              exitReason: pos.status === 'CLOSED_PROFIT' ? ('TAKE_PROFIT' as const) : ('STOP_LOSS' as const),
+            };
+          }
+
+          if (
+            pos.status === 'OPEN' &&
+            (o.status !== 'OPEN' ||
+              o.stopLoss !== saneSL ||
+              o.takeProfit !== saneTP ||
+              Boolean(o.isBreakevenActive) !== Boolean(pos.isBreakevenActive))
+          ) {
+            changed = true;
+            return {
+              ...o,
+              status: 'OPEN' as const,
+              stopLoss: saneSL,
+              takeProfit: saneTP,
+              isBreakevenActive: Boolean(pos.isBreakevenActive),
+              highestPriceSinceEntry: pos.highestPriceSinceEntry,
+              lowestPriceSinceEntry: pos.lowestPriceSinceEntry,
+            };
+          }
+
+          return o;
         });
-      }
+
+        // Garante que qualquer posição aberta nos robôs direcionais também exista em `orders` para exibir SL e TP no gráfico
+        const openDirPositions = [
+          ...directionalRobots.buy.positions.filter((p) => p.status === 'OPEN'),
+          ...directionalRobots.sell.positions.filter((p) => p.status === 'OPEN'),
+        ];
+        for (const p of openDirPositions) {
+          if (!updated.some((o) => o.id === p.id)) {
+            changed = true;
+            const saneSL = p.stopLoss && p.stopLoss > 0 ? p.stopLoss : (p.type === 'BUY' ? p.entryPrice - 100 : p.entryPrice + 100);
+            const saneTP = p.takeProfit && p.takeProfit > 0 ? p.takeProfit : (p.type === 'BUY' ? p.entryPrice + 50 : p.entryPrice - 50);
+            updated = [
+              {
+                id: p.id,
+                symbol: p.symbol,
+                timestamp: p.openedAt,
+                timeStr: new Date(p.openedAt).toTimeString().split(' ')[0],
+                fillTimestamp: p.openedAt,
+                fillTimeStr: new Date(p.openedAt).toTimeString().split(' ')[0],
+                type: p.type,
+                role: 'MAIN',
+                entryPrice: p.entryPrice,
+                contracts: p.contracts,
+                remainingContracts: p.contracts,
+                stopLoss: saneSL,
+                takeProfit: saneTP,
+                isBreakevenActive: Boolean(p.isBreakevenActive),
+                highestPriceSinceEntry: p.highestPriceSinceEntry,
+                lowestPriceSinceEntry: p.lowestPriceSinceEntry,
+                status: 'OPEN',
+                source: 'ROBOT_EA',
+                magicNumber: p.magic,
+                triggerReason: `Robô ${p.magic === 100001 ? 'RoboCompra' : 'RoboVenda'} (magic ${p.magic})`,
+              },
+              ...updated,
+            ];
+          }
+        }
+
+        return changed ? updated : prev;
+      });
 
       // Alimenta as séries experimentais (Range e Tempo) com o mesmo fluxo de ticks
       if (allTicksRef.current.length < 50000) allTicksRef.current.push(tick);
@@ -2360,6 +2512,7 @@ export default function App() {
           const activeRes = signalType === 'BUY' ? buyRes : sellRes;
           if (!activeRobot.paused && activeRes.intent) {
             const int = activeRes.intent;
+            const isLiveExec = !isReplaying && mt5State.status === 'CONNECTED' && activeRobot.executionMode === 'LIVE';
             const newDirOrder: TradeOrder = {
               id: int.id,
               symbol: int.symbol,
@@ -2375,10 +2528,10 @@ export default function App() {
               stopLoss: int.stopLoss,
               takeProfit: int.takeProfit,
               status: 'OPEN',
-              source: isReplaying ? 'ROBOT_EA' : (mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA'),
+              source: isLiveExec ? 'MT5_LIVE' : 'ROBOT_EA',
               magicNumber: int.magic,
               triggerReason: `Robô ${int.magic === 100001 ? 'RoboCompra' : 'RoboVenda'} (magic ${int.magic})`,
-              isRealMT5: !isReplaying && mt5State.status === 'CONNECTED',
+              isRealMT5: isLiveExec,
             };
             setOrders((prev) => [newDirOrder, ...prev]);
           }
@@ -2406,29 +2559,29 @@ export default function App() {
             );
           }
 
-          // Disparo de ordem real ao MT5 se o robô direcional correspondente estiver ATIVO (não pausado)
+          // Disparo de ordem real ao MT5 se o robô direcional correspondente estiver ATIVO e em modo LIVE
           if (!isReplaying && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            if (signalType === 'BUY' && !directionalRobots.buy.paused && buyRes.intent) {
+            if (signalType === 'BUY' && !directionalRobots.buy.paused && directionalRobots.buy.executionMode === 'LIVE' && buyRes.intent) {
               const sym = config.symbol || (asset.activeContract || asset.primarySymbol);
               wsRef.current.send(JSON.stringify({
                 action: 'ORDER_SEND',
                 symbol: sym,
                 type: 'BUY',
                 contracts: buyRes.intent.contracts || config.contracts || 1,
-                sl: config.stopLossPoints || 0,
-                tp: config.takeProfitPoints || 0,
+                sl: directionalRobots.buy.config.stopLossPoints || 100,
+                tp: directionalRobots.buy.config.takeProfitPoints || 50,
                 magic: 100001,
                 comment: `RCOMP_${sym}`.substring(0, 31),
               }));
-            } else if (signalType === 'SELL' && !directionalRobots.sell.paused && sellRes.intent) {
+            } else if (signalType === 'SELL' && !directionalRobots.sell.paused && directionalRobots.sell.executionMode === 'LIVE' && sellRes.intent) {
               const sym = config.symbol || (asset.activeContract || asset.primarySymbol);
               wsRef.current.send(JSON.stringify({
                 action: 'ORDER_SEND',
                 symbol: sym,
                 type: 'SELL',
                 contracts: sellRes.intent.contracts || config.contracts || 1,
-                sl: config.stopLossPoints || 0,
-                tp: config.takeProfitPoints || 0,
+                sl: directionalRobots.sell.config.stopLossPoints || 100,
+                tp: directionalRobots.sell.config.takeProfitPoints || 50,
                 magic: 100002,
                 comment: `RVEND_${sym}`.substring(0, 31),
               }));
@@ -2477,11 +2630,12 @@ export default function App() {
 
               // encerra a entrada principal oposta e qualquer ordem da pirâmide oposta ainda aberta.
 
-              // Isso ocorre incondicionalmente para proteger o capital!
+              // Isso ocorre incondicionalmente para proteger o capital (APENAS ordens do robô principal / pirâmide, isolando o hedge direcional).
+              const isMainRobotOrder = (o: TradeOrder) => o.magicNumber === mainRobotMagic(config);
 
               const hasOppositeOpen = updatedPrev.some(
 
-                (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType
+                (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType && isMainRobotOrder(o)
 
               );
 
@@ -2493,7 +2647,7 @@ export default function App() {
 
                 updatedPrev = updatedPrev.map((o) => {
 
-                  if ((o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType && isOrderForAsset(o, asset)) {
+                  if ((o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && o.type === oppositeType && isOrderForAsset(o, asset) && isMainRobotOrder(o)) {
                     if (!isPriceSaneForAsset(tick.price, asset) || !isPriceSaneForAsset(o.entryPrice, asset)) return o;
 
                     const pts = o.type === 'BUY' ? tick.price - o.entryPrice : o.entryPrice - tick.price;
@@ -3386,6 +3540,10 @@ export default function App() {
 
 
         let updated = prevOrders.map((ord) => {
+          // Ordens dos Robôs Hedge (100001 / 100002) são gerenciadas exclusivamente pelo DirectionalRobot.onTick
+          if (ord.magicNumber === 100001 || ord.magicNumber === 100002) {
+            return ord;
+          }
           const isManagedByMT5 = (Boolean(ord.ticket) || ord.isRealMT5) && mt5State.status === 'CONNECTED' && !isReplayMode;
 
           // SE FOR ORDEM LIMITADA PENDENTE DE PULLBACK
@@ -4708,6 +4866,10 @@ export default function App() {
                   const saneCur = isPriceSaneForAsset(posCurPrice, curActiveAsset) ? posCurPrice : saneOpen;
                   const pnlPts = isBuy ? (saneCur - saneOpen) : (saneOpen - saneCur);
 
+                  const isHedgeEA = pos.magic === 100001 || pos.magic === 100002;
+                  const fallbackSl = isHedgeEA ? (isBuy ? saneOpen - 100 : saneOpen + 100) : 0;
+                  const fallbackTp = isHedgeEA ? (isBuy ? saneOpen + 50 : saneOpen - 50) : 0;
+
                   if (existingIdx >= 0) {
                     updated[existingIdx] = {
                       ...updated[existingIdx],
@@ -4719,8 +4881,8 @@ export default function App() {
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
                       status: 'OPEN',
-                      stopLoss: posSl > 0 ? posSl : updated[existingIdx].stopLoss,
-                      takeProfit: posTp > 0 ? posTp : updated[existingIdx].takeProfit,
+                      stopLoss: posSl > 0 ? posSl : (updated[existingIdx].stopLoss > 0 ? updated[existingIdx].stopLoss : fallbackSl),
+                      takeProfit: posTp > 0 ? posTp : (updated[existingIdx].takeProfit > 0 ? updated[existingIdx].takeProfit : fallbackTp),
                       pointsResult: Number.isFinite(pnlPts) ? pnlPts : 0,
                       financialResult: Number.isFinite(posProfit) ? posProfit : 0,
                     };
@@ -4739,8 +4901,8 @@ export default function App() {
                       status: 'OPEN',
                       source: 'MT5_LIVE',
                       magicNumber: pos.magic,
-                      stopLoss: posSl > 0 ? posSl : 0,
-                      takeProfit: posTp > 0 ? posTp : 0,
+                      stopLoss: posSl > 0 ? posSl : fallbackSl,
+                      takeProfit: posTp > 0 ? posTp : fallbackTp,
                       triggerReason: 'Execução MT5 Terminal',
                       isRealMT5: true,
                       pointsResult: Number.isFinite(pnlPts) ? pnlPts : 0,
@@ -5339,6 +5501,10 @@ export default function App() {
                   const saneCur = isPriceSaneForAsset(posCurPrice, curActiveAsset) ? posCurPrice : saneOpen;
                   const pnlPts = isBuy ? (saneCur - saneOpen) : (saneOpen - saneCur);
 
+                  const isHedgeEA = pos.magic === 100001 || pos.magic === 100002;
+                  const fallbackSl = isHedgeEA ? (isBuy ? saneOpen - 100 : saneOpen + 100) : 0;
+                  const fallbackTp = isHedgeEA ? (isBuy ? saneOpen + 50 : saneOpen - 50) : 0;
+
                   if (existingIdx >= 0) {
                     updated[existingIdx] = {
                       ...updated[existingIdx],
@@ -5350,8 +5516,8 @@ export default function App() {
                       contracts: pos.volume,
                       remainingContracts: pos.volume,
                       status: 'OPEN',
-                      stopLoss: posSl > 0 ? posSl : updated[existingIdx].stopLoss,
-                      takeProfit: posTp > 0 ? posTp : updated[existingIdx].takeProfit,
+                      stopLoss: posSl > 0 ? posSl : (updated[existingIdx].stopLoss > 0 ? updated[existingIdx].stopLoss : fallbackSl),
+                      takeProfit: posTp > 0 ? posTp : (updated[existingIdx].takeProfit > 0 ? updated[existingIdx].takeProfit : fallbackTp),
                       pointsResult: Number.isFinite(pnlPts) ? pnlPts : 0,
                       financialResult: Number.isFinite(posProfit) ? posProfit : 0,
                     };
@@ -5370,8 +5536,8 @@ export default function App() {
                       status: 'OPEN',
                       source: 'MT5_LIVE',
                       magicNumber: pos.magic,
-                      stopLoss: posSl > 0 ? posSl : 0,
-                      takeProfit: posTp > 0 ? posTp : 0,
+                      stopLoss: posSl > 0 ? posSl : fallbackSl,
+                      takeProfit: posTp > 0 ? posTp : fallbackTp,
                       triggerReason: 'Execução MT5 Terminal',
                       isRealMT5: true,
                       pointsResult: Number.isFinite(pnlPts) ? pnlPts : 0,
@@ -5492,40 +5658,69 @@ export default function App() {
               const bRes = directionalRobots.buy.onSignal(sigType, Number(data.boxIndex) || 0, Number(data.price));
               const sRes = directionalRobots.sell.onSignal(sigType, Number(data.boxIndex) || 0, Number(data.price));
 
-              // Disparo imediato da ordem para a Demo XP se o robô direcional estiver ATIVO
+              const activeHedgeRobot = sigType === 'BUY' ? directionalRobots.buy : directionalRobots.sell;
+              const activeHedgeRes = sigType === 'BUY' ? bRes : sRes;
+              if (!activeHedgeRobot.paused && activeHedgeRes.intent) {
+                const int = activeHedgeRes.intent;
+                const isLiveExec = activeHedgeRobot.executionMode === 'LIVE';
+                const newDirOrder: TradeOrder = {
+                  id: int.id,
+                  symbol: int.symbol,
+                  timestamp: int.createdAt,
+                  timeStr: new Date(int.createdAt).toTimeString().split(' ')[0],
+                  fillTimestamp: int.createdAt,
+                  fillTimeStr: new Date(int.createdAt).toTimeString().split(' ')[0],
+                  type: int.direction,
+                  role: 'MAIN',
+                  entryPrice: int.entryPrice,
+                  contracts: int.contracts,
+                  remainingContracts: int.contracts,
+                  stopLoss: int.stopLoss,
+                  takeProfit: int.takeProfit,
+                  status: 'OPEN',
+                  source: isLiveExec ? 'MT5_LIVE' : 'ROBOT_EA',
+                  magicNumber: int.magic,
+                  triggerReason: `Robô ${int.magic === 100001 ? 'RoboCompra' : 'RoboVenda'} (magic ${int.magic})`,
+                  isRealMT5: isLiveExec,
+                };
+                setOrders((prev) => [newDirOrder, ...prev]);
+              }
+              syncDirectionalSnapshots();
+
+              // Disparo imediato da ordem para a Demo XP se o robô direcional estiver ATIVO e em modo LIVE
               if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                if (sigType === 'BUY' && !directionalRobots.buy.paused && bRes.intent) {
+                if (sigType === 'BUY' && !directionalRobots.buy.paused && directionalRobots.buy.executionMode === 'LIVE' && bRes.intent) {
                   wsRef.current.send(JSON.stringify({
                     action: 'ORDER_SEND',
                     symbol: sym || config.symbol || (asset.activeContract || asset.primarySymbol),
                     type: 'BUY',
                     contracts: bRes.intent.contracts || config.contracts || 1,
-                    sl: config.stopLossPoints || 0,
-                    tp: config.takeProfitPoints || 0,
+                    sl: directionalRobots.buy.config.stopLossPoints || 100,
+                    tp: directionalRobots.buy.config.takeProfitPoints || 50,
                     magic: 100001,
                     comment: `RCOMP_${sym}`.substring(0, 31),
                   }));
-                } else if (sigType === 'SELL' && !directionalRobots.sell.paused && sRes.intent) {
+                } else if (sigType === 'SELL' && !directionalRobots.sell.paused && directionalRobots.sell.executionMode === 'LIVE' && sRes.intent) {
                   wsRef.current.send(JSON.stringify({
                     action: 'ORDER_SEND',
                     symbol: sym || config.symbol || (asset.activeContract || asset.primarySymbol),
                     type: 'SELL',
                     contracts: sRes.intent.contracts || config.contracts || 1,
-                    sl: config.stopLossPoints || 0,
-                    tp: config.takeProfitPoints || 0,
+                    sl: directionalRobots.sell.config.stopLossPoints || 100,
+                    tp: directionalRobots.sell.config.takeProfitPoints || 50,
                     magic: 100002,
                     comment: `RVEND_${sym}`.substring(0, 31),
                   }));
                 }
 
-                if (bRes.closed.length > 0) {
+                if (bRes.closed.length > 0 && directionalRobots.buy.executionMode === 'LIVE') {
                   wsRef.current.send(JSON.stringify({
                     action: 'CLOSE_POSITIONS',
                     symbol: sym || config.symbol || (asset.activeContract || asset.primarySymbol),
                     magic: 100001,
                   }));
                 }
-                if (sRes.closed.length > 0) {
+                if (sRes.closed.length > 0 && directionalRobots.sell.executionMode === 'LIVE') {
                   wsRef.current.send(JSON.stringify({
                     action: 'CLOSE_POSITIONS',
                     symbol: sym || config.symbol || (asset.activeContract || asset.primarySymbol),
@@ -10022,6 +10217,77 @@ ${
 
               </div>
 
+            )}
+
+            {activeTab === 'eas' && (
+              <div className="h-full w-full">
+                <DirectionalEAsPanel
+                  asset={asset}
+                  config={config}
+                  directionalSnapshots={
+                    directionalSnapshots || {
+                      buy: directionalRobots.buy.getSnapshot(),
+                      sell: directionalRobots.sell.getSnapshot(),
+                    }
+                  }
+                  onToggleRobot={handleToggleDirectionalRobot}
+                  onUpdateDirectionalConfig={(magic, patch) => {
+                    if (!directionalRobotsRef.current) return;
+                    const targetRobot = magic === 100001 ? directionalRobotsRef.current.buy : directionalRobotsRef.current.sell;
+                    targetRobot.updateConfig(patch);
+                    // Atualiza imediatamente os SL e TP das ordens abertas no livro global/gráfico
+                    setOrders((prev) =>
+                      prev.map((o) => {
+                        if (o.status !== 'OPEN' || o.magicNumber !== magic) return o;
+                        const pos = targetRobot.positions.find((p) => p.id === o.id);
+                        if (!pos) return o;
+                        return {
+                          ...o,
+                          stopLoss: pos.stopLoss && pos.stopLoss > 0 ? pos.stopLoss : o.stopLoss,
+                          takeProfit: pos.takeProfit && pos.takeProfit > 0 ? pos.takeProfit : o.takeProfit,
+                          isBreakevenActive: Boolean(pos.isBreakevenActive),
+                        };
+                      })
+                    );
+                    syncDirectionalSnapshots();
+                    try {
+                      saasChannelRef.current?.postMessage({ type: 'DIRECTIONAL_ROBOT_SYNC', magic });
+                    } catch {}
+                  }}
+                  onChangeExecutionMode={(magic, mode) => {
+                    if (!directionalRobotsRef.current) return;
+                    if (magic === 100001) {
+                      directionalRobotsRef.current.buy.setExecutionMode(mode);
+                    } else if (magic === 100002) {
+                      directionalRobotsRef.current.sell.setExecutionMode(mode);
+                    }
+                    syncDirectionalSnapshots();
+                    try {
+                      saasChannelRef.current?.postMessage({ type: 'DIRECTIONAL_ROBOT_SYNC', magic, mode });
+                    } catch {}
+                  }}
+                  onResetBook={(magic) => {
+                    if (!directionalRobotsRef.current) return;
+                    if (magic === 100001) {
+                      directionalRobotsRef.current.buy.resetBook();
+                    } else if (magic === 100002) {
+                      directionalRobotsRef.current.sell.resetBook();
+                    } else {
+                      directionalRobotsRef.current.buy.resetBook();
+                      directionalRobotsRef.current.sell.resetBook();
+                    }
+                    setOrders((prev) =>
+                      prev.filter((o) =>
+                        magic ? o.magicNumber !== magic : o.magicNumber !== 100001 && o.magicNumber !== 100002
+                      )
+                    );
+                    syncDirectionalSnapshots();
+                    try {
+                      saasChannelRef.current?.postMessage({ type: 'DIRECTIONAL_ROBOT_SYNC', magic });
+                    } catch {}
+                  }}
+                />
+              </div>
             )}
 
 
