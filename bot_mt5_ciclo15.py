@@ -2083,7 +2083,7 @@ class MT5OrderManager:
 
     def _audit_ordem(self, acao="MERCADO", direcao="", volume=None, preco_box=None, preco_solicitado=None,
                      preco_fill=None, ticket=None, retcode=None, executada=False, motivo="",
-                     box_index="", sl_points=None, tp_points=None):
+                     box_index="", sl_points=None, tp_points=None, magic=None, position=None):
         """Registra a tentativa no diário SEMPRE, inclusive quando nada é enviado.
 
         Existiu um pregão inteiro em que o console dizia "[ABRINDO ORDEM MÃE]" e nenhuma ordem
@@ -2099,6 +2099,8 @@ class MT5OrderManager:
                 preco_box=preco_box, preco_solicitado=preco_solicitado, preco_fill=preco_fill,
                 ticket=ticket, retcode=retcode, executada=executada, sl_pontos=sl_points,
                 tp_pontos=tp_points, motivo=motivo, box_index=box_index,
+                magic=magic if magic is not None else getattr(self, "magic_number", None),
+                position=position,
             )
         except Exception as exc:
             print(f"[AVISO] falha ao gravar diário de ordens: {exc}", flush=True)
@@ -2112,7 +2114,7 @@ class MT5OrderManager:
         if not can_trade:
 
             self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
-                              "BLOQUEADO_POR_HORARIO", box_index, sl_points, tp_points)
+                              "BLOQUEADO_POR_HORARIO", box_index, sl_points, tp_points, magic=magic)
 
             return False, 0
 
@@ -2130,7 +2132,7 @@ class MT5OrderManager:
         tick = mt5.symbol_info_tick(self.symbol)
         if not tick:
             self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
-                              "SEM_TICK_DA_CORRETORA", box_index, sl_points, tp_points)
+                              "SEM_TICK_DA_CORRETORA", box_index, sl_points, tp_points, magic=magic)
             print(f"[ERRO MT5] Sem tick disponível para {self.symbol}!", flush=True)
             return False, 0
 
@@ -2147,7 +2149,7 @@ class MT5OrderManager:
             msg_spread = f"SPREAD_EXCESSIVO | spread={current_spread:.1f} > max={max_spread_pts:.1f}"
             print(f"🛑 [TRAVA DE SPREAD [{self.symbol}]] Ordem cancelada: spread {current_spread:.1f} pts > teto de {max_spread_pts:.1f} pts", flush=True)
             self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None, None, False,
-                              msg_spread, box_index, sl_points, tp_points)
+                              msg_spread, box_index, sl_points, tp_points, magic=magic)
             return False, 0
 
         default_sl = spec.get("sl_points", STOP_LOSS_POINTS)
@@ -2203,13 +2205,14 @@ class MT5OrderManager:
         if res.retcode == mt5.TRADE_RETCODE_DONE:
             print(f"✅ ORDEM EXECUTADA: {self.symbol} {order_type} {use_volume} ctros @ {entry_price} | Ticket #{res.order}", flush=True)
             self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, entry_price,
-                              res.order, res.retcode, True, "ORDEM_ACCEPTED", box_index, sl_val, tp_val)
+                              res.order, res.retcode, True, "ORDEM_ACCEPTED", box_index, sl_val, tp_val,
+                              magic=magic)
             return True, res.order
         else:
             print(f"❌ [ERRO MT5 [{self.symbol}]] RetCode={res.retcode}, Desc={res.comment} | Request: {request}", flush=True)
             self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None,
                               getattr(res, "retcode", None), False, f"REJEITADO_CORRETORA | {getattr(res, 'comment', '')}",
-                              box_index, sl_val, tp_val)
+                              box_index, sl_val, tp_val, magic=magic)
             return False, 0
 
 
@@ -2383,6 +2386,10 @@ class MT5OrderManager:
 
         if res.retcode == mt5.TRADE_RETCODE_DONE:
 
+            self._audit_ordem("CLOSE_PARCIAL", "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY",
+                              partial_volume, None, None, price, res.order, res.retcode, True,
+                              "PARCIAL_ACCEPTED", magic=magic, position=pos.ticket)
+
             if new_sl is not None:
 
                 self.modify_stop_loss(pos.ticket, new_sl)
@@ -2511,6 +2518,14 @@ class MT5OrderManager:
             res = mt5.order_send(req)
             if res and res.retcode != mt5.TRADE_RETCODE_DONE:
                 print(f"⚠️ [MT5 AVISO [{self.symbol}]] RetCode={res.retcode} ({res.comment}) ao zerar #{pos.ticket}", flush=True)
+            # A zeragem também vai para a trilha, com magic e ticket da posição: é o que permite
+            # atribuir o resultado ao dono certo no cruzamento com o extrato.
+            _ok_zero = bool(res) and res.retcode == mt5.TRADE_RETCODE_DONE
+            self._audit_ordem("CLOSE_POSITION", "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY",
+                              pos.volume, None, None, price, getattr(res, "order", None),
+                              getattr(res, "retcode", None), _ok_zero,
+                              "ZERAGEM_ACCEPTED" if _ok_zero else f"ZERAGEM_REJEITADA | {getattr(res, 'comment', '')}",
+                              magic=magic_filter, position=pos.ticket)
 
         alvo = f"lado {side}" if side_type is not None else "posições"
 

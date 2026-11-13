@@ -49,6 +49,10 @@ ORDENS_CAMPOS = [
     "data", "hora", "fonte", "simbolo", "box_index", "acao", "direcao", "volume",
     "preco_box", "preco_solicitado", "preco_fill", "slippage_pts", "ticket", "retcode",
     "executada", "sl_pontos", "tp_pontos", "motivo",
+    # Quem mandou a ordem e qual posição ela toca. Sem estas duas colunas o cruzamento com o
+    # extrato só existia por ticket: em 13/Nov/2026 não deu para dizer se o prejuízo da boleta
+    # (magic 999999) veio dela ou do fechamento, porque o negócio saiu com magic 0.
+    "magic", "position",
 ]
 
 DEALS_CAMPOS = [
@@ -75,8 +79,42 @@ def _garantir_cabecalho(caminho, campos):
     return caminho
 
 
+_CABECALHO_CONFERIDO = set()
+
+
+def _alinhar_cabecalho(caminho, campos):
+    """Acerta o cabeçalho quando o schema muda no meio do pregão.
+
+    O arquivo do dia já existe com as colunas antigas; anexar uma linha com campos novos deixaria
+    valores a mais que o cabeçalho, e o DictReader os jogaria na chave None (a coluna se perderia).
+    Aqui o arquivo é reescrito uma única vez com o cabeçalho novo, preenchendo de vazio o que
+    faltava nas linhas antigas.
+    """
+    if caminho in _CABECALHO_CONFERIDO:
+        return
+    try:
+        with open(caminho, newline="", encoding="utf-8") as f:
+            atual = next(csv.reader(f), [])
+    except OSError:
+        _CABECALHO_CONFERIDO.add(caminho)
+        return
+    if atual and atual != list(campos):
+        try:
+            with open(caminho, newline="", encoding="utf-8") as f:
+                linhas = list(csv.DictReader(f))
+            with open(caminho, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=campos, extrasaction="ignore")
+                w.writeheader()
+                for linha_antiga in linhas:
+                    w.writerow({c: linha_antiga.get(c, "") for c in campos})
+        except OSError:
+            pass
+    _CABECALHO_CONFERIDO.add(caminho)
+
+
 def gravar_linha(caminho, campos, linha):
     """Anexa e dá flush: ao perder o pregão por queda de processo, o diário não pode perder linha."""
+    _alinhar_cabecalho(caminho, campos)
     _garantir_cabecalho(caminho, campos)
     with open(caminho, "a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=campos, extrasaction="ignore")
@@ -132,7 +170,7 @@ def registrar_box(box, veredito, fonte="VIVO", simbolo=""):
 
 def registrar_ordem(simbolo, acao, direcao="", volume=0, preco_box=None, preco_solicitado=None,
                     preco_fill=None, ticket=None, retcode=None, executada=False, sl_pontos=None,
-                    tp_pontos=None, motivo="", box_index="", fonte="VIVO"):
+                    tp_pontos=None, motivo="", box_index="", fonte="VIVO", magic=None, position=None):
     slippage = None
     try:
         if preco_fill and preco_box:
@@ -147,6 +185,7 @@ def registrar_ordem(simbolo, acao, direcao="", volume=0, preco_box=None, preco_s
         "preco_fill": preco_fill, "slippage_pts": slippage, "ticket": ticket, "retcode": retcode,
         "executada": 1 if executada else 0, "sl_pontos": sl_pontos, "tp_pontos": tp_pontos,
         "motivo": motivo,
+        "magic": magic, "position": position,
     }
     try:
         gravar_linha(caminho_arquivo("ordens", linha["data"].replace("-", ""), simbolo), ORDENS_CAMPOS, linha)
@@ -176,7 +215,9 @@ def salvar_deals_mt5(deals, simbolo_filtro=None, dia=None):
                 "simbolo": getattr(d, "symbol", simbolo_filtro or ""),
                 "deal": getattr(d, "ticket", ""), "order": getattr(d, "order", ""),
                 "lado": "BUY" if getattr(d, "type", 0) == 0 else "SELL",
-                "entrada": {0: "IN", 1: "OUT", 2: "OUT"}.get(getattr(d, "entry", 0), str(getattr(d, "entry", ""))),
+                # 3 = OUT_BY (fechamento por ordem contrária): em 13/Nov/2026 a zeragem das
+                # posições saiu como "3" e sem magic, e foi isso que impediu atribuir o PnL.
+                "entrada": {0: "IN", 1: "OUT", 2: "OUT", 3: "OUT_BY"}.get(getattr(d, "entry", 0), str(getattr(d, "entry", ""))),
                 "volume": getattr(d, "volume", ""), "preco": getattr(d, "price", ""),
                 "comissao": getattr(d, "commission", ""), "swap": getattr(d, "swap", ""),
                 "profit": getattr(d, "profit", ""), "balance": getattr(d, "balance", ""),
