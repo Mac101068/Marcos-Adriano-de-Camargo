@@ -142,6 +142,14 @@ export class DirectionalRobot {
     this._paused = true;
   }
 
+  /** Zera o livro de ordens, intenções e histórico para uma nova sessão/replay. */
+  public resetBook(): void {
+    this._positions = [];
+    this._intents = [];
+    this._lastSignal = undefined;
+    this._totalCloses = 0;
+  }
+
   public updateStrategy(strategy: SavedStrategy): void {
     // Preserva o magic e role de runtime invioláveis ao trocar/atualizar estratégia
     this._config = {

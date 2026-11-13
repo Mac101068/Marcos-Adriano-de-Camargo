@@ -542,34 +542,63 @@ export default function App() {
   const asset = React.useMemo(() => resolveAsset(config.symbol, config.assetId), [config.symbol, config.assetId]);
 
   // Robôs direcionais (Passo 3): RoboCompra (magic 100001) e RoboVenda (magic 100002).
-  // Nascem pausados. Nunca enviam ordem real à ponte — apenas registram intenções e auditam.
-  const directionalRobots = React.useMemo(() => {
-    const buy = createDirectionalRobot({
-      direction: 'BUY',
-      magic: 100001,
-      asset: ASSETS[DEFAULT_ASSET_ID],
-      baseConfig: {
-        contracts: config.contracts,
-        stopLossPoints: config.stopLossPoints,
-        takeProfitPoints: config.takeProfitPoints,
-        onCloseOpposite: config.onCloseOpposite ?? false,
-        directionLock: config.directionLock,
-      } as Partial<AutomationConfig>,
-    });
-    const sell = createDirectionalRobot({
-      direction: 'SELL',
-      magic: 100002,
-      asset: ASSETS[DEFAULT_ASSET_ID],
-      baseConfig: {
-        contracts: config.contracts,
-        stopLossPoints: config.stopLossPoints,
-        takeProfitPoints: config.takeProfitPoints,
-        onCloseOpposite: config.onCloseOpposite ?? false,
-        directionLock: config.directionLock,
-      } as Partial<AutomationConfig>,
-    });
-    return { buy, sell };
-  }, [config.contracts, config.stopLossPoints, config.takeProfitPoints, config.onCloseOpposite, config.directionLock]);
+  // Nunca enviam ordem real à ponte sem o robô estar ativado.
+  const [directionalSnapshots, setDirectionalSnapshots] = useState<{
+    buy: DirectionalRobotSnapshot;
+    sell: DirectionalRobotSnapshot;
+  } | null>(null);
+
+  const directionalRobotsRef = useRef<{ buy: DirectionalRobot; sell: DirectionalRobot } | null>(null);
+  if (!directionalRobotsRef.current) {
+    directionalRobotsRef.current = {
+      buy: createDirectionalRobot({
+        direction: 'BUY',
+        magic: 100001,
+        asset,
+        baseConfig: {
+          contracts: config.contracts,
+          stopLossPoints: config.stopLossPoints,
+          takeProfitPoints: config.takeProfitPoints,
+          onCloseOpposite: config.onCloseOpposite ?? false,
+          directionLock: config.directionLock,
+        } as Partial<AutomationConfig>,
+      }),
+      sell: createDirectionalRobot({
+        direction: 'SELL',
+        magic: 100002,
+        asset,
+        baseConfig: {
+          contracts: config.contracts,
+          stopLossPoints: config.stopLossPoints,
+          takeProfitPoints: config.takeProfitPoints,
+          onCloseOpposite: config.onCloseOpposite ?? false,
+          directionLock: config.directionLock,
+        } as Partial<AutomationConfig>,
+      }),
+    };
+  }
+  const directionalRobots = directionalRobotsRef.current;
+
+  // Atualiza snapshots dos robôs para re-renderizar painel e boleta
+  const syncDirectionalSnapshots = useCallback(() => {
+    if (directionalRobotsRef.current) {
+      setDirectionalSnapshots({
+        buy: directionalRobotsRef.current.buy.getSnapshot(),
+        sell: directionalRobotsRef.current.sell.getSnapshot(),
+      });
+    }
+  }, []);
+
+  const handleToggleDirectionalRobot = useCallback((magic: 100001 | 100002) => {
+    if (!directionalRobotsRef.current) return;
+    const target = magic === 100001 ? directionalRobotsRef.current.buy : directionalRobotsRef.current.sell;
+    if (target.paused) {
+      target.activate();
+    } else {
+      target.pause();
+    }
+    syncDirectionalSnapshots();
+  }, [syncDirectionalSnapshots]);
 
   /**
 
@@ -2115,6 +2144,33 @@ export default function App() {
       directionalRobots.buy.onTick(tick.price);
       directionalRobots.sell.onTick(tick.price);
 
+      // Sincroniza fechamentos de SL/TP dos robôs direcionais com a tabela global de ordens no replay/simulador
+      if (isReplayMode) {
+        setOrders((prev) => {
+          let changed = false;
+          const updated = prev.map((o) => {
+            if (o.status !== 'OPEN' || !o.id.startsWith('dir-')) return o;
+            const targetRobot = o.magicNumber === 100001 ? directionalRobots.buy : directionalRobots.sell;
+            const pos = targetRobot.positions.find((p) => p.id === o.id);
+            if (pos && pos.status !== 'OPEN') {
+              changed = true;
+              return {
+                ...o,
+                status: pos.status === 'CLOSED_PROFIT' ? ('CLOSED_TP' as const) : ('CLOSED_SL' as const),
+                exitPrice: pos.exitPrice,
+                exitTimestamp: pos.exitTimestamp,
+                exitTimeStr: pos.exitTimestamp ? new Date(pos.exitTimestamp).toTimeString().split(' ')[0] : undefined,
+                pointsResult: pos.pointsResult,
+                financialResult: pos.financialResult,
+                exitReason: pos.status === 'CLOSED_PROFIT' ? ('TAKE_PROFIT' as const) : ('STOP_LOSS' as const),
+              };
+            }
+            return o;
+          });
+          return changed ? updated : prev;
+        });
+      }
+
       // Alimenta as séries experimentais (Range e Tempo) com o mesmo fluxo de ticks
       if (allTicksRef.current.length < 50000) allTicksRef.current.push(tick);
       const rangeEng = rangeEngineRef.current;
@@ -2167,6 +2223,7 @@ export default function App() {
             setTimeBoxes([...tEng.getBoxes()]);
             buf.timeBoxesChanged = false;
           }
+          syncDirectionalSnapshots();
         });
       }
 
@@ -2292,11 +2349,107 @@ export default function App() {
 
           const oppositeType = signalType === 'BUY' ? 'SELL' : 'BUY';
 
-          // Passo 3: despacha sinal para os robôs direcionais (intenção simulada + auditoria, sem ponte)
+          // Passo 3 e 4: despacha sinal para os robôs direcionais
           // O robô de compra só reage a sinais BUY, o de venda só a sinais SELL.
           // Sinal contrário com onCloseOpposite fecha posições do robô alvo.
-          directionalRobots.buy.onSignal(signalType, result.closedBox.index, tick.price);
-          directionalRobots.sell.onSignal(signalType, result.closedBox.index, tick.price);
+          const buyRes = directionalRobots.buy.onSignal(signalType, result.closedBox.index, tick.price);
+          const sellRes = directionalRobots.sell.onSignal(signalType, result.closedBox.index, tick.price);
+
+          // Integração com a boleta/gráfico: se houve intenção em robô ativo (seja replay ou real), injeta em orders
+          const activeRobot = signalType === 'BUY' ? directionalRobots.buy : directionalRobots.sell;
+          const activeRes = signalType === 'BUY' ? buyRes : sellRes;
+          if (!activeRobot.paused && activeRes.intent) {
+            const int = activeRes.intent;
+            const newDirOrder: TradeOrder = {
+              id: int.id,
+              symbol: int.symbol,
+              timestamp: int.createdAt,
+              timeStr: tick.timeStr || new Date(int.createdAt).toTimeString().split(' ')[0],
+              fillTimestamp: int.createdAt,
+              fillTimeStr: tick.timeStr || new Date(int.createdAt).toTimeString().split(' ')[0],
+              type: int.direction,
+              role: 'MAIN',
+              entryPrice: int.entryPrice,
+              contracts: int.contracts,
+              remainingContracts: int.contracts,
+              stopLoss: int.stopLoss,
+              takeProfit: int.takeProfit,
+              status: 'OPEN',
+              source: isReplaying ? 'ROBOT_EA' : (mt5State.status === 'CONNECTED' ? 'MT5_LIVE' : 'ROBOT_EA'),
+              magicNumber: int.magic,
+              triggerReason: `Robô ${int.magic === 100001 ? 'RoboCompra' : 'RoboVenda'} (magic ${int.magic})`,
+              isRealMT5: !isReplaying && mt5State.status === 'CONNECTED',
+            };
+            setOrders((prev) => [newDirOrder, ...prev]);
+          }
+
+          // Se houve fechamentos por sinal contrário (onCloseOpposite) nos robôs direcionais:
+          const allClosed = [...buyRes.closed, ...sellRes.closed];
+          if (allClosed.length > 0) {
+            setOrders((prev) =>
+              prev.map((o) => {
+                const cMatch = allClosed.find((c) => c.id === o.id);
+                if (cMatch) {
+                  return {
+                    ...o,
+                    status: (cMatch.financialResult || 0) >= 0 ? ('CLOSED_PROFIT' as const) : ('CLOSED_LOSS' as const),
+                    exitPrice: cMatch.exitPrice,
+                    exitTimestamp: cMatch.exitTimestamp,
+                    exitTimeStr: cMatch.exitTimestamp ? new Date(cMatch.exitTimestamp).toTimeString().split(' ')[0] : undefined,
+                    pointsResult: cMatch.pointsResult,
+                    financialResult: cMatch.financialResult,
+                    exitReason: 'OPPOSITE_ROBOT_SIGNAL' as const,
+                  };
+                }
+                return o;
+              })
+            );
+          }
+
+          // Disparo de ordem real ao MT5 se o robô direcional correspondente estiver ATIVO (não pausado)
+          if (!isReplaying && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            if (signalType === 'BUY' && !directionalRobots.buy.paused && buyRes.intent) {
+              const sym = config.symbol || (asset.activeContract || asset.primarySymbol);
+              wsRef.current.send(JSON.stringify({
+                action: 'ORDER_SEND',
+                symbol: sym,
+                type: 'BUY',
+                contracts: buyRes.intent.contracts || config.contracts || 1,
+                sl: config.stopLossPoints || 0,
+                tp: config.takeProfitPoints || 0,
+                magic: 100001,
+                comment: `RCOMP_${sym}`.substring(0, 31),
+              }));
+            } else if (signalType === 'SELL' && !directionalRobots.sell.paused && sellRes.intent) {
+              const sym = config.symbol || (asset.activeContract || asset.primarySymbol);
+              wsRef.current.send(JSON.stringify({
+                action: 'ORDER_SEND',
+                symbol: sym,
+                type: 'SELL',
+                contracts: sellRes.intent.contracts || config.contracts || 1,
+                sl: config.stopLossPoints || 0,
+                tp: config.takeProfitPoints || 0,
+                magic: 100002,
+                comment: `RVEND_${sym}`.substring(0, 31),
+              }));
+            }
+
+            // Encerramento de ordens contrárias no MT5 se onCloseOpposite gerou fechamentos
+            if (buyRes.closed.length > 0) {
+              wsRef.current.send(JSON.stringify({
+                action: 'CLOSE_POSITIONS',
+                symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                magic: 100001,
+              }));
+            }
+            if (sellRes.closed.length > 0) {
+              wsRef.current.send(JSON.stringify({
+                action: 'CLOSE_POSITIONS',
+                symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                magic: 100002,
+              }));
+            }
+          }
 
 
 
@@ -5332,6 +5485,55 @@ export default function App() {
                 timestamp: Number(data.timestamp) || Date.now(),
               },
             }));
+
+            // Despacha o sinal gerado diretamente para os Robôs Hedge se for do ativo ativo ou do robô
+            const sigType = data.signal as 'BUY' | 'SELL';
+            if (sigType && data.price && !isReplayingRef.current) {
+              const bRes = directionalRobots.buy.onSignal(sigType, Number(data.boxIndex) || 0, Number(data.price));
+              const sRes = directionalRobots.sell.onSignal(sigType, Number(data.boxIndex) || 0, Number(data.price));
+
+              // Disparo imediato da ordem para a Demo XP se o robô direcional estiver ATIVO
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                if (sigType === 'BUY' && !directionalRobots.buy.paused && bRes.intent) {
+                  wsRef.current.send(JSON.stringify({
+                    action: 'ORDER_SEND',
+                    symbol: sym || config.symbol || (asset.activeContract || asset.primarySymbol),
+                    type: 'BUY',
+                    contracts: bRes.intent.contracts || config.contracts || 1,
+                    sl: config.stopLossPoints || 0,
+                    tp: config.takeProfitPoints || 0,
+                    magic: 100001,
+                    comment: `RCOMP_${sym}`.substring(0, 31),
+                  }));
+                } else if (sigType === 'SELL' && !directionalRobots.sell.paused && sRes.intent) {
+                  wsRef.current.send(JSON.stringify({
+                    action: 'ORDER_SEND',
+                    symbol: sym || config.symbol || (asset.activeContract || asset.primarySymbol),
+                    type: 'SELL',
+                    contracts: sRes.intent.contracts || config.contracts || 1,
+                    sl: config.stopLossPoints || 0,
+                    tp: config.takeProfitPoints || 0,
+                    magic: 100002,
+                    comment: `RVEND_${sym}`.substring(0, 31),
+                  }));
+                }
+
+                if (bRes.closed.length > 0) {
+                  wsRef.current.send(JSON.stringify({
+                    action: 'CLOSE_POSITIONS',
+                    symbol: sym || config.symbol || (asset.activeContract || asset.primarySymbol),
+                    magic: 100001,
+                  }));
+                }
+                if (sRes.closed.length > 0) {
+                  wsRef.current.send(JSON.stringify({
+                    action: 'CLOSE_POSITIONS',
+                    symbol: sym || config.symbol || (asset.activeContract || asset.primarySymbol),
+                    magic: 100002,
+                  }));
+                }
+              }
+            }
           }
 
         } catch {
@@ -5427,38 +5629,20 @@ export default function App() {
 
 
 
-  // RECONEXÃO CONTÍNUA COM O MT5 (só depois de o operador conectar nesta sessão):
-
-  // Se a ponte cair (Wi-Fi do PC, restart do script), o app religa sozinho em até 3s. No boot
-
-  // frio ele NÃO conecta: foi assim que uma aba abriu armada, recebendo o pregão inteiro da
-
-  // corretora sem ninguém pedir (userDisconnectedRef começa `true`).
-
+  // RECONEXÃO CONTÍNUA COM O MT5:
+  // Se a ponte cair ou ainda não tiver subido, tenta restabelecer a cada 2.5s silenciosamente.
+  // Só para se o operador clicar explicitamente em Desconectar (userDisconnectedRef = true).
   useEffect(() => {
-
     if (userDisconnectedRef.current) return;
-
     if (mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING') return;
 
-
-
-    // Tenta conectar imediatamente ou a cada 3 segundos enquanto estiver desconectado
-
     const timer = setTimeout(() => {
-
-      if (!userDisconnectedRef.current && mt5State.status === 'DISCONNECTED') {
-
+      if (!userDisconnectedRef.current && (mt5State.status === 'DISCONNECTED' || mt5State.status === 'ERROR')) {
         toggleMT5ConnectRef.current?.('CONNECT', true);
-
       }
-
-    }, 1500);
-
-
+    }, 2500);
 
     return () => clearTimeout(timer);
-
   }, [mt5State.status]);
 
 
@@ -6831,6 +7015,9 @@ export default function App() {
     OrderAuditService.clearIntradayAudit(asset.id);
     setOrders([]);
     shadowRobotService.resetBook();
+    directionalRobots.buy.resetBook();
+    directionalRobots.sell.resetBook();
+    syncDirectionalSnapshots();
     seriesCollectorService.reset();
     setRealBacktestResult(null);
 
@@ -6931,24 +7118,51 @@ export default function App() {
 
       if (dayKeyOverride && daysMap.has(dayKeyOverride)) {
         const targetDayKey = dayKeyOverride;
-        ticks = daysMap.get(targetDayKey) || rawTicks;
-        calculatedContextEnd = 0;
+        const targetIdx = sortedDays.indexOf(targetDayKey);
+        // Se houver dia anterior no cache, usa ele como contexto estático (D-1)
+        if (targetIdx > 0) {
+          const prevDayKey = sortedDays[targetIdx - 1];
+          const prevTicks = daysMap.get(prevDayKey) || [];
+          const curTicks = daysMap.get(targetDayKey) || [];
+          calculatedContextEnd = prevTicks.length;
+          ticks = [...prevTicks, ...curTicks];
+        } else {
+          ticks = daysMap.get(targetDayKey) || rawTicks;
+          calculatedContextEnd = 0;
+        }
         const [y, m, d] = (targetDayKey || '').split('-');
         const flowIdx = currentAssetPregoes.findIndex((p) => p.date === targetDayKey);
         const flowCode = flowIdx >= 0 ? `Flow${flowIdx + 1}` : 'Flow';
         label = `${flowCode} (${d}/${m})`;
       } else if (sortedDays.length >= 1 && replayTargetDays === 1) {
-        // Replay do pregão Flow1 (mais recente): inicia 100% limpo a partir da abertura
+        // Replay do pregão Flow1 (mais recente): se tiver pelo menos 2 pregões, carrega o D-1 como contexto estático
         const targetDayKey = sortedDays[sortedDays.length - 1];
-        ticks = daysMap.get(targetDayKey) || rawTicks;
-        calculatedContextEnd = 0;
+        if (sortedDays.length >= 2) {
+          const prevDayKey = sortedDays[sortedDays.length - 2];
+          const prevTicks = daysMap.get(prevDayKey) || [];
+          const curTicks = daysMap.get(targetDayKey) || [];
+          calculatedContextEnd = prevTicks.length;
+          ticks = [...prevTicks, ...curTicks];
+        } else {
+          ticks = daysMap.get(targetDayKey) || rawTicks;
+          calculatedContextEnd = 0;
+        }
         const [y, m, d] = (targetDayKey || '').split('-');
         label = `Flow1 (${d}/${m})`;
       } else if (sortedDays.length >= 2 && replayTargetDays === 2) {
-        // Replay do pregão Flow2 (penúltimo pregão): inicia 100% limpo
+        // Replay do pregão Flow2: se houver dia anterior a ele, inclui como contexto estático
         const targetDayKey = sortedDays[sortedDays.length - 2];
-        ticks = daysMap.get(targetDayKey) || rawTicks;
-        calculatedContextEnd = 0;
+        const targetIdx = sortedDays.length - 2;
+        if (targetIdx > 0) {
+          const prevDayKey = sortedDays[targetIdx - 1];
+          const prevTicks = daysMap.get(prevDayKey) || [];
+          const curTicks = daysMap.get(targetDayKey) || [];
+          calculatedContextEnd = prevTicks.length;
+          ticks = [...prevTicks, ...curTicks];
+        } else {
+          ticks = daysMap.get(targetDayKey) || rawTicks;
+          calculatedContextEnd = 0;
+        }
         const [y, m, d] = (targetDayKey || '').split('-');
         label = `Flow2 (${d}/${m})`;
       } else {
@@ -9890,10 +10104,14 @@ ${
 
                   onFocusParamConsumed={() => setParamFocus(null)}
 
-                  directionalSnapshots={{
-                    buy: directionalRobots.buy.getSnapshot(),
-                    sell: directionalRobots.sell.getSnapshot(),
-                  }}
+                  directionalSnapshots={
+                    directionalSnapshots || {
+                      buy: directionalRobots.buy.getSnapshot(),
+                      sell: directionalRobots.sell.getSnapshot(),
+                    }
+                  }
+
+                  onToggleDirectionalRobot={handleToggleDirectionalRobot}
 
                 />
 
