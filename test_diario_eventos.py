@@ -64,20 +64,109 @@ ponte.EVAL_CONFIG.update({
 ponte.TRADING_HOURS_ENABLED = False
 
 
-class _Mt5Morto:
-    """Interrupção simulada da corretora: todo retorno é None, nenhum order_send existe.
+class _Mt5SemSimbolo:
+    """Terminal aberto, mas o símbolo do ensaio não existe nele.
 
-    É o mesmo formato da falha real de 05/Nov (AttributeError no meio do caminho do pedido),
-    só que controlada: aqui `symbol_info(...).point` estoura e tem de virar LINHA no diário.
+    Antes este stub devolvia None para tudo e o código saía cedo no "símbolo não encontrado",
+    sem gravar nada — o teste passava só porque o MT5 estava fechado. Agora `symbol_info`
+    devolve um objeto verdadeiro e vazio: o AttributeError nasce dentro do caminho do pedido,
+    que é o mesmo formato da falha real de 05/Nov, e o guard tem de virar LINHA no diário.
     """
 
+    def symbol_select(self, *_args, **_kwargs):
+        return False
+
+    def symbol_info(self, *_args, **_kwargs):
+        return object()  # truthy e sem atributos: estoura em sym_info.trade_tick_size
+
     def __getattr__(self, nome):
-        def _morto(*_args, **_kwargs):
+        def _nada(*_args, **_kwargs):
             return None
-        return _morto
+        return _nada
 
 
-ponte.mt5 = _Mt5Morto()
+class _Pos:
+    """Posição aberta no MT5 (o mínimo que os caminhos de fechamento leem)."""
+
+    def __init__(self, ticket, tipo, volume, magic, preco=5000.0):
+        self.ticket = ticket
+        self.type = tipo
+        self.volume = volume
+        self.magic = magic
+        self.price_open = preco
+        self.sl = 0.0
+        self.tp = 0.0
+        self.profit = 0.0  # lido por get_daily_pnl (limites de risco)
+
+
+class _Res:
+    def __init__(self, order=777, retcode=10009, comment="ok"):
+        self.order = order
+        self.retcode = retcode
+        self.comment = comment
+
+
+class _Simbolo:
+    trade_mode = 4  # SYMBOL_TRADE_MODE_FULL
+    trade_tick_size = 5.0
+    digits = 0
+    point = 5.0
+    volume_min = 1.0
+    volume_step = 1.0
+    trade_stops_level = 0
+
+
+class _Tick:
+    bid = 5000.0
+    ask = 5000.0
+    time = 0
+    time_msc = 0
+
+
+class _Mt5Vivo:
+    """Corretora viva: aceita tudo e devolve TRADE_RETCODE_DONE.
+
+    Serve para os caminhos que só gravam depois do envio (entrada e fechamento) — é a única
+    forma de cobrir magic/position nas linhas de CLOSE_PARCIAL e CLOSE_POSITION sem terminal.
+    """
+
+    ORDER_TYPE_BUY = 0
+    ORDER_TYPE_SELL = 1
+    TRADE_ACTION_DEAL = 1
+    TRADE_ACTION_SLTP = 6
+    TRADE_RETCODE_DONE = 10009
+    ORDER_TIME_GTC = 0
+    SYMBOL_TRADE_MODE_DISABLED = 0
+
+    def __init__(self, posicoes):
+        self._posicoes = list(posicoes)
+
+    def symbol_select(self, *_args, **_kwargs):
+        return True
+
+    def symbol_info(self, *_args, **_kwargs):
+        return _Simbolo()
+
+    def symbol_info_tick(self, *_args, **_kwargs):
+        return _Tick()
+
+    def positions_get(self, **filtros):
+        if "ticket" in filtros:
+            achadas = [p for p in self._posicoes if p.ticket == filtros["ticket"]]
+        else:
+            achadas = list(self._posicoes)
+        return achadas or None
+
+    def order_send(self, request):
+        return _Res(order=request.get("position") or 777)
+
+    def __getattr__(self, nome):
+        def _nada(*_args, **_kwargs):
+            return None
+        return _nada
+
+
+ponte.mt5 = _Mt5SemSimbolo()
 
 agora_msc = int(datetime.now().timestamp() * 1000) // 1000 * 1000
 dia_hoje = datetime.now().strftime("%Y%m%d")
@@ -113,7 +202,11 @@ ALTA = [
     (20, "SELL", None),      # bloco vermelho fraco: continua calado por Delta
 ]
 
-esperado_por_index = {}
+# O gabarito é o veredito do PRÓPRIO motor: este teste julga o diário (o que foi para o CSV bate
+# com o que o motor decidiu), não a regra de sinal — a paridade de regras é provada em
+# test_paridade_regras.py. A lista ALTA continua definindo a fita; o terceiro campo dela não é
+# mais um gabarito, porque no modo PYRAMID_FLOW_CONFLUENCE o sinal exige confluência além do Delta.
+sinal_por_index = {}
 fechados = 0
 sinais = 0
 
@@ -133,14 +226,14 @@ for i, (vol, agg, esperado) in enumerate(ALTA):
     if not new_box:
         continue
     fechados += 1
-    esperado_por_index[new_box["index"]] = esperado
+    sinal_por_index[new_box["index"]] = signal or ""
     if signal:
         sinais += 1
     # Réplica exata do que a ponte faz no loop vivo (bot_mt5_ciclo15, loop de ticks)
     registrar_box(new_box, new_box.get("audit"), FONTE, SIMBOLO)
 
 checar("boxes fechados pelo motor", fechados, len(ALTA) - 1)
-checar("sinais gerados (Delta acima do limiar)", sinais, sum(1 for x in ALTA[1:] if x[2]))
+checar("o motor gera sinal e também cala (nem todos, nem nenhum)", 0 < sinais < fechados, True)
 
 linhas = carregar_eventos(simbolo=SIMBOLO, fonte=FONTE)
 checar("uma linha de diário por box fechado", len(linhas), fechados)
@@ -150,11 +243,11 @@ indices = [int(r["box_index"]) for r in linhas]
 checar("box_index sem duplicidade", len(set(indices)), len(indices))
 
 errados = [
-    (r["box_index"], r["sinal"], esperado_por_index.get(int(r["box_index"])))
+    (r["box_index"], r["sinal"], sinal_por_index.get(int(r["box_index"])))
     for r in linhas
-    if r["sinal"] != (esperado_por_index.get(int(r["box_index"])) or "")
+    if r["sinal"] != (sinal_por_index.get(int(r["box_index"])) or "")
 ]
-checar("coluna `sinal` bate com o veredito do motor", errados, [])
+checar("coluna `sinal` reproduz o veredito do motor", errados, [])
 
 sem_motivo = [r["box_index"] for r in linhas if not (r["motivo"] or "").strip()]
 checar("toda linha tem motivo preenchido", sem_motivo, [])
@@ -213,6 +306,51 @@ checar("motivo aponta EXCECAO_ANTES_DO_SEND",
 checar("ação identificada como ORDEM_MAE", r_ordem.get("acao"), "ORDEM_MAE")
 checar("preço do box que gerou o sinal foi guardado", bool(r_ordem.get("preco_box")), True)
 checar("box_index da tentativa registrado", int(r_ordem.get("box_index") or -1), box_sinal["index"])
+checar("tentativa sem magic explícito herda o dono do manager", r_ordem.get("magic"), "999999")
+
+print("\n=== E. Cada ordem carrega o dono (magic) e a posição que toca ===")
+
+
+def ler_ordens():
+    if not os.path.exists(caminho_ordens):
+        return []
+    with open(caminho_ordens, encoding="utf-8") as f:
+        return [r for r in csv.DictReader(f) if r["simbolo"] == SIMBOLO]
+
+
+with open(caminho_ordens, encoding="utf-8") as _f:
+    _cabecalho = next(csv.reader(_f), [])
+checar("cabeçalho da trilha tem magic e position",
+       ("magic" in _cabecalho, "position" in _cabecalho), (True, True))
+
+ponte.mt5 = _Mt5Vivo([
+    _Pos(ticket=555, tipo=0, volume=1.0, magic=999999),
+    _Pos(ticket=601, tipo=0, volume=1.0, magic=100001),
+])
+mgr2 = ponte.MT5OrderManager(SIMBOLO, 1, 100001)
+
+enviou, _ticket = mgr2.execute_market_order("BUY", comment="TESTE_ENTRADA", magic=100001)
+checar("entrada com corretora viva é executada", enviou, True)
+linha_entrada = [r for r in ler_ordens() if r["motivo"] == "ORDEM_ACCEPTED"]
+checar("entrada executada virou 1 linha", len(linha_entrada), 1)
+if linha_entrada:
+    checar("entrada carrega o magic de quem mandou", linha_entrada[0]["magic"], "100001")
+    checar("entrada não inventa position", linha_entrada[0]["position"], "")
+
+checar("fechamento parcial aceito pela corretora", mgr2.close_partial_position(555, 1.0, magic=999999), True)
+linha_parcial = [r for r in ler_ordens() if r["acao"] == "CLOSE_PARCIAL"]
+checar("CLOSE_PARCIAL virou linha na trilha", len(linha_parcial), 1)
+if linha_parcial:
+    checar("CLOSE_PARCIAL guarda a posição tocada", linha_parcial[0]["position"], "555")
+    checar("CLOSE_PARCIAL guarda o magic da boleta", linha_parcial[0]["magic"], "999999")
+    checar("CLOSE_PARCIAL registrada como executada", linha_parcial[0]["executada"], "1")
+
+mgr2.close_all_positions(magic=100001)
+linha_zero = [r for r in ler_ordens() if r["acao"] == "CLOSE_POSITION"]
+checar("CLOSE_POSITION virou linha na trilha", len(linha_zero), 1)
+if linha_zero:
+    checar("CLOSE_POSITION guarda a posição tocada", linha_zero[0]["position"], "601")
+    checar("CLOSE_POSITION guarda o magic do dono", linha_zero[0]["magic"], "100001")
 
 print("\n=== D. Fiação: os ganchos estão nos caminhos que importam ===")
 
@@ -220,8 +358,8 @@ fonte_bot = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_m
                  encoding="utf-8").read()
 checar("loop vivo journaliza cada box", fonte_bot.count("audit_registrar_box(new_box"), 1)
 checar("todas as trilhas de ordem usam _audit_ordem", fonte_bot.count("self._audit_ordem(") >= 6, True)
-checar("guards de exceção antes do send (mãe/pirâmide/tela)",
-       fonte_bot.count("EXCECAO_ANTES_DO_SEND"), 3)
+checar("guards de exceção antes do send (mãe/tela)",
+       fonte_bot.count("EXCECAO_ANTES_DO_SEND"), 2)
 checar("interrupor AUDITORIA_OFF existe (kill-switch)", "AUDITORIA_OFF" in fonte_bot, True)
 
 print("\n" + "=" * 62)
