@@ -458,7 +458,6 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   const analysisItems: MenuItem[] = [
-    { tab: 'eas', label: 'Robôs EAs (Hedge)', icon: Bot, title: 'Painel dedicado dos Robôs Hedge Direcionais (RoboCompra Magic 100001 e RoboVenda Magic 100002)' },
     { tab: 'stats', label: 'Ordens & Performance', icon: CheckCircle2, badge: openOrdersCount, title: 'Ordens abertas e estatísticas de performance' },
     { tab: 'comparativo', label: 'Comparativo 3 Séries', icon: BarChart3, title: 'Coletor de eficiência: Pontos x Range x Tempo na mesma estratégia (contabilidade interna)' },
     { tab: 'avaliacao', label: 'Avaliação Técnica', icon: ClipboardCheck, title: 'Diagnóstico da base do coletor: win rate, fator de lucro, expectativa e recortes por motivo de saída, papel, direção e horário de entrada' },
@@ -469,7 +468,6 @@ export const Header: React.FC<HeaderProps> = ({
     { tab: 'python', label: 'Código Python MT5', icon: FileCode },
     { tab: 'docs', label: 'Guia MT5', icon: BookOpen },
     { tab: 'settings', label: 'Parâmetros', icon: Sliders, title: 'O ÚNICO editor de estratégia: ajusta os números da estratégia ATIVA e grava direto na biblioteca (banco único, espelha a boleta)' },
-    { tab: 'studio', label: 'Estúdio de Estratégias', icon: Palette, title: 'A casa das estratégias: criar, ativar, duplicar, renomear, excluir, importar e sincronizar. A edição de parâmetros é na aba Parâmetros.' },
     ...(currentUser.role === 'ADMIN'
       ? [{ tab: 'admin' as TabId, label: 'Rede de Assinantes', icon: Users, title: 'Gestão da rede de assinantes (somente administrador)' }]
       : []),

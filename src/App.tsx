@@ -186,7 +186,15 @@ import { EaConfigService } from './services/eaConfigService';
 
 import { OrderAuditService } from './services/orderAuditService';
 
-import { createDirectionalRobot, DirectionalRobot } from './services/directionalRobotService';
+import {
+  createDirectionalRobot,
+  DirectionalRobot,
+  DirectionalRobotSnapshot,
+  DirectionalMagic,
+  STRATEGY_EA_CATALOG,
+  ALL_DIRECTIONAL_MAGICS,
+  getRobotNameByMagic,
+} from './services/directionalRobotService';
 import { DEFAULT_ASSET_ID } from './assets/assetRegistry';
 
 // Purga imediata no carregamento do módulo: garante que o storage local esteja higienizado
@@ -205,9 +213,8 @@ import { SeriesComparisonView } from './components/SeriesComparisonView';
 
 import { TechnicalEvaluationView } from './components/TechnicalEvaluationView';
 
-import { StrategyStudio } from './components/StrategyStudio';
-
 import { AlertChip } from './components/AlertChip';
+import { ActiveEAsChartHud } from './components/ActiveEAsChartHud';
 
 import { StrategyLibraryService, mergeConfig, splitStrategyPatch } from './services/strategyLibraryService';
 
@@ -542,49 +549,93 @@ export default function App() {
 
   const asset = React.useMemo(() => resolveAsset(config.symbol, config.assetId), [config.symbol, config.assetId]);
 
-  // Robôs direcionais (Passo 3): RoboCompra (magic 100001) e RoboVenda (magic 100002).
-  // Persistidos em localStorage (resistem ao F5 e sincronizam via BroadcastChannel).
-  const directionalRobotsRef = useRef<{ buy: DirectionalRobot; sell: DirectionalRobot } | null>(null);
-  if (!directionalRobotsRef.current) {
-    directionalRobotsRef.current = {
-      buy: createDirectionalRobot({
+  // Todos os pares de EAs por estratégia (Compra + Venda independentes):
+  // 100001/100002 (Hedge Direcional), 201001/201002 (Pirâmide 10R), 202001/202002 (Janela de Fluxo),
+  // 203001/203002 (Acumulação C/V), 204001/204002 (Reteste 10R), 205001/205002 (Scalper 10R), 206001/206002 (Trend 10R).
+  const allDirectionalRobotsRef = useRef<Record<number, DirectionalRobot> | null>(null);
+  if (!allDirectionalRobotsRef.current) {
+    const map: Record<number, DirectionalRobot> = {};
+    for (const item of STRATEGY_EA_CATALOG) {
+      map[item.buyMagic] = createDirectionalRobot({
         direction: 'BUY',
-        magic: 100001,
+        magic: item.buyMagic,
+        strategyFamily: item.id,
+        strategyName: item.name,
+        commentPrefix: item.buyCommentPrefix,
         asset,
         baseConfig: {
-          contracts: config.contracts || 1,
-          stopLossPoints: 100,
-          takeProfitPoints: 50,
-          onCloseOpposite: config.onCloseOpposite ?? false,
-          directionLock: config.directionLock,
+          contracts: item.defaults.contracts || config.contracts || 1,
+          stopLossPoints: item.defaults.stopLossPoints,
+          takeProfitPoints: item.defaults.takeProfitPoints,
+          trailingStop: item.defaults.trailingStop,
+          trailingActivationPoints: item.defaults.trailingActivationPoints,
+          trailingDistancePoints: item.defaults.trailingDistancePoints,
+          breakevenOffsetPoints: item.defaults.breakevenOffsetPoints,
+          onCloseOpposite: item.defaults.onCloseOpposite,
+          directionLock: 'BUY_ONLY',
         } as Partial<AutomationConfig>,
-      }),
-      sell: createDirectionalRobot({
+      });
+      map[item.sellMagic] = createDirectionalRobot({
         direction: 'SELL',
-        magic: 100002,
+        magic: item.sellMagic,
+        strategyFamily: item.id,
+        strategyName: item.name,
+        commentPrefix: item.sellCommentPrefix,
         asset,
         baseConfig: {
-          contracts: config.contracts || 1,
-          stopLossPoints: 100,
-          takeProfitPoints: 50,
-          onCloseOpposite: config.onCloseOpposite ?? false,
-          directionLock: config.directionLock,
+          contracts: item.defaults.contracts || config.contracts || 1,
+          stopLossPoints: item.defaults.stopLossPoints,
+          takeProfitPoints: item.defaults.takeProfitPoints,
+          trailingStop: item.defaults.trailingStop,
+          trailingActivationPoints: item.defaults.trailingActivationPoints,
+          trailingDistancePoints: item.defaults.trailingDistancePoints,
+          breakevenOffsetPoints: item.defaults.breakevenOffsetPoints,
+          onCloseOpposite: item.defaults.onCloseOpposite,
+          directionLock: 'SELL_ONLY',
         } as Partial<AutomationConfig>,
-      }),
+      });
+    }
+    allDirectionalRobotsRef.current = map;
+  }
+
+  const directionalRobotsRef = useRef<{ buy: DirectionalRobot; sell: DirectionalRobot } | null>(null);
+  if (!directionalRobotsRef.current && allDirectionalRobotsRef.current) {
+    directionalRobotsRef.current = {
+      buy: allDirectionalRobotsRef.current[100001],
+      sell: allDirectionalRobotsRef.current[100002],
     };
   }
-  const directionalRobots = directionalRobotsRef.current;
+  const directionalRobots = directionalRobotsRef.current!;
+
+  const [allStrategySnapshots, setAllStrategySnapshots] = useState<Record<number, DirectionalRobotSnapshot>>(() => {
+    const snaps: Record<number, DirectionalRobotSnapshot> = {};
+    if (allDirectionalRobotsRef.current) {
+      for (const m of Object.keys(allDirectionalRobotsRef.current)) {
+        const num = Number(m);
+        snaps[num] = allDirectionalRobotsRef.current[num].getSnapshot();
+      }
+    }
+    return snaps;
+  });
 
   const [directionalSnapshots, setDirectionalSnapshots] = useState<{
-    buy: DirectionalRobot;
-    sell: DirectionalRobot;
+    buy: DirectionalRobotSnapshot;
+    sell: DirectionalRobotSnapshot;
   }>(() => ({
     buy: directionalRobots.buy.getSnapshot(),
     sell: directionalRobots.sell.getSnapshot(),
   }));
 
-  // Atualiza snapshots dos robôs para re-renderizar painel e boleta
+  // Atualiza snapshots de todos os robôs para re-renderizar painel e boleta
   const syncDirectionalSnapshots = useCallback(() => {
+    if (allDirectionalRobotsRef.current) {
+      const snaps: Record<number, DirectionalRobotSnapshot> = {};
+      for (const m of Object.keys(allDirectionalRobotsRef.current)) {
+        const num = Number(m);
+        snaps[num] = allDirectionalRobotsRef.current[num].getSnapshot();
+      }
+      setAllStrategySnapshots(snaps);
+    }
     if (directionalRobotsRef.current) {
       setDirectionalSnapshots({
         buy: directionalRobotsRef.current.buy.getSnapshot(),
@@ -593,9 +644,9 @@ export default function App() {
     }
   }, []);
 
-  const handleToggleDirectionalRobot = useCallback((magic: 100001 | 100002) => {
-    if (!directionalRobotsRef.current) return;
-    const target = magic === 100001 ? directionalRobotsRef.current.buy : directionalRobotsRef.current.sell;
+  const handleToggleDirectionalRobot = useCallback((magic: DirectionalMagic) => {
+    const target = allDirectionalRobotsRef.current?.[magic];
+    if (!target) return;
     if (target.paused) {
       target.activate();
     } else {
@@ -905,36 +956,37 @@ export default function App() {
         } else if (data.type === 'REPLAY_DAYS_SYNC') {
           if (data.days) setReplayDays(data.days);
         } else if (data.type === 'DIRECTIONAL_ROBOT_SYNC') {
-          if (directionalRobotsRef.current) {
-            directionalRobotsRef.current.buy.loadState();
-            directionalRobotsRef.current.sell.loadState();
+          if (allDirectionalRobotsRef.current) {
+            for (const r of Object.values(allDirectionalRobotsRef.current)) {
+              r.loadState();
+            }
             syncDirectionalSnapshots();
           }
         }
       };
 
       const handleStorageEvent = (e: StorageEvent) => {
-        if (e.key && e.key.startsWith('fluxo_quant_b3_directional_robot_v1_') && directionalRobotsRef.current) {
-          directionalRobotsRef.current.buy.loadState();
-          directionalRobotsRef.current.sell.loadState();
+        if (e.key && e.key.startsWith('fluxo_quant_b3_directional_robot_v1_') && allDirectionalRobotsRef.current) {
+          for (const r of Object.values(allDirectionalRobotsRef.current)) {
+            r.loadState();
+          }
           syncDirectionalSnapshots();
         }
       };
       window.addEventListener('storage', handleStorageEvent);
 
       const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-        if (!directionalRobotsRef.current) return;
-        const b = directionalRobotsRef.current.buy;
-        const s = directionalRobotsRef.current.sell;
-        // Persiste imediatamente o estado atualizado antes de qualquer reload (F5)
-        b.saveState();
-        s.saveState();
-        const hasOpenPositions =
-          b.positions.some((p) => p.status === 'OPEN') ||
-          s.positions.some((p) => p.status === 'OPEN');
-        if ((!b.paused || !s.paused) && hasOpenPositions) {
+        if (!allDirectionalRobotsRef.current) return;
+        const robots = Object.values(allDirectionalRobotsRef.current);
+        for (const r of robots) {
+          r.saveState();
+        }
+        const hasActiveWithOpenPositions = robots.some(
+          (r) => !r.paused && r.positions.some((p) => p.status === 'OPEN')
+        );
+        if (hasActiveWithOpenPositions) {
           e.preventDefault();
-          e.returnValue = 'Robô Hedge ativo com posições abertas! O estado será restaurado, mas confirme se deseja recarregar a tela.';
+          e.returnValue = 'Robô EA ativo com posições abertas! O estado será restaurado, mas confirme se deseja recarregar a tela.';
         }
       };
       window.addEventListener('beforeunload', handleBeforeUnload);
@@ -1328,11 +1380,10 @@ export default function App() {
       baseOrders = saved.filter((o) => o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT');
     }
 
-    // Restaura no livro visual as posições abertas ou fechadas dos Robôs Hedge (100001 / 100002) que resistiram ao F5
-    const dirPos = [
-      ...directionalRobots.buy.positions,
-      ...directionalRobots.sell.positions,
-    ];
+    // Restaura no livro visual as posições abertas ou fechadas de todos os Robôs EAs que resistiram ao F5
+    const dirPos = allDirectionalRobotsRef.current
+      ? Object.values(allDirectionalRobotsRef.current).flatMap((r) => r.positions)
+      : [...directionalRobots.buy.positions, ...directionalRobots.sell.positions];
     for (const p of dirPos) {
       const existingIdx = baseOrders.findIndex((o) => o.id === p.id);
       const mappedOrder: TradeOrder = {
@@ -1352,7 +1403,7 @@ export default function App() {
         isBreakevenActive: p.isBreakevenActive,
         highestPriceSinceEntry: p.highestPriceSinceEntry,
         lowestPriceSinceEntry: p.lowestPriceSinceEntry,
-        status: p.status === 'OPEN' ? 'OPEN' : (p.status === 'CLOSED_PROFIT' ? 'CLOSED_TP' : 'CLOSED_SL'),
+        status: p.status === 'OPEN' ? 'OPEN' : (p.status === 'CLOSED_PROFIT' ? 'CLOSED_PROFIT' : 'CLOSED_LOSS'),
         exitPrice: p.exitPrice,
         exitTimestamp: p.exitTimestamp,
         exitTimeStr: p.exitTimestamp ? new Date(p.exitTimestamp).toTimeString().split(' ')[0] : undefined,
@@ -1360,7 +1411,7 @@ export default function App() {
         financialResult: p.financialResult,
         source: 'ROBOT_EA',
         magicNumber: p.magic,
-        triggerReason: `Robô ${p.magic === 100001 ? 'RoboCompra' : 'RoboVenda'} (magic ${p.magic})`,
+        triggerReason: `Robô ${getRobotNameByMagic(p.magic)} (magic ${p.magic})`,
       };
       if (existingIdx >= 0) {
         baseOrders[existingIdx] = mappedOrder;
@@ -1371,6 +1422,15 @@ export default function App() {
 
     return baseOrders;
   });
+
+  // Espelho síncrono do livro de ordens: o handler de tick precisa do ticket MT5 das ordens dos EAs
+  // direcionais para mandar o stop protegido / a saída à corretora sem esperar o próximo render.
+  const ordersRef = useRef<TradeOrder[]>(orders);
+  ordersRef.current = orders;
+  // Último SL enviado à ponte por ticket: evita reenviar o mesmo ORDER_MODIFY_SL a cada tick.
+  const lastSentDirSlRef = useRef<Map<number, number>>(new Map());
+  // Tickets cuja saída (SL/TP/BE) já foi enviada à ponte: nunca mandar o fechamento duas vezes.
+  const sentDirCloseRef = useRef<Set<number>>(new Set());
 
   const [latestToast, setLatestToast] = useState<{
 
@@ -2227,16 +2287,63 @@ export default function App() {
       // Processa no motor de Renko (escala do box da config) e Fluxo
       const renkoRes = engine.processTick(tick, config);
 
-      // Passo 3: mark-to-market dos robôs direcionais (Trailing Stop, Breakeven, SL/TP + PnL flutuante)
-      directionalRobots.buy.onTick(tick.price);
-      directionalRobots.sell.onTick(tick.price);
+      // Passo 3: mark-to-market de todos os robôs direcionais (Trailing Stop, Breakeven, SL/TP + PnL flutuante)
+      const allRobotsList = allDirectionalRobotsRef.current
+        ? Object.values(allDirectionalRobotsRef.current)
+        : [directionalRobots.buy, directionalRobots.sell];
+      for (const r of allRobotsList) {
+        const closedNow = r.onTick(tick.price);
+
+        // Execução REAL (EA em modo LIVE, MT5 conectado, fora do replay): o stop protegido e a saída
+        // calculados pelo EA precisam chegar à corretora — sem isso o preço passa pelo BE na tela e a
+        // posição real continua aberta. Só age com ticket conhecido (a ponte cai em positions[0] sem ele).
+        const liveBridge =
+          !isReplayMode &&
+          mt5State.status === 'CONNECTED' &&
+          r.executionMode === 'LIVE' &&
+          wsRef.current &&
+          wsRef.current.readyState === WebSocket.OPEN;
+        if (!liveBridge) continue;
+
+        const bookById = new Map(ordersRef.current.map((o) => [o.id, o]));
+
+        // a) Saídas por SL / TP / Trailing-BE: fecha só o ticket daquela posição
+        for (const c of closedNow) {
+          const ord = bookById.get(c.id);
+          const ticket = ord?.ticket;
+          if (!ticket || sentDirCloseRef.current.has(ticket)) continue;
+          sentDirCloseRef.current.add(ticket);
+          wsRef.current!.send(JSON.stringify({
+            action: 'ORDER_PARTIAL_CLOSE',
+            ticket,
+            partialVolume: ord?.remainingContracts || ord?.contracts || c.contracts,
+            robotMagic: r.magic,
+          }));
+        }
+
+        // b) Stop protegido (BE / trailing) movido: espelha o novo SL na posição real
+        for (const p of r.positions) {
+          if (p.status !== 'OPEN' || !(p.stopLoss > 0)) continue;
+          const ticket = bookById.get(p.id)?.ticket;
+          if (!ticket) continue;
+          if (lastSentDirSlRef.current.get(ticket) === p.stopLoss) continue;
+          lastSentDirSlRef.current.set(ticket, p.stopLoss);
+          wsRef.current!.send(JSON.stringify({
+            action: 'ORDER_MODIFY_SL',
+            ticket,
+            newSL: p.stopLoss,
+            robotMagic: r.magic,
+          }));
+        }
+      }
 
       // Sincroniza estado (SL/TP, Trailing Stop/Breakeven e fechamentos) dos robôs direcionais com a tabela global de ordens e gráfico em TODOS os modos
       setOrders((prev) => {
         let changed = false;
         let updated = prev.map((o) => {
-          if (!o.magicNumber || (o.magicNumber !== 100001 && o.magicNumber !== 100002)) return o;
-          const targetRobot = o.magicNumber === 100001 ? directionalRobots.buy : directionalRobots.sell;
+          if (!o.magicNumber || !ALL_DIRECTIONAL_MAGICS.has(o.magicNumber)) return o;
+          const targetRobot = allDirectionalRobotsRef.current?.[o.magicNumber];
+          if (!targetRobot) return o;
           const pos = targetRobot.positions.find((p) => p.id === o.id);
           if (!pos) return o;
 
@@ -2250,7 +2357,7 @@ export default function App() {
               stopLoss: saneSL,
               takeProfit: saneTP,
               isBreakevenActive: Boolean(pos.isBreakevenActive),
-              status: pos.status === 'CLOSED_PROFIT' ? ('CLOSED_TP' as const) : ('CLOSED_SL' as const),
+              status: pos.status === 'CLOSED_PROFIT' ? ('CLOSED_PROFIT' as const) : ('CLOSED_LOSS' as const),
               exitPrice: pos.exitPrice,
               exitTimestamp: pos.exitTimestamp,
               exitTimeStr: pos.exitTimestamp ? new Date(pos.exitTimestamp).toTimeString().split(' ')[0] : undefined,
@@ -2283,10 +2390,7 @@ export default function App() {
         });
 
         // Garante que qualquer posição aberta nos robôs direcionais também exista em `orders` para exibir SL e TP no gráfico
-        const openDirPositions = [
-          ...directionalRobots.buy.positions.filter((p) => p.status === 'OPEN'),
-          ...directionalRobots.sell.positions.filter((p) => p.status === 'OPEN'),
-        ];
+        const openDirPositions = allRobotsList.flatMap((r) => r.positions.filter((p) => p.status === 'OPEN'));
         for (const p of openDirPositions) {
           if (!updated.some((o) => o.id === p.id)) {
             changed = true;
@@ -2313,7 +2417,7 @@ export default function App() {
                 status: 'OPEN',
                 source: 'ROBOT_EA',
                 magicNumber: p.magic,
-                triggerReason: `Robô ${p.magic === 100001 ? 'RoboCompra' : 'RoboVenda'} (magic ${p.magic})`,
+                triggerReason: `Robô ${getRobotNameByMagic(p.magic)} (magic ${p.magic})`,
               },
               ...updated,
             ];
@@ -2501,43 +2605,75 @@ export default function App() {
 
           const oppositeType = signalType === 'BUY' ? 'SELL' : 'BUY';
 
-          // Passo 3 e 4: despacha sinal para os robôs direcionais
-          // O robô de compra só reage a sinais BUY, o de venda só a sinais SELL.
-          // Sinal contrário com onCloseOpposite fecha posições do robô alvo.
-          const buyRes = directionalRobots.buy.onSignal(signalType, result.closedBox.index, tick.price);
-          const sellRes = directionalRobots.sell.onSignal(signalType, result.closedBox.index, tick.price);
+          // Passo 3 e 4: despacha sinal para todos os pares de EAs por estratégia (Compra e Venda independentes)
+          const allRobotsForSignal = allDirectionalRobotsRef.current
+            ? Object.values(allDirectionalRobotsRef.current)
+            : [directionalRobots.buy, directionalRobots.sell];
 
-          // Integração com a boleta/gráfico: se houve intenção em robô ativo (seja replay ou real), injeta em orders
-          const activeRobot = signalType === 'BUY' ? directionalRobots.buy : directionalRobots.sell;
-          const activeRes = signalType === 'BUY' ? buyRes : sellRes;
-          if (!activeRobot.paused && activeRes.intent) {
-            const int = activeRes.intent;
-            const isLiveExec = !isReplaying && mt5State.status === 'CONNECTED' && activeRobot.executionMode === 'LIVE';
-            const newDirOrder: TradeOrder = {
-              id: int.id,
-              symbol: int.symbol,
-              timestamp: int.createdAt,
-              timeStr: tick.timeStr || new Date(int.createdAt).toTimeString().split(' ')[0],
-              fillTimestamp: int.createdAt,
-              fillTimeStr: tick.timeStr || new Date(int.createdAt).toTimeString().split(' ')[0],
-              type: int.direction,
-              role: 'MAIN',
-              entryPrice: int.entryPrice,
-              contracts: int.contracts,
-              remainingContracts: int.contracts,
-              stopLoss: int.stopLoss,
-              takeProfit: int.takeProfit,
-              status: 'OPEN',
-              source: isLiveExec ? 'MT5_LIVE' : 'ROBOT_EA',
-              magicNumber: int.magic,
-              triggerReason: `Robô ${int.magic === 100001 ? 'RoboCompra' : 'RoboVenda'} (magic ${int.magic})`,
-              isRealMT5: isLiveExec,
-            };
-            setOrders((prev) => [newDirOrder, ...prev]);
+          const newDirOrdersToAdd: TradeOrder[] = [];
+          const allClosed: typeof directionalRobots.buy.positions = [];
+
+          for (const robot of allRobotsForSignal) {
+            const sigRes = robot.onSignal(signalType, result.closedBox.index, tick.price);
+            if (sigRes.closed.length > 0) {
+              allClosed.push(...sigRes.closed);
+            }
+            if (!robot.paused && sigRes.intent) {
+              const int = sigRes.intent;
+              const isLiveExec = !isReplaying && mt5State.status === 'CONNECTED' && robot.executionMode === 'LIVE';
+              newDirOrdersToAdd.push({
+                id: int.id,
+                symbol: int.symbol,
+                timestamp: int.createdAt,
+                timeStr: tick.timeStr || new Date(int.createdAt).toTimeString().split(' ')[0],
+                fillTimestamp: int.createdAt,
+                fillTimeStr: tick.timeStr || new Date(int.createdAt).toTimeString().split(' ')[0],
+                type: int.direction,
+                role: 'MAIN',
+                entryPrice: int.entryPrice,
+                contracts: int.contracts,
+                remainingContracts: int.contracts,
+                stopLoss: int.stopLoss,
+                takeProfit: int.takeProfit,
+                status: 'OPEN',
+                source: isLiveExec ? 'MT5_LIVE' : 'ROBOT_EA',
+                magicNumber: int.magic,
+                triggerReason: `Robô ${getRobotNameByMagic(int.magic)} (magic ${int.magic})`,
+                isRealMT5: isLiveExec,
+              });
+
+              if (isLiveExec && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                const sym = config.symbol || (asset.activeContract || asset.primarySymbol);
+                wsRef.current.send(JSON.stringify({
+                  action: 'ORDER_SEND',
+                  symbol: sym,
+                  type: robot.direction,
+                  contracts: int.contracts || config.contracts || 1,
+                  sl: robot.config.stopLossPoints || 100,
+                  tp: robot.config.takeProfitPoints || 50,
+                  magic: robot.magic,
+                  comment: int.comment || `${robot.commentPrefix}${sym}`.substring(0, 31),
+                }));
+              }
+            }
+
+            if (sigRes.closed.length > 0 && !isReplaying && mt5State.status === 'CONNECTED' && robot.executionMode === 'LIVE' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              // A ponte lê `robotMagic` (não `magic`): sem ele o filtro some e ela zeraria TODAS as
+              // posições do ativo, inclusive as dos outros EAs e a venda aberta em hedge.
+              wsRef.current.send(JSON.stringify({
+                action: 'CLOSE_POSITIONS',
+                symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                type: robot.direction,
+                robotMagic: robot.magic,
+              }));
+            }
+          }
+
+          if (newDirOrdersToAdd.length > 0) {
+            setOrders((prev) => [...newDirOrdersToAdd, ...prev]);
           }
 
           // Se houve fechamentos por sinal contrário (onCloseOpposite) nos robôs direcionais:
-          const allClosed = [...buyRes.closed, ...sellRes.closed];
           if (allClosed.length > 0) {
             setOrders((prev) =>
               prev.map((o) => {
@@ -2557,51 +2693,6 @@ export default function App() {
                 return o;
               })
             );
-          }
-
-          // Disparo de ordem real ao MT5 se o robô direcional correspondente estiver ATIVO e em modo LIVE
-          if (!isReplaying && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            if (signalType === 'BUY' && !directionalRobots.buy.paused && directionalRobots.buy.executionMode === 'LIVE' && buyRes.intent) {
-              const sym = config.symbol || (asset.activeContract || asset.primarySymbol);
-              wsRef.current.send(JSON.stringify({
-                action: 'ORDER_SEND',
-                symbol: sym,
-                type: 'BUY',
-                contracts: buyRes.intent.contracts || config.contracts || 1,
-                sl: directionalRobots.buy.config.stopLossPoints || 100,
-                tp: directionalRobots.buy.config.takeProfitPoints || 50,
-                magic: 100001,
-                comment: `RCOMP_${sym}`.substring(0, 31),
-              }));
-            } else if (signalType === 'SELL' && !directionalRobots.sell.paused && directionalRobots.sell.executionMode === 'LIVE' && sellRes.intent) {
-              const sym = config.symbol || (asset.activeContract || asset.primarySymbol);
-              wsRef.current.send(JSON.stringify({
-                action: 'ORDER_SEND',
-                symbol: sym,
-                type: 'SELL',
-                contracts: sellRes.intent.contracts || config.contracts || 1,
-                sl: directionalRobots.sell.config.stopLossPoints || 100,
-                tp: directionalRobots.sell.config.takeProfitPoints || 50,
-                magic: 100002,
-                comment: `RVEND_${sym}`.substring(0, 31),
-              }));
-            }
-
-            // Encerramento de ordens contrárias no MT5 se onCloseOpposite gerou fechamentos
-            if (buyRes.closed.length > 0) {
-              wsRef.current.send(JSON.stringify({
-                action: 'CLOSE_POSITIONS',
-                symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
-                magic: 100001,
-              }));
-            }
-            if (sellRes.closed.length > 0) {
-              wsRef.current.send(JSON.stringify({
-                action: 'CLOSE_POSITIONS',
-                symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
-                magic: 100002,
-              }));
-            }
           }
 
 
@@ -3540,8 +3631,10 @@ export default function App() {
 
 
         let updated = prevOrders.map((ord) => {
-          // Ordens dos Robôs Hedge (100001 / 100002) são gerenciadas exclusivamente pelo DirectionalRobot.onTick
-          if (ord.magicNumber === 100001 || ord.magicNumber === 100002) {
+          // Ordens de TODOS os EAs direcionais (Hedge 100001/100002 e 201001…206002) são geridas só pelo
+          // DirectionalRobot.onTick. Antes só o par Hedge era isolado: as outras estratégias caíam aqui e
+          // o trailing/SL/TP do robô principal brigava com o break even do próprio EA.
+          if (ord.magicNumber && ALL_DIRECTIONAL_MAGICS.has(ord.magicNumber)) {
             return ord;
           }
           const isManagedByMT5 = (Boolean(ord.ticket) || ord.isRealMT5) && mt5State.status === 'CONNECTED' && !isReplayMode;
@@ -4866,7 +4959,7 @@ export default function App() {
                   const saneCur = isPriceSaneForAsset(posCurPrice, curActiveAsset) ? posCurPrice : saneOpen;
                   const pnlPts = isBuy ? (saneCur - saneOpen) : (saneOpen - saneCur);
 
-                  const isHedgeEA = pos.magic === 100001 || pos.magic === 100002;
+                  const isHedgeEA = ALL_DIRECTIONAL_MAGICS.has(Number(pos.magic) || 0);
                   const fallbackSl = isHedgeEA ? (isBuy ? saneOpen - 100 : saneOpen + 100) : 0;
                   const fallbackTp = isHedgeEA ? (isBuy ? saneOpen + 50 : saneOpen - 50) : 0;
 
@@ -5501,7 +5594,7 @@ export default function App() {
                   const saneCur = isPriceSaneForAsset(posCurPrice, curActiveAsset) ? posCurPrice : saneOpen;
                   const pnlPts = isBuy ? (saneCur - saneOpen) : (saneOpen - saneCur);
 
-                  const isHedgeEA = pos.magic === 100001 || pos.magic === 100002;
+                  const isHedgeEA = ALL_DIRECTIONAL_MAGICS.has(Number(pos.magic) || 0);
                   const fallbackSl = isHedgeEA ? (isBuy ? saneOpen - 100 : saneOpen + 100) : 0;
                   const fallbackTp = isHedgeEA ? (isBuy ? saneOpen + 50 : saneOpen - 50) : 0;
 
@@ -9293,9 +9386,9 @@ export default function App() {
       </select>
 
       <button
-        onClick={() => setActiveTab('studio')}
-        className="text-amber-400/80 hover:text-amber-300 transition-colors cursor-pointer p-0.5"
-        title="Abrir o Estúdio de Estratégias (programar, salvar, importar/exportar)"
+        onClick={() => setActiveTab('eas')}
+        className="text-indigo-400/90 hover:text-indigo-300 transition-colors cursor-pointer p-0.5"
+        title="Abrir a aba principal Hedge EAs (todas as estratégias com EA de Compra e EA de Venda separados)"
       >
         <Sparkles className="w-3.5 h-3.5" />
       </button>
@@ -9416,7 +9509,7 @@ export default function App() {
 
         activeStrategyLive={!!config.strategyId && !!activeStrategy}
 
-        onOpenStudio={() => setActiveTab('studio')}
+        onOpenStudio={() => setActiveTab('eas')}
 
       />
 
@@ -9829,7 +9922,14 @@ ${
           <>
 
             {activeTab === 'chart' && (
-              <div className="h-full w-full rounded-lg border border-slate-800 overflow-hidden flex flex-col">
+              <div className="relative h-full w-full rounded-lg border border-slate-800 overflow-hidden flex flex-col">
+                <ActiveEAsChartHud
+                  allStrategySnapshots={allStrategySnapshots}
+                  onToggleRobot={handleToggleDirectionalRobot}
+                  onOpenEAsTab={() => setActiveTab('eas')}
+                  mainRobotActive={config.active}
+                  mainStrategyName={activeStrategyName}
+                />
                 <RenkoFlowChart
                   rightContent={strategySelectorNode}
                   boxes={chartSeries === 'renko' ? boxes : chartSeries === 'range' ? rangeBoxes : timeBoxes}
@@ -10224,6 +10324,7 @@ ${
                 <DirectionalEAsPanel
                   asset={asset}
                   config={config}
+                  allStrategySnapshots={allStrategySnapshots}
                   directionalSnapshots={
                     directionalSnapshots || {
                       buy: directionalRobots.buy.getSnapshot(),
@@ -10232,8 +10333,8 @@ ${
                   }
                   onToggleRobot={handleToggleDirectionalRobot}
                   onUpdateDirectionalConfig={(magic, patch) => {
-                    if (!directionalRobotsRef.current) return;
-                    const targetRobot = magic === 100001 ? directionalRobotsRef.current.buy : directionalRobotsRef.current.sell;
+                    const targetRobot = allDirectionalRobotsRef.current?.[magic];
+                    if (!targetRobot) return;
                     targetRobot.updateConfig(patch);
                     // Atualiza imediatamente os SL e TP das ordens abertas no livro global/gráfico
                     setOrders((prev) =>
@@ -10255,31 +10356,25 @@ ${
                     } catch {}
                   }}
                   onChangeExecutionMode={(magic, mode) => {
-                    if (!directionalRobotsRef.current) return;
-                    if (magic === 100001) {
-                      directionalRobotsRef.current.buy.setExecutionMode(mode);
-                    } else if (magic === 100002) {
-                      directionalRobotsRef.current.sell.setExecutionMode(mode);
-                    }
+                    const targetRobot = allDirectionalRobotsRef.current?.[magic];
+                    if (!targetRobot) return;
+                    targetRobot.setExecutionMode(mode);
                     syncDirectionalSnapshots();
                     try {
                       saasChannelRef.current?.postMessage({ type: 'DIRECTIONAL_ROBOT_SYNC', magic, mode });
                     } catch {}
                   }}
                   onResetBook={(magic) => {
-                    if (!directionalRobotsRef.current) return;
-                    if (magic === 100001) {
-                      directionalRobotsRef.current.buy.resetBook();
-                    } else if (magic === 100002) {
-                      directionalRobotsRef.current.sell.resetBook();
+                    if (!allDirectionalRobotsRef.current) return;
+                    if (magic) {
+                      allDirectionalRobotsRef.current[magic]?.resetBook();
                     } else {
-                      directionalRobotsRef.current.buy.resetBook();
-                      directionalRobotsRef.current.sell.resetBook();
+                      for (const r of Object.values(allDirectionalRobotsRef.current)) {
+                        r.resetBook();
+                      }
                     }
                     setOrders((prev) =>
-                      prev.filter((o) =>
-                        magic ? o.magicNumber !== magic : o.magicNumber !== 100001 && o.magicNumber !== 100002
-                      )
+                      prev.filter((o) => (magic ? o.magicNumber !== magic : !ALL_DIRECTIONAL_MAGICS.has(o.magicNumber || 0)))
                     );
                     syncDirectionalSnapshots();
                     try {
@@ -10378,42 +10473,6 @@ ${
                   }
 
                   onToggleDirectionalRobot={handleToggleDirectionalRobot}
-
-                />
-
-              </div>
-
-            )}
-
-
-
-            {activeTab === 'studio' && (
-
-              <div className="h-full w-full">
-
-                <StrategyStudio
-
-                  currentConfig={config}
-
-                  activeProfileName={activeStrategyName ?? undefined}
-
-                  activeStrategyId={config.strategyId ?? null}
-
-                  shadowStrategyId={config.shadowRobot?.strategyId ?? null}
-
-                  onLibraryChanged={refreshStrategyLibrary}
-
-                  onApplyConfig={handleApplySyncedConfig}
-
-                  onActivate={(s) => {
-
-                    handleActivateStrategy(s);
-
-                    refreshStrategyLibrary();
-
-                  }}
-
-                  onOpenEditor={() => setActiveTab('settings')}
 
                 />
 
@@ -10796,19 +10855,19 @@ ${
 
               <button
 
-                onClick={() => { setActiveTab('studio'); setMoreNavOpen(false); }}
+                onClick={() => { setActiveTab('eas'); setMoreNavOpen(false); }}
 
                 className={`flex flex-col items-center justify-center py-3 rounded-lg text-[10px] font-medium border transition-colors ${
 
-                  activeTab === 'studio' ? 'border-slate-600 bg-slate-800 text-slate-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
+                  activeTab === 'eas' ? 'border-indigo-500 bg-indigo-950/60 text-indigo-100 font-semibold' : 'border-slate-800 bg-slate-900/60 text-slate-400'
 
                 }`}
 
               >
 
-                <Sparkles className="w-5 h-5 mb-1" />
+                <Sparkles className="w-5 h-5 mb-1 text-indigo-400" />
 
-                <span>Estúdio</span>
+                <span>Hedge EAs</span>
 
               </button>
 

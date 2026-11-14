@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AutomationConfig, ConfigPreset } from '../types/trading';
-import type { DirectionalRobotSnapshot } from '../services/directionalRobotService';
+import type { DirectionalRobotSnapshot, DirectionalMagic } from '../services/directionalRobotService';
 import {
   chartSymbolFor,
   pointsToBRL,
@@ -84,7 +84,7 @@ interface AutomationPanelProps {
   /** Snapshots dos robôs direcionais (Passo 3): compra e venda. */
   directionalSnapshots?: { buy: DirectionalRobotSnapshot; sell: DirectionalRobotSnapshot };
   /** Ações para ativar/pausar cada robô direcional individualmente */
-  onToggleDirectionalRobot?: (magic: 100001 | 100002) => void;
+  onToggleDirectionalRobot?: (magic: DirectionalMagic) => void;
 }
 
 /** Quantos tijolos cabem em N pontos (com o box editável, a conta nunca é mais "÷ 50"). */
@@ -2144,108 +2144,6 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
           </button>
         </div>
       </CollapsibleSection>
-
-      {/* ========================================================================= */
-      /* CARTÕES: ROBÔS DIRECIONAIS (Passo 3 — sem envio de ordem real à ponte) */
-      /* ========================================================================= */}
-      {directionalSnapshots && (
-        <div className="bg-slate-950/60 rounded-lg border border-slate-800 p-3.5 mt-4">
-          <h3 className="text-xs font-bold text-slate-300 mb-3 flex items-center gap-1.5">
-            <Activity className="w-3 h-3 text-emerald-400" />
-            Robôs Direcionais — C/V Hedge (Simulação)
-          </h3>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            {[
-              {
-                key: 'buy',
-                label: 'RoboCompra',
-                role: 'BUY_ROBOT',
-                magic: 100001,
-                color: 'emerald',
-                snap: directionalSnapshots.buy,
-              },
-              {
-                key: 'sell',
-                label: 'RoboVenda',
-                role: 'SELL_ROBOT',
-                magic: 100002,
-                color: 'rose',
-                snap: directionalSnapshots.sell,
-              },
-            ].map(({ key, label, role, magic, color, snap }) => (
-              <div
-                key={key}
-                className={`p-2.5 rounded border ${snap.paused ? 'bg-slate-900 border-slate-700' : `bg-${color}-500/10 border-${color}-500/30`}`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <span className={`font-bold text-${color}-400 uppercase tracking-wider block`}>{label}</span>
-                    <span className="text-[10px] font-mono text-slate-500">magic {magic}</span>
-                  </div>
-                  {onToggleDirectionalRobot && (
-                    <button
-                      type="button"
-                      onClick={() => onToggleDirectionalRobot(magic as 100001 | 100002)}
-                      className={`px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer border ${
-                        snap.paused
-                          ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-600'
-                          : color === 'emerald'
-                          ? 'bg-emerald-600 hover:bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
-                          : 'bg-rose-600 hover:bg-rose-500 text-slate-950 border-rose-400 font-bold'
-                      }`}
-                      title={snap.paused ? `Ativar ${label}` : `Pausar ${label}`}
-                    >
-                      {snap.paused ? (
-                        <>
-                          <Play className="w-3 h-3 text-emerald-400" />
-                          <span>Ativar</span>
-                        </>
-                      ) : (
-                        <>
-                          <Pause className="w-3 h-3 text-slate-950" />
-                          <span>Pausar</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Status:</span>
-                    <span className={`font-mono font-semibold ${snap.paused ? 'text-amber-400' : `text-${color}-400`}`}>
-                      {snap.paused ? 'PAUSADO' : 'ATIVO'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Último sinal:</span>
-                    <span className="font-mono text-slate-200">
-                      {snap.lastSignal ? `${snap.lastSignal.direction} box#${snap.lastSignal.boxIndex} @${snap.lastSignal.price}` : '—'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Intenções:</span>
-                    <span className="font-mono text-emerald-300">{snap.totalIntents}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Posições abertas:</span>
-                    <span className="font-mono text-slate-200">{snap.openPositions.length}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">PnL realizado:</span>
-                    <span className={`font-mono ${snap.pnlFinancial >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      R$ {snap.pnlFinancial.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Fechamentos:</span>
-                    <span className="font-mono text-slate-200">{snap.totalCloses}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
     </div>
   );

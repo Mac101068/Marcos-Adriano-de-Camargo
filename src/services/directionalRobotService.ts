@@ -5,8 +5,285 @@ import { OrderAuditService } from './orderAuditService';
 
 const DIRECTIONAL_STORAGE_KEY_PREFIX = 'fluxo_quant_b3_directional_robot_v1_';
 
+export type DirectionalMagic =
+  | 100001 | 100002
+  | 201001 | 201002
+  | 202001 | 202002
+  | 203001 | 203002
+  | 204001 | 204002
+  | 205001 | 205002
+  | 206001 | 206002
+  | number;
+
+export type StrategyFamily =
+  | 'HEDGE_DIRECIONAL'
+  | 'PIRAMIDE_10R'
+  | 'JANELA_FLUXO'
+  | 'ACUMULACAO_CV'
+  | 'RETESTE_10R'
+  | 'SCALPER_10R'
+  | 'TREND_10R'
+  | 'FLOW'
+  | 'PYRAMID'
+  | string;
+
+export interface StrategyPairCatalogItem {
+  id: StrategyFamily;
+  folder: string;
+  name: string;
+  shortName: string;
+  badge: string;
+  description: string;
+  buyMagic: DirectionalMagic;
+  sellMagic: DirectionalMagic;
+  buyName: string;
+  sellName: string;
+  buyCommentPrefix: string;
+  sellCommentPrefix: string;
+  defaults: {
+    contracts: number;
+    stopLossPoints: number;
+    takeProfitPoints: number;
+    trailingStop: boolean;
+    trailingActivationPoints: number;
+    trailingDistancePoints: number;
+    breakevenOffsetPoints: number;
+    maxOpenPositions: number;
+    onCloseOpposite: boolean;
+    minDeltaThreshold?: number;
+    strategyMode?: AutomationConfig['strategyMode'];
+    entryTriggerType?: AutomationConfig['entryTriggerType'];
+    enablePartialExit?: boolean;
+    partialPoints?: number;
+    moveMainToBreakevenOnPyramidTp?: boolean;
+    requireCvdNewExtreme?: boolean;
+  };
+}
+
+export const STRATEGY_EA_CATALOG: StrategyPairCatalogItem[] = [
+  {
+    id: 'HEDGE_DIRECIONAL',
+    folder: 'eas/hedge-direcional',
+    name: 'Hedge Direcional B3',
+    shortName: 'Hedge Direcional',
+    badge: 'HEDGE PADRÃO',
+    description: 'Execução hedge pura com isolamento entre Compra (100001) e Venda (100002), Trailing Stop + Breakeven automático e trava anti-acúmulo.',
+    buyMagic: 100001,
+    sellMagic: 100002,
+    buyName: 'RoboCompra Hedge',
+    sellName: 'RoboVenda Hedge',
+    buyCommentPrefix: 'RCOMP_',
+    sellCommentPrefix: 'RVEND_',
+    defaults: {
+      contracts: 1,
+      stopLossPoints: 100,
+      takeProfitPoints: 50,
+      trailingStop: true,
+      trailingActivationPoints: 20,
+      trailingDistancePoints: 15,
+      breakevenOffsetPoints: 5,
+      maxOpenPositions: 3,
+      onCloseOpposite: false,
+      minDeltaThreshold: 200,
+    },
+  },
+  {
+    id: 'PIRAMIDE_10R',
+    folder: 'eas/piramide-10r',
+    name: '10R Pirâmide & Confluência',
+    shortName: 'Pirâmide 10R',
+    badge: 'PIRÂMIDE 50P',
+    description: 'Adiciona pirâmides a cada bloco fechado na direção (TP 50p) + Ordem Mãe protegida no Breakeven ao bater TP da pirâmide e saída na virada de fluxo.',
+    buyMagic: 201001,
+    sellMagic: 201002,
+    buyName: 'Pirâmide Compra',
+    sellName: 'Pirâmide Venda',
+    buyCommentPrefix: 'EPYR_C_',
+    sellCommentPrefix: 'EPYR_V_',
+    defaults: {
+      contracts: 1,
+      stopLossPoints: 100,
+      takeProfitPoints: 50,
+      trailingStop: true,
+      trailingActivationPoints: 25,
+      trailingDistancePoints: 15,
+      breakevenOffsetPoints: 5,
+      maxOpenPositions: 6,
+      onCloseOpposite: true,
+      minDeltaThreshold: 300,
+      strategyMode: 'PYRAMID_FLOW_CONFLUENCE',
+      entryTriggerType: 'MARKET_ON_CLOSE',
+      moveMainToBreakevenOnPyramidTp: true,
+    },
+  },
+  {
+    id: 'JANELA_FLUXO',
+    folder: 'eas/janela-fluxo',
+    name: 'Janela de Fluxo & Agressão',
+    shortName: 'Janela de Fluxo',
+    badge: 'JANELA DE FLUXO',
+    description: 'Captura janelas de desequilíbrio entre Fluxo e Agressão (Delta institucional + Heikin-Ashi) com SL 80p, TP 200p, Parcial 60p + BE e Trailing 80→40.',
+    buyMagic: 202001,
+    sellMagic: 202002,
+    buyName: 'Fluxo Compra',
+    sellName: 'Fluxo Venda',
+    buyCommentPrefix: 'EFLUX_C_',
+    sellCommentPrefix: 'EFLUX_V_',
+    defaults: {
+      contracts: 1,
+      stopLossPoints: 80,
+      takeProfitPoints: 200,
+      trailingStop: true,
+      trailingActivationPoints: 80,
+      trailingDistancePoints: 40,
+      breakevenOffsetPoints: 5,
+      maxOpenPositions: 5,
+      onCloseOpposite: true,
+      minDeltaThreshold: 150,
+      strategyMode: 'PYRAMID_FLOW_CONFLUENCE',
+      entryTriggerType: 'MARKET_ON_CLOSE',
+      enablePartialExit: true,
+      partialPoints: 60,
+    },
+  },
+  {
+    id: 'ACUMULACAO_CV',
+    folder: 'eas/acumulacao-cv',
+    name: 'C/V Acumulação por Sinal (WIN / WDO)',
+    shortName: 'Acumulação C/V',
+    badge: 'C/V SINAL',
+    description: 'Acumulação contínua por sinal (SIGNAL_STACK): abre posição a cada box fechado com fluxo validado, acumula contratos na direção e zera no sinal oposto.',
+    buyMagic: 203001,
+    sellMagic: 203002,
+    buyName: 'Acumulação Compra',
+    sellName: 'Acumulação Venda',
+    buyCommentPrefix: 'ECV_C_',
+    sellCommentPrefix: 'ECV_V_',
+    defaults: {
+      contracts: 1,
+      stopLossPoints: 100,
+      takeProfitPoints: 100,
+      trailingStop: false,
+      trailingActivationPoints: 30,
+      trailingDistancePoints: 20,
+      breakevenOffsetPoints: 5,
+      maxOpenPositions: 8,
+      onCloseOpposite: true,
+      minDeltaThreshold: 300,
+      strategyMode: 'SIGNAL_STACK',
+      entryTriggerType: 'MARKET_ON_CLOSE',
+    },
+  },
+  {
+    id: 'RETESTE_10R',
+    folder: 'eas/reteste-10r',
+    name: '10R Padrão Institucional (Reteste)',
+    shortName: 'Reteste 10R',
+    badge: 'RETESTE',
+    description: 'Entrada no Reteste/Pullback na abertura do box, SL 100p, TP 150p, Parcial +50p com Breakeven (+5p offset) e Trailing Stop de 60→50 pts.',
+    buyMagic: 204001,
+    sellMagic: 204002,
+    buyName: 'Reteste Compra',
+    sellName: 'Reteste Venda',
+    buyCommentPrefix: 'ERET_C_',
+    sellCommentPrefix: 'ERET_V_',
+    defaults: {
+      contracts: 1,
+      stopLossPoints: 100,
+      takeProfitPoints: 150,
+      trailingStop: true,
+      trailingActivationPoints: 60,
+      trailingDistancePoints: 50,
+      breakevenOffsetPoints: 5,
+      maxOpenPositions: 3,
+      onCloseOpposite: false,
+      minDeltaThreshold: 250,
+      strategyMode: 'PULLBACK_RETEST',
+      entryTriggerType: 'PULLBACK_ENTRY',
+      enablePartialExit: true,
+      partialPoints: 50,
+    },
+  },
+  {
+    id: 'SCALPER_10R',
+    folder: 'eas/scalper-10r',
+    name: '10R Scalper Agressivo',
+    shortName: 'Scalper 10R',
+    badge: 'ALTA VELOCIDADE',
+    description: 'Entrada imediata a mercado no fechamento do box, alvo curto de 75 pts, Stop Loss de 75 pts, saída parcial em 35 pts e Delta agressivo (150 ctros).',
+    buyMagic: 205001,
+    sellMagic: 205002,
+    buyName: 'Scalper Compra',
+    sellName: 'Scalper Venda',
+    buyCommentPrefix: 'ESCALP_C_',
+    sellCommentPrefix: 'ESCALP_V_',
+    defaults: {
+      contracts: 1,
+      stopLossPoints: 75,
+      takeProfitPoints: 75,
+      trailingStop: true,
+      trailingActivationPoints: 35,
+      trailingDistancePoints: 20,
+      breakevenOffsetPoints: 5,
+      maxOpenPositions: 2,
+      onCloseOpposite: false,
+      minDeltaThreshold: 150,
+      entryTriggerType: 'MARKET_ON_CLOSE',
+      enablePartialExit: true,
+      partialPoints: 35,
+    },
+  },
+  {
+    id: 'TREND_10R',
+    folder: 'eas/trend-10r',
+    name: '10R Trend Follower (Tendência Longa)',
+    shortName: 'Trend Follower',
+    badge: 'LONGO ALVO',
+    description: 'Pullback a 50% do box (25 pts), SL estendido de 150 pts, alvo longo de 250 pts, Trailing Stop de 100→75 pts e confluência de novo extremo CVD.',
+    buyMagic: 206001,
+    sellMagic: 206002,
+    buyName: 'Trend Compra',
+    sellName: 'Trend Venda',
+    buyCommentPrefix: 'ETREND_C_',
+    sellCommentPrefix: 'ETREND_V_',
+    defaults: {
+      contracts: 1,
+      stopLossPoints: 150,
+      takeProfitPoints: 250,
+      trailingStop: true,
+      trailingActivationPoints: 100,
+      trailingDistancePoints: 75,
+      breakevenOffsetPoints: 10,
+      maxOpenPositions: 3,
+      onCloseOpposite: false,
+      minDeltaThreshold: 300,
+      entryTriggerType: 'PULLBACK_ENTRY',
+      enablePartialExit: true,
+      partialPoints: 75,
+      requireCvdNewExtreme: true,
+    },
+  },
+];
+
+export const ALL_DIRECTIONAL_MAGICS: ReadonlySet<number> = new Set(
+  STRATEGY_EA_CATALOG.flatMap((s) => [s.buyMagic, s.sellMagic])
+);
+
+export function findStrategyByMagic(magic?: number): StrategyPairCatalogItem | undefined {
+  if (!magic) return undefined;
+  return STRATEGY_EA_CATALOG.find((s) => s.buyMagic === magic || s.sellMagic === magic);
+}
+
+export function getRobotNameByMagic(magic?: number): string {
+  const item = findStrategyByMagic(magic);
+  if (!item) return magic === 100001 ? 'RoboCompra' : magic === 100002 ? 'RoboVenda' : `EA ${magic}`;
+  return magic === item.buyMagic ? item.buyName : item.sellName;
+}
+
 export interface PersistedDirectionalState {
-  magic: 100001 | 100002;
+  magic: DirectionalMagic;
+  strategyFamily?: StrategyFamily;
+  strategyName?: string;
   paused: boolean;
   executionMode: 'PAPER' | 'LIVE';
   customConfig: {
@@ -29,7 +306,10 @@ export interface PersistedDirectionalState {
 
 export interface DirectionalRobotOptions {
   direction: 'BUY' | 'SELL';
-  magic: 100001 | 100002;
+  magic: DirectionalMagic;
+  strategyFamily?: StrategyFamily;
+  strategyName?: string;
+  commentPrefix?: string;
   strategy?: SavedStrategy | null;
   baseConfig?: Partial<AutomationConfig>;
   asset: AssetSpec;
@@ -60,7 +340,7 @@ export interface DirectionalPosition {
   highestPriceSinceEntry?: number;
   lowestPriceSinceEntry?: number;
   symbol: string;
-  magic: number;
+  magic: DirectionalMagic;
   comment: string;
   openedAt: number;
   status: 'OPEN' | 'CLOSED_PROFIT' | 'CLOSED_LOSS';
@@ -69,13 +349,15 @@ export interface DirectionalPosition {
   pointsResult?: number;
   financialResult?: number;
   auditTrail?: OrderAuditEvent[];
+  strategyFamily?: StrategyFamily;
+  pyramidLevel?: number;
 }
 
 /** Intenção de entrada registrada (não dispara ordem real na ponte). */
 export interface DirectionalIntent {
   id: string;
   direction: 'BUY' | 'SELL';
-  magic: 100001 | 100002;
+  magic: DirectionalMagic;
   symbol: string;
   type: 'BUY' | 'SELL';
   contracts: number;
@@ -86,12 +368,16 @@ export interface DirectionalIntent {
   boxIndex?: number;
   boxDirection?: 'UP' | 'DOWN';
   createdAt: number;
+  strategyFamily?: StrategyFamily;
+  pyramidLevel?: number;
 }
 
 /** Snapshot do estado de um robô direcional. */
 export interface DirectionalRobotSnapshot {
   direction: 'BUY' | 'SELL';
-  magic: 100001 | 100002;
+  magic: DirectionalMagic;
+  strategyFamily?: StrategyFamily;
+  strategyName?: string;
   role: RobotRole;
   paused: boolean;
   executionMode: 'PAPER' | 'LIVE';
@@ -120,9 +406,12 @@ export interface DirectionalRobotSnapshot {
 
 export class DirectionalRobot {
   public readonly direction: 'BUY' | 'SELL';
-  public readonly magic: 100001 | 100002;
+  public readonly magic: DirectionalMagic;
+  public readonly strategyFamily: StrategyFamily;
+  public readonly strategyName: string;
   public readonly role: RobotRole;
   public readonly asset: AssetSpec;
+  private readonly _customCommentPrefix?: string;
   private _config: AutomationConfig;
 
   // Estado de execução (com persistência em localStorage para resistir ao F5)
@@ -138,12 +427,22 @@ export class DirectionalRobot {
   constructor(options: DirectionalRobotOptions) {
     this.direction = options.direction;
     this.magic = options.magic;
+    const catItem = findStrategyByMagic(options.magic);
+    this.strategyFamily = options.strategyFamily || catItem?.id || 'HEDGE_DIRECIONAL';
+    this.strategyName = options.strategyName || catItem?.name || 'Hedge Direcional B3';
+    this._customCommentPrefix =
+      options.commentPrefix ||
+      (catItem ? (options.direction === 'BUY' ? catItem.buyCommentPrefix : catItem.sellCommentPrefix) : undefined);
     this.role = this.direction === 'BUY' ? 'BUY_ROBOT' : 'SELL_ROBOT';
     this.asset = options.asset;
 
-    // Configuração base combinada com a estratégia
+    // Configuração base combinada com a estratégia do catálogo
     const stratConfig = options.strategy?.config;
     const base = options.baseConfig ?? {};
+    const def = catItem?.defaults;
+    if (def?.maxOpenPositions) {
+      this._maxOpenPositions = def.maxOpenPositions;
+    }
 
     // Magic e Role são identidades de RUNTIME: nunca herdados da SavedStrategy
     this._config = {
@@ -152,13 +451,14 @@ export class DirectionalRobot {
       magicNumber: this.magic,
       robotRole: this.role,
       directionLock: (stratConfig?.directionLock || base.directionLock || (this.direction === 'BUY' ? 'BUY_ONLY' : 'SELL_ONLY')) as DirectionLock,
-      onCloseOpposite: stratConfig?.onCloseOpposite ?? base.onCloseOpposite ?? false,
-      stopLossPoints: base.stopLossPoints || stratConfig?.stopLossPoints || 100,
-      takeProfitPoints: base.takeProfitPoints || stratConfig?.takeProfitPoints || 50,
-      trailingStop: base.trailingStop ?? stratConfig?.trailingStop ?? true,
-      trailingActivationPoints: base.trailingActivationPoints || stratConfig?.trailingActivationPoints || 20,
-      trailingDistancePoints: base.trailingDistancePoints || stratConfig?.trailingDistancePoints || 15,
-      breakevenOffsetPoints: base.breakevenOffsetPoints ?? stratConfig?.breakevenOffsetPoints ?? 5,
+      onCloseOpposite: base.onCloseOpposite ?? stratConfig?.onCloseOpposite ?? def?.onCloseOpposite ?? false,
+      contracts: base.contracts || stratConfig?.contracts || def?.contracts || 1,
+      stopLossPoints: base.stopLossPoints || stratConfig?.stopLossPoints || def?.stopLossPoints || 100,
+      takeProfitPoints: base.takeProfitPoints || stratConfig?.takeProfitPoints || def?.takeProfitPoints || 50,
+      trailingStop: base.trailingStop ?? stratConfig?.trailingStop ?? def?.trailingStop ?? true,
+      trailingActivationPoints: base.trailingActivationPoints || stratConfig?.trailingActivationPoints || def?.trailingActivationPoints || 20,
+      trailingDistancePoints: base.trailingDistancePoints || stratConfig?.trailingDistancePoints || def?.trailingDistancePoints || 15,
+      breakevenOffsetPoints: base.breakevenOffsetPoints ?? stratConfig?.breakevenOffsetPoints ?? def?.breakevenOffsetPoints ?? 5,
     } as AutomationConfig;
 
     // Restaura estado persistido em localStorage (resiste ao F5 / recarregamento da página)
@@ -175,6 +475,8 @@ export class DirectionalRobot {
     try {
       const payload: PersistedDirectionalState = {
         magic: this.magic,
+        strategyFamily: this.strategyFamily,
+        strategyName: this.strategyName,
         paused: this._paused,
         executionMode: this._executionMode,
         customConfig: {
@@ -371,10 +673,14 @@ export class DirectionalRobot {
   }
 
   /**
-   * Prefixo oficial do comentário de ordem:
-   * RCOMP_ para RoboCompra (100001) e RVEND_ para RoboVenda (100002).
+   * Prefixo oficial do comentário de ordem por estratégia e lado:
    */
-  public get commentPrefix(): 'RCOMP_' | 'RVEND_' {
+  public get commentPrefix(): string {
+    if (this._customCommentPrefix) return this._customCommentPrefix;
+    const catItem = findStrategyByMagic(this.magic);
+    if (catItem) {
+      return this.direction === 'BUY' ? catItem.buyCommentPrefix : catItem.sellCommentPrefix;
+    }
     return this.direction === 'BUY' ? 'RCOMP_' : 'RVEND_';
   }
 
@@ -481,12 +787,17 @@ export class DirectionalRobot {
     if (direction !== this.direction || this._paused) return { closed };
 
     // Trava anti-acúmulo de ordens: respeita o limite máximo de posições abertas simultâneas deste EA
-    const currentOpenCount = this._positions.filter((p) => p.status === 'OPEN').length;
+    const currentOpenPositions = this._positions.filter((p) => p.status === 'OPEN');
+    const currentOpenCount = currentOpenPositions.length;
     if (currentOpenCount >= (this._maxOpenPositions || 3)) {
       return { closed };
     }
 
-    const validation = this.validateOrder({ type: direction, price, contracts: this._config.contracts, tagSuffix: `BOX${boxIndex}` });
+    const isPyramid = this.strategyFamily === 'PIRAMIDE_10R' || this.strategyFamily === 'PYRAMID';
+    const pyramidLevel = isPyramid ? currentOpenCount + 1 : undefined;
+    const tagSuffix = isPyramid ? `P${pyramidLevel}` : `BOX${boxIndex}`;
+
+    const validation = this.validateOrder({ type: direction, price, contracts: this._config.contracts, tagSuffix });
     if (!validation.valid || !validation.sanitizedOrder) return { closed };
     const so = validation.sanitizedOrder;
 
@@ -500,13 +811,16 @@ export class DirectionalRobot {
       direction, magic: this.magic, symbol: so.symbol, type: so.type,
       contracts: so.contracts, entryPrice: so.price, stopLoss, takeProfit,
       comment: so.comment, boxIndex, boxDirection: undefined, createdAt: Date.now(),
+      strategyFamily: this.strategyFamily,
+      pyramidLevel,
     };
     this._intents.push(intent);
 
+    const stratLabel = isPyramid ? `Pirâmide #${pyramidLevel}` : 'Entrada';
     const evt = OrderAuditService.createEvent(
       'ORDER_DISPATCHED',
-      `Intenção de entrada ${this.role} (${direction})`,
-      `Robô ${this.role} (magic ${this.magic}) sinal ${direction} box #${boxIndex} a ${price}. Intenção registrada. Comentário: ${so.comment}. SL: ${stopLoss} | TP: ${takeProfit}.`,
+      `Intenção de ${stratLabel} ${this.role} (${direction})`,
+      `Robô ${this.role} (${this.strategyName} - magic ${this.magic}) sinal ${direction} box #${boxIndex} a ${price}. Intenção registrada. Comentário: ${so.comment}. SL: ${stopLoss} | TP: ${takeProfit}.`,
       price, so.contracts, undefined
     );
 
@@ -516,6 +830,8 @@ export class DirectionalRobot {
       isBreakevenActive: false,
       highestPriceSinceEntry: price,
       lowestPriceSinceEntry: price,
+      strategyFamily: this.strategyFamily,
+      pyramidLevel,
       auditTrail: [evt],
     };
     this._positions.push(position);
@@ -525,8 +841,9 @@ export class DirectionalRobot {
   }
 
   /** Marca‑a‑mercado todas as posições abertas (Trailing Stop / Breakeven, SL/TP e PnL flutuante). */
-  public onTick(price: number): void {
-    if (!isPriceSaneForAsset(price, this.asset)) return;
+  public onTick(price: number): DirectionalPosition[] {
+    const closedOnTick: DirectionalPosition[] = [];
+    if (!isPriceSaneForAsset(price, this.asset)) return closedOnTick;
     this._lastPrice = price;
     let stateChanged = false;
 
@@ -536,6 +853,7 @@ export class DirectionalRobot {
     const activationPts = this._config.trailingActivationPoints || 20;
     const distancePts = this._config.trailingDistancePoints || 15;
     const beOffsetPts = this._config.breakevenOffsetPoints ?? 5;
+    const tickStep = this.asset.tickSize || 5;
 
     for (let i = 0; i < this._positions.length; i++) {
       const p = this._positions[i];
@@ -560,8 +878,9 @@ export class DirectionalRobot {
         if (p.type === 'BUY') {
           const maxFavorablePts = curHigh - p.entryPrice;
           if (maxFavorablePts >= activationPts) {
-            const minProtectedSL = p.entryPrice + beOffsetPts;
-            const candidateSL = Math.max(minProtectedSL, curHigh - distancePts);
+            const safeOffset = Math.min(beOffsetPts, Math.max(0, maxFavorablePts - tickStep));
+            const minProtectedSL = p.entryPrice + safeOffset;
+            const candidateSL = Math.min(curHigh - tickStep, Math.max(minProtectedSL, curHigh - distancePts));
             if (candidateSL > currentSL) {
               const prevSL = currentSL;
               currentSL = candidateSL;
@@ -581,8 +900,9 @@ export class DirectionalRobot {
         } else {
           const maxFavorablePts = p.entryPrice - curLow;
           if (maxFavorablePts >= activationPts) {
-            const minProtectedSL = p.entryPrice - beOffsetPts;
-            const candidateSL = Math.min(minProtectedSL, curLow + distancePts);
+            const safeOffset = Math.min(beOffsetPts, Math.max(0, maxFavorablePts - tickStep));
+            const minProtectedSL = p.entryPrice - safeOffset;
+            const candidateSL = Math.max(curLow + tickStep, Math.min(minProtectedSL, curLow + distancePts));
             if (currentSL <= 0 || candidateSL < currentSL) {
               const prevSL = currentSL;
               currentSL = candidateSL;
@@ -680,6 +1000,7 @@ export class DirectionalRobot {
           financialResult: finalFin,
           auditTrail: [...auditTrail, evt],
         };
+        closedOnTick.push(this._positions[i]);
         this._totalCloses += 1;
       }
     }
@@ -687,6 +1008,7 @@ export class DirectionalRobot {
     if (stateChanged) {
       this.saveState();
     }
+    return closedOnTick;
   }
 
   /** Retorna snapshot completo do estado do robô. */
@@ -709,6 +1031,8 @@ export class DirectionalRobot {
 
     return {
       direction: this.direction, magic: this.magic, role: this.role, paused: this._paused,
+      strategyFamily: this.strategyFamily,
+      strategyName: this.strategyName,
       executionMode: this._executionMode,
       customConfig: {
         contracts: this._config.contracts || 1,
@@ -730,14 +1054,20 @@ export class DirectionalRobot {
 }
 
 /**
- * Factory para criar instâncias de robôs direcionais com validação estrita.
+ * Factory para criar instâncias de robôs direcionais com validação estrita por catálogo de estratégias.
  */
 export function createDirectionalRobot(options: DirectionalRobotOptions): DirectionalRobot {
-  if (options.direction === 'BUY' && options.magic !== 100001) {
-    throw new Error(`RoboCompra deve ter magic 100001, recebido: ${options.magic}`);
-  }
-  if (options.direction === 'SELL' && options.magic !== 100002) {
-    throw new Error(`RoboVenda deve ter magic 100002, recebido: ${options.magic}`);
+  const isBuy = options.direction === 'BUY';
+  const isSell = options.direction === 'SELL';
+  const catItem = findStrategyByMagic(options.magic);
+
+  if (catItem) {
+    if (isBuy && options.magic !== catItem.buyMagic) {
+      throw new Error(`${catItem.buyName} deve ter magic ${catItem.buyMagic}, recebido: ${options.magic}`);
+    }
+    if (isSell && options.magic !== catItem.sellMagic) {
+      throw new Error(`${catItem.sellName} deve ter magic ${catItem.sellMagic}, recebido: ${options.magic}`);
+    }
   }
   return new DirectionalRobot(options);
 }
