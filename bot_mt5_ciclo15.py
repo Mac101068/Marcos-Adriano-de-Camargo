@@ -366,6 +366,12 @@ EVAL_CONFIG = {
     "consolidation_er_max": CONSOLIDATION_ER_MAX,
     "exhaustion_enabled": EXHAUSTION_FILTER_ENABLED,
     "exhaustion_ratio": EXHAUSTION_DELTA_RATIO,
+    # Filtro de tendência do fluxo (cor do painel FLUXO): em CVD subindo só BUY, caindo só SELL.
+    # LIGADO por decisão do operador (15/Nov/2026), após replay de 22 pregões: os sinais contra
+    # a cor de 20 boxes respondiam pela conta inteira (−1.650 pts de −1.650). A tela pode
+    # desligar pelo checkbox; o SYNC sobrescreve este padrão.
+    "flow_trend_filter": True,
+    "flow_trend_lookback": 20,
     "max_delta_ceiling": MAX_DELTA_CEILING,
     "require_cvd_extreme": REQUIRE_CVD_EXTREME,
 }
@@ -1099,6 +1105,26 @@ def compute_flow_conviction_score(box, previous_boxes, regime_meter, base_thresh
     return total_score, breakdown
 
 
+def flow_trend(previous_boxes, box, lookback=20):
+    """Inclinação do fluxo: +1 CVD subindo (verde), -1 caindo (vermelho), 0 sem amostra.
+
+    É a leitura numérica da COR do painel FLUXO: verde enquanto o CVD sobe, vermelho enquanto
+    cai. Compara o CVD do box que sinalizou com o de `lookback` boxes atrás, então o filtro não
+    depende do desenho da tela e o número fica auditável na coluna `tendencia_fluxo` do diário.
+    """
+    k = max(2, int(lookback))
+    serie = list(previous_boxes) + [box]
+    if len(serie) <= k:
+        return 0
+    agora = serie[-1].get("cvd_at_close", 0) or 0
+    antes = serie[-1 - k].get("cvd_at_close", 0) or 0
+    if agora > antes:
+        return 1
+    if agora < antes:
+        return -1
+    return 0
+
+
 class RenkoFlowEngine:
     def __init__(self, symbol="WINZ26", box_points=50.0, tick_size=5.0, min_delta_threshold=150):
         self.symbol = symbol
@@ -1472,6 +1498,21 @@ class RenkoFlowEngine:
                     audit["motivo"] = f"SINAL_{signal} | Δ {delta} vs limiar {limite}"
             elif direction in ("UP", "DOWN"):
                 audit["motivo"] = f"CALADO_DELTA | Δ {delta} fora do limiar {limite}"
+
+        # FILTRO DE TENDÊNCIA DO FLUXO: o sinal só sai se a inclinação do CVD apontar para o
+        # MESMO lado. Em fluxo de alta o robô de venda fica calado, e vice-versa. Zero (sem
+        # amostra ou CVD plano) não bloqueia: o filtro reduz lado, não inventa lado.
+        trend = flow_trend(previous_boxes, box, cfg.get("flow_trend_lookback", 20))
+        audit["tendencia_fluxo"] = trend
+        if signal and bool(cfg.get("flow_trend_filter", False)):
+            if (signal == "BUY" and trend < 0) or (signal == "SELL" and trend > 0):
+                audit["sinal"] = None
+                audit["motivo"] = (
+                    f"CALADO_TENDENCIA_FLUXO | sinal {signal} contra CVD de "
+                    f"{cfg.get('flow_trend_lookback', 10)} boxes (inclinação {trend})"
+                )
+                box["audit"] = audit
+                return None, ""
 
         audit["sinal"] = signal
         box["audit"] = audit
@@ -2123,6 +2164,10 @@ class MT5OrderManager:
         mt5.symbol_select(self.symbol, True)
         sym_info = mt5.symbol_info(self.symbol)
         if not sym_info:
+            # Antes este caminho saía sem deixar rastro: parecia que a tela não tinha tentado.
+            self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
+                              f"SIMBOLO_INEXISTENTE | {self.symbol}", box_index, sl_points, tp_points,
+                              magic=magic)
             print(f"[ERRO MT5] Símbolo {self.symbol} não encontrado no MT5!", flush=True)
             return False, 0
 
@@ -2852,6 +2897,8 @@ def apply_ea_config(payload):
     _bool("timeBasedRegimeEnabled", "time_based_regime_enabled")
     _bool("consolidationFilterEnabled", "consolidation_enabled")
     _bool("exhaustionFilterEnabled", "exhaustion_enabled")
+    _bool("flowTrendFilterEnabled", "flow_trend_filter")
+    _num("flowTrendLookback", "flow_trend_lookback", int)
     _bool("requireCvdNewExtreme", "require_cvd_extreme")
     _num("regimeLookbackBoxes", "regime_lookback", int)
     _num("consolidationLookbackBoxes", "consolidation_lookback", int)

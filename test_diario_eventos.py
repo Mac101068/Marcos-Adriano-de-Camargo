@@ -173,6 +173,13 @@ dia_hoje = datetime.now().strftime("%Y%m%d")
 caminho_eventos = os.path.join(PASTA_AUDITORIA, f"eventos_{SIMBOLO}_{dia_hoje}.csv")
 caminho_ordens = os.path.join(PASTA_AUDITORIA, f"ordens_{SIMBOLO}_{dia_hoje}.csv")
 
+
+def ler_ordens():
+    if not os.path.exists(caminho_ordens):
+        return []
+    with open(caminho_ordens, encoding="utf-8") as f:
+        return [r for r in csv.DictReader(f) if r["simbolo"] == SIMBOLO]
+
 # Começa limpo: as contagens têm de dizer respeito a esta execução (o diário é append-only)
 if os.path.isdir(PASTA_AUDITORIA):
     for _arq in os.listdir(PASTA_AUDITORIA):
@@ -308,15 +315,22 @@ checar("preço do box que gerou o sinal foi guardado", bool(r_ordem.get("preco_b
 checar("box_index da tentativa registrado", int(r_ordem.get("box_index") or -1), box_sinal["index"])
 checar("tentativa sem magic explícito herda o dono do manager", r_ordem.get("magic"), "999999")
 
+# Símbolo ausente no terminal é outro caminho que saía sem rastro: o app ficava achando que a
+# tela não tinha tentado. Agora ele também vira linha na trilha.
+class _Mt5SemSimboloNulo(_Mt5SemSimbolo):
+    def symbol_info(self, *_args, **_kwargs):
+        return None
+
+
+ponte.mt5 = _Mt5SemSimboloNulo()
+ok_nulo, _ = mgr.execute_market_order("BUY", comment="TESTE_SIMBOLO", magic=100001)
+checar("símbolo inexistente não executa", ok_nulo, False)
+linhas_nulas = [r for r in ler_ordens() if r["motivo"].startswith("SIMBOLO_INEXISTENTE")]
+checar("símbolo inexistente vira linha na trilha", len(linhas_nulas), 1)
+if linhas_nulas:
+    checar("a linha do símbolo ausente guarda o magic", linhas_nulas[0]["magic"], "100001")
+
 print("\n=== E. Cada ordem carrega o dono (magic) e a posição que toca ===")
-
-
-def ler_ordens():
-    if not os.path.exists(caminho_ordens):
-        return []
-    with open(caminho_ordens, encoding="utf-8") as f:
-        return [r for r in csv.DictReader(f) if r["simbolo"] == SIMBOLO]
-
 
 with open(caminho_ordens, encoding="utf-8") as _f:
     _cabecalho = next(csv.reader(_f), [])

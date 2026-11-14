@@ -64,15 +64,16 @@ def configurar(**kwargs):
 
 
 print("\n=== A. Filtro de Delta incondicional (o furo do log de hoje) ===")
-# Adaptativo ligado, mas sem 10 boxes de estatística: cai em base × fator = base (150).
+# Adaptativo ligado, mas sem estatística de sessão: o corte cai no piso do ativo (WIN = 300).
 configurar(strategy_mode="PYRAMID_FLOW_CONFLUENCE", adaptive=True, consolidation_enabled=False, exhaustion_enabled=False)
 m = novo_motor(150)
 check("WIN UP Δ -686 (virou BUY no log)", julgar(m, caixa(0, "UP", -686, 169695.0))[0], None)
-check("WIN UP Δ 149 (1 abaixo do limiar)", julgar(m, caixa(1, "UP", 149, 169745.0))[0], None)
-check("WIN UP Δ 150 (no fio do limiar)", julgar(m, caixa(2, "UP", 150, 169795.0))[0], "BUY")
-check("WIN UP Δ 3782 (verde forte)", julgar(m, caixa(3, "UP", 3782, 169845.0))[0], "BUY")
-check("WIN DOWN Δ -4582 (vermelho forte)", julgar(m, caixa(4, "DOWN", -4582, 169795.0))[0], "SELL")
-check("WIN DOWN Δ -100 (abaixo do limiar)", julgar(m, caixa(5, "DOWN", -100, 169745.0))[0], None)
+check("WIN UP Δ 299 (1 abaixo do piso do ativo)", julgar(m, caixa(1, "UP", 299, 169745.0))[0], None)
+check("WIN UP Δ 300 (no fio do piso de 300)", julgar(m, caixa(2, "UP", 300, 169795.0))[0], "BUY")
+check("WIN UP Δ 2500 (verde forte, sob o teto)", julgar(m, caixa(3, "UP", 2500, 169845.0))[0], "BUY")
+check("WIN DOWN Δ -2500 (vermelho forte, sob o teto)", julgar(m, caixa(4, "DOWN", -2500, 169795.0))[0], "SELL")
+check("WIN UP Δ 3300 (acima do teto anti-clímax de 3200)", julgar(m, caixa(5, "UP", 3300, 169745.0))[0], None)
+check("WIN DOWN Δ -100 (abaixo do piso)", julgar(m, caixa(6, "DOWN", -100, 169695.0))[0], None)
 
 print("\n=== B. BITX: base 50 (antes 20) — o que o log deixou passar ===")
 mb = novo_motor(50, "BITX26")
@@ -82,11 +83,11 @@ check("BIT UP Δ 10 (virou BUY no log)", julgar(mb, caixa(8, "UP", 10, 438100.0)
 check("BIT DOWN Δ -7 (virou SELL no log)", julgar(mb, caixa(9, "DOWN", -7, 438000.0))[0], None)
 check("BIT UP Δ 74 (agressão real)", julgar(mb, caixa(10, "UP", 74, 438300.0))[0], "BUY")
 
-print("\n=== C. Piso estático da tela: max(50, minDelta) ===")
+print("\n=== C. Piso estático da Pirâmide: max(piso 300, minDelta) ===")
 configurar(adaptive=False)
-mw = novo_motor(30)  # WDO: base 30, mas o gate da Pirâmide nunca aceita menos de 50
-check("WDO UP Δ 40 com base 30", julgar(mw, caixa(0, "UP", 40, 5.0))[0], None)
-check("WDO UP Δ 60 com base 30", julgar(mw, caixa(1, "UP", 60, 5.0))[0], "BUY")
+mw = novo_motor(30)  # WDO: base 30, mas o gate da Pirâmide nunca aceita menos que o piso de 300
+check("WDO UP Δ 90 com base 30", julgar(mw, caixa(0, "UP", 90, 5.0))[0], None)
+check("WDO UP Δ 300 com base 30 (no piso)", julgar(mw, caixa(1, "UP", 300, 5.0))[0], "BUY")
 
 print("\n=== D. Filtro de consolidação (Efficiency Ratio) ===")
 configurar(adaptive=True, consolidation_enabled=True, consolidation_lookback=10, consolidation_er_max=0.35)
@@ -98,11 +99,11 @@ for i in range(9):
     close_i = p_prev + (50 if dir_i == "UP" else -50)
     acum.boxes.append(caixa(i, dir_i, 200 if dir_i == "UP" else -200, close_i))
     p_prev = close_i
-er = efficiency_ratio(acum.boxes, caixa(9, "UP", 4000, p_prev + 50), 10)
+er = efficiency_ratio(acum.boxes, caixa(9, "UP", 2500, p_prev + 50), 10)
 print(f"     ER medido no range = {er:.3f} (bloqueia abaixo de {EVAL_CONFIG['consolidation_er_max']})")
-check("UP Δ 4000 dentro de acumulação", julgar(acum, caixa(9, "UP", 4000, p_prev + 50))[0], None)
+check("UP Δ 2500 dentro de acumulação", julgar(acum, caixa(9, "UP", 2500, p_prev + 50))[0], None)
 configurar(consolidation_enabled=False)
-check("mesmo box com filtro desligado", julgar(acum, caixa(10, "UP", 4000, p_prev + 50))[0], "BUY")
+check("mesmo box com filtro desligado", julgar(acum, caixa(10, "UP", 2500, p_prev + 50))[0], "BUY")
 
 print("\n=== E. Filtro de exaustão de fluxo ===")
 configurar(consolidation_enabled=False, exhaustion_enabled=True, exhaustion_ratio=0.7)
@@ -114,17 +115,18 @@ check("UP Δ 300 após Δ 500 (fluxo emagrecendo)", julgar(exausto, caixa(1, "UP
 configurar(exhaustion_enabled=False)
 check("mesmo box com filtro desligado", julgar(exausto, caixa(2, "UP", 300, 169795.0))[0], "BUY")
 
-print("\n=== F. Limiar CALCULADO da sessão (P60), não número físico ===")
+print("\n=== F. Limiar CALCULADO da sessão (percentil), não número físico ===")
 configurar(adaptive=True, exhaustion_enabled=False)
 sessao = novo_motor(150)
 agora = time.time()
 for d in [100, 120, 140, 160, 180, 200, 220, 240, 260, 1000]:
     sessao.regime_meter.feed_closed_box(agora * 1000, 500, d)
-limiar = sessao.regime_meter.get_percentile_limit(150, "BUY", EVAL_CONFIG["percentile"])
-print(f"     P60 das agressões de compra deste pregão = {limiar}")
-check("P60 = 6º percentil das magnitudes", limiar, 220)
-check("UP Δ 200 (abaixo do P60)", julgar(sessao, caixa(10, "UP", 200, 169695.0))[0], None)
-check("UP Δ 240 (acima do P60)", julgar(sessao, caixa(11, "UP", 240, 169745.0))[0], "BUY")
+pct_sessao = EVAL_CONFIG["percentile"]
+limiar = sessao.regime_meter.get_percentile_limit(150, "BUY", pct_sessao)
+print(f"     P{int(pct_sessao * 100)} das agressões de compra deste pregão = {limiar}")
+check(f"P{int(pct_sessao * 100)} das magnitudes = 240", limiar, 240)
+check("UP Δ 200 (abaixo do percentil e do piso)", julgar(sessao, caixa(10, "UP", 200, 169695.0))[0], None)
+check("UP Δ 2000 (acima do piso de 300)", julgar(sessao, caixa(11, "UP", 2000, 169745.0))[0], "BUY")
 
 print("\n=== G. SYNC_EA_CONFIG: a tela manda nas regras ===")
 ENGINES["WINZ26"] = novo_motor(150)
@@ -136,25 +138,65 @@ apply_ea_config({
     "exhaustionFilterEnabled": True,
     "strategyMode": "PULLBACK_RETEST",
 })
-check("EVAL_CONFIG.adaptive veio da tela", EVAL_CONFIG["adaptive"], False)
+check("piso de segurança do WIN religa o adaptativo (tela pediu False)", EVAL_CONFIG["adaptive"], True)
 check("EVAL_CONFIG.strategy_mode veio da tela", EVAL_CONFIG["strategy_mode"], "PULLBACK_RETEST")
 check("EVAL_CONFIG.exhaustion_enabled veio da tela", EVAL_CONFIG["exhaustion_enabled"], True)
-check("base de Delta do WINZ26 veio da tela", ENGINES["WINZ26"].min_delta_threshold, 250)
+check("base de Delta do WINZ26 respeita o piso de 300", ENGINES["WINZ26"].min_delta_threshold, 300)
 apply_ea_config({"strategyMode": "PYRAMID_FLOW_CONFLUENCE", "adaptiveThresholdEnabled": True, "exhaustionFilterEnabled": False})
 check("SYNC parcial não zera os demais filtros", EVAL_CONFIG["consolidation_enabled"], True)
 
-print("\n=== H. Defaults da ponte = defaults do app ===")
-check("adaptive ligada como no app", CONFIG_ORIGINAL["adaptive"], True)
-check("percentil P60 como no app", CONFIG_ORIGINAL["percentile"], 0.6)
-check("filtro de acumulação ligado como no app", CONFIG_ORIGINAL["consolidation_enabled"], True)
-check("janela ER = 10 boxes como no app", CONFIG_ORIGINAL["consolidation_lookback"], 10)
-check("ER máximo = 0,35 como no app", CONFIG_ORIGINAL["consolidation_er_max"], 0.35)
-check("exaustão desligada como no app", CONFIG_ORIGINAL["exhaustion_enabled"], False)
-check("piso estático = 50 como no app", CONFIG_ORIGINAL["pyramid_static_floor"], 50)
+print("\n=== H. Defaults da ponte (o app sobrescreve no SYNC) ===")
+check("adaptive ligada por padrão", CONFIG_ORIGINAL["adaptive"], True)
+check("percentil P70 por padrão", CONFIG_ORIGINAL["percentile"], 0.7)
+check("filtro de acumulação ligado por padrão", CONFIG_ORIGINAL["consolidation_enabled"], True)
+check("janela ER = 10 boxes", CONFIG_ORIGINAL["consolidation_lookback"], 10)
+check("ER máximo = 0,35", CONFIG_ORIGINAL["consolidation_er_max"], 0.35)
+check("exaustão ligada por padrão", CONFIG_ORIGINAL["exhaustion_enabled"], True)
+check("piso estático = 300", CONFIG_ORIGINAL["pyramid_static_floor"], 300)
+check("teto anti-clímax = 3200", CONFIG_ORIGINAL["max_delta_ceiling"], 3200)
+check("filtro de tendência do fluxo ligado por padrão", CONFIG_ORIGINAL["flow_trend_filter"], True)
+check("janela padrão do filtro de fluxo = 20 boxes", CONFIG_ORIGINAL["flow_trend_lookback"], 20)
 
 for k, v in CONFIG_ORIGINAL.items():
     EVAL_CONFIG[k] = v
 ENGINES.pop("WINZ26", None)
+
+print("\n=== I. Filtro de tendência do fluxo (a cor do indicador) ===")
+from bot_mt5_ciclo15 import flow_trend
+
+configurar(strategy_mode="PYRAMID_FLOW_CONFLUENCE", adaptive=True, consolidation_enabled=False,
+           exhaustion_enabled=False, flow_trend_lookback=10, flow_trend_filter=False)
+
+# Série com CVD CAINDO (fluxo vermelho) e um box verde teimoso no fim: é o sinal que o filtro existe
+# para matar — comprar contra o fluxo do pregão.
+caindo = novo_motor(150)
+for i in range(12):
+    caindo.boxes.append(caixa(i, "DOWN", -400, 169695.0 - i * 50, cvd=float(1200 - i * 100)))
+check("tendência medida (CVD caindo)", flow_trend(caindo.boxes[:-1], caindo.boxes[-1], 10), -1)
+check("BUY contra o fluxo, filtro DESLIGADO",
+      julgar(caindo, caixa(12, "UP", 2500, 169695.0 - 12 * 50 + 50, cvd=0.0))[0], "BUY")
+configurar(flow_trend_filter=True)
+check("mesmo BUY com filtro LIGADO",
+      julgar(caindo, caixa(13, "UP", 2500, 169695.0 - 12 * 50 + 100, cvd=0.0))[0], None)
+
+# Espelho: CVD subindo com SELL força o robô de venda a calar.
+subindo = novo_motor(150)
+for i in range(12):
+    subindo.boxes.append(caixa(i, "UP", 400, 169695.0 + i * 50, cvd=float(i * 100)))
+check("tendência medida (CVD subindo)", flow_trend(subindo.boxes[:-1], subindo.boxes[-1], 10), 1)
+check("SELL contra o fluxo com filtro LIGADO",
+      julgar(subindo, caixa(12, "DOWN", -2500, 169695.0 + 12 * 50 - 50, cvd=1200.0))[0], None)
+configurar(flow_trend_filter=False)
+check("mesmo SELL com filtro DESLIGADO",
+      julgar(subindo, caixa(13, "DOWN", -2500, 169695.0 + 12 * 50 - 100, cvd=1300.0))[0], "SELL")
+
+# A favor da tendência nada muda: o filtro reduz lado, não bloqueia o lado certo.
+configurar(flow_trend_filter=True)
+check("BUY a favor do fluxo com filtro LIGADO",
+      julgar(subindo, caixa(14, "UP", 2500, 169695.0 + 14 * 50, cvd=1500.0))[0], "BUY")
+check("janela maior que a série não bloqueia",
+      flow_trend(subindo.boxes[:2], subindo.boxes[2], 30), 0)
+configurar(flow_trend_filter=False)
 
 print("\n" + "=" * 62)
 if FAILS:

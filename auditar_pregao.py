@@ -23,6 +23,7 @@ Uso:
 
 import argparse
 import csv
+import glob
 import os
 import sys
 from datetime import datetime
@@ -47,15 +48,26 @@ MAGICS_ROBO = {int(v["magic"]) for v in ponte.SUPPORTED_ASSETS.values()} | {int(
 
 
 def carregar_csv_trilha(nome, dia, simbolo=None):
-    """Lê ordens_/deals_ de um pregão; tolera arquivo inexistente e schema antigo."""
-    sufixo = f"_{simbolo}" if simbolo else ""
-    caminho = os.path.join(PASTA_AUDITORIA, f"{nome}{sufixo}_{dia}.csv")
-    if not os.path.exists(caminho):
-        caminho = os.path.join(PASTA_AUDITORIA, f"{nome}_{dia}.csv")
-    if not os.path.exists(caminho):
-        return [], caminho
-    with open(caminho, encoding="utf-8") as f:
-        return list(csv.DictReader(f)), caminho
+    """Lê ordens_/deals_ de um pregão; tolera arquivo inexistente e schema antigo.
+
+    Sem `simbolo`, junta TODOS os arquivos por ativo (ordens_WINZ26_<dia>.csv,
+    ordens_WDOZ26_<dia>.csv, ...). Antes procurava um único ordens_<dia>.csv, que nunca existe:
+    o total de tentativas do dia saía sempre 0 enquanto o CSV tinha centenas de linhas.
+    """
+    if simbolo:
+        caminhos = [os.path.join(PASTA_AUDITORIA, f"{nome}_{simbolo}_{dia}.csv"),
+                    os.path.join(PASTA_AUDITORIA, f"{nome}_{dia}.csv")]
+        caminhos = [c for c in dict.fromkeys(caminhos) if os.path.exists(c)]
+    else:
+        sem_ativo = os.path.join(PASTA_AUDITORIA, f"{nome}_{dia}.csv")
+        caminhos = sorted(glob.glob(os.path.join(PASTA_AUDITORIA, f"{nome}_*_{dia}.csv")))
+        if os.path.exists(sem_ativo):
+            caminhos.insert(0, sem_ativo)
+    linhas = []
+    for caminho in caminhos:
+        with open(caminho, encoding="utf-8") as f:
+            linhas.extend(csv.DictReader(f))
+    return linhas, (caminhos[0] if caminhos else os.path.join(PASTA_AUDITORIA, f"{nome}_{dia}.csv"))
 
 
 def coletar_deals(dia):
@@ -137,10 +149,22 @@ def auditar_real(dia):
         return None
     lucro = sum(float(d["profit"] or 0) for d in deals)
     comissao = sum(float(d["comissao"] or 0) for d in deals)
+    # Dono de cada negócio: o magic da TRILHA (quem mandou) quando o ticket está lá; senão o do
+    # extrato. É o que separa a boleta (999999) de uma zeragem feita no terminal (magic 0), que
+    # o extrato sozinho não consegue atribuir.
+    de_ordem = {str(o["ticket"]): (o.get("magic") or "") for o in ordens if o.get("ticket")}
+    por_dono = {}
+    for d in deals:
+        dono = de_ordem.get(str(d.get("order") or ""), "") or (d.get("magic") or "0")
+        n, p = por_dono.get(dono, (0, 0.0))
+        por_dono[dono] = (n + 1, p + float(d["profit"] or 0))
     do_robo = [d for d in deals if int(float(d["magic"] or 0)) in MAGICS_ROBO]
     print(f"   negócios: {len(deals)} | lucrativo {lucro:+.2f} | comissão {comissao:+.2f} | "
           f"do robô {len(do_robo)} | manuais {len(deals) - len(do_robo)}")
-    return {"deals": len(deals), "lucro": lucro, "do_robo": len(do_robo)}
+    print("   por dono (magic da trilha quando existe, senão o do extrato):")
+    for dono, (n, p) in sorted(por_dono.items(), key=lambda kv: -kv[1][1]):
+        print(f"     magic {dono:>7}: {n:>5} negócio(s) | PnL {p:+9.2f}")
+    return {"deals": len(deals), "lucro": lucro, "do_robo": len(do_robo), "por_dono": por_dono}
 
 
 def simular_saida(ativo, dia, fonte="REPRO"):
