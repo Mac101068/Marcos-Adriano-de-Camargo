@@ -257,7 +257,43 @@ export function computeFlowConvictionScore(
   return { totalScore, breakdown };
 }
 
+/**
+ * Inclinação do fluxo: +1 CVD subindo (verde), -1 caindo (vermelho), 0 sem amostra. É a
+ * leitura numérica da COR do painel FLUXO, medida em boxes — não no desenho.
+ */
+function flowTrend(previousBoxes: RenkoBox[], box: RenkoBox, lookback: number): number {
+  const k = Math.max(2, Math.round(lookback) || 20);
+  const serie = [...previousBoxes, box];
+  if (serie.length <= k) return 0;
+  const agora = serie[serie.length - 1].cvdAtClose ?? 0;
+  const antes = serie[serie.length - 1 - k].cvdAtClose ?? 0;
+  return agora > antes ? 1 : agora < antes ? -1 : 0;
+}
+
+/**
+ * Julga o box e, com o filtro de tendência ligado, descarta o sinal que aponta contra a
+ * inclinação do fluxo: em fluxo de alta o robô de venda fica calado, e vice-versa.
+ */
 export function evaluateBoxConvergence(
+  box: RenkoBox,
+  config: AutomationConfig,
+  previousBoxes: RenkoBox[],
+  labels: ConvergenceSeriesLabels = {},
+  meter?: SessionRegimeMeter
+): ConvergenceResult {
+  const resultado = evaluateBoxConvergenceCore(box, config, previousBoxes, labels, meter);
+  if (!resultado.isConvergence || !resultado.signal) return resultado;
+  if (config.flowTrendFilterEnabled !== true) return resultado;
+  const janela = config.flowTrendLookback ?? 20;
+  const trend = flowTrend(previousBoxes, box, janela);
+  const lado = resultado.signal === 'BUY' ? 1 : -1;
+  if (trend !== 0 && trend !== lado) {
+    return { isConvergence: false, reason: `Fluxo contra a tendência (CVD ${janela}b)` };
+  }
+  return resultado;
+}
+
+function evaluateBoxConvergenceCore(
   box: RenkoBox,
   config: AutomationConfig,
   previousBoxes: RenkoBox[],

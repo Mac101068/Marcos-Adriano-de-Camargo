@@ -49,6 +49,8 @@ export const DEFAULT_EA_CONFIG: AutomationConfig = {
   consolidationErMax: 0.35, // ER abaixo disso = range curto/acumulação (sinal silenciado)
   exhaustionFilterEnabled: true, // Filtro de exaustão ativado: barra entrada no topo de estouro quando a agressão não tem continuidade
   exhaustionDeltaRatio: 0.7, // Agressão abaixo disto x box anterior do mesmo lado = exausto
+  flowTrendFilterEnabled: true, // Filtro de tendência do fluxo (cor do painel FLUXO): CVD subindo só compra, caindo só venda. Ligado após replay de 22 pregões (os sinais contra a cor de 20 boxes respondiam pela conta inteira)
+  flowTrendLookback: 20, // Boxes que definem a inclinação do CVD (a janela da cor)
   requireCvdNewExtreme: false,
   confirmationMode: 'BOX_CLOSE',
   stopLossPoints: 0, // Sem Stop Loss fixo (zeragem pela virada do fluxo)
@@ -406,6 +408,8 @@ export class EaConfigService {
           consolidationErMax: parsed.consolidationErMax ?? DEFAULT_EA_CONFIG.consolidationErMax,
           exhaustionFilterEnabled: parsed.exhaustionFilterEnabled ?? DEFAULT_EA_CONFIG.exhaustionFilterEnabled,
           exhaustionDeltaRatio: parsed.exhaustionDeltaRatio ?? DEFAULT_EA_CONFIG.exhaustionDeltaRatio,
+          flowTrendFilterEnabled: parsed.flowTrendFilterEnabled ?? DEFAULT_EA_CONFIG.flowTrendFilterEnabled,
+          flowTrendLookback: parsed.flowTrendLookback ?? DEFAULT_EA_CONFIG.flowTrendLookback,
           mt5MaxContractsPerOrder: parsed.mt5MaxContractsPerOrder ?? DEFAULT_EA_CONFIG.mt5MaxContractsPerOrder,
           mt5MaxOrdersPerMinute: parsed.mt5MaxOrdersPerMinute ?? DEFAULT_EA_CONFIG.mt5MaxOrdersPerMinute,
           // Breakeven por distância: config antigo não tem os campos. Sem o `??`, ficariam
@@ -591,6 +595,8 @@ export class EaConfigService {
       consolidationErMax: config.consolidationErMax,
       exhaustionFilterEnabled: config.exhaustionFilterEnabled,
       exhaustionDeltaRatio: config.exhaustionDeltaRatio,
+      flowTrendFilterEnabled: config.flowTrendFilterEnabled === true,
+      flowTrendLookback: config.flowTrendLookback ?? 20,
       requireCvdNewExtreme: config.requireCvdNewExtreme,
     });
   }

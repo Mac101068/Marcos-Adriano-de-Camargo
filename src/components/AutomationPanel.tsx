@@ -1578,6 +1578,46 @@ export const AutomationPanel: React.FC<AutomationPanelProps> = ({
               </p>
             </div>
 
+            {/* Tendência do FLUXO (a cor do painel): em CVD subindo só passa sinal de compra, em CVD
+                caindo só os de venda. O sinal contrário é calado com motivo no diário. */}
+            <div className="pt-2 mt-1 border-t border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.flowTrendFilterEnabled === true}
+                    onChange={(e) => handleConfigChange('flowTrendFilterEnabled', e.target.checked)}
+                    className="w-3.5 h-3.5 rounded accent-emerald-500 cursor-pointer"
+                  />
+                  <span className="font-semibold">Filtro de Tendência do Fluxo</span>
+                </label>
+                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Só um lado</span>
+              </div>
+              <p className="text-[11px] text-slate-500 leading-snug">
+                Verde (CVD subindo) só compra; vermelho (CVD caindo) só venda. O sinal contra o fluxo é
+                descartado com o motivo no diário.
+              </p>
+              {config.flowTrendFilterEnabled === true && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-400">Janela da inclinação</label>
+                    <span className="font-mono text-emerald-400 font-semibold">
+                      {config.flowTrendLookback ?? 20} boxes
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="3"
+                    max="40"
+                    step="1"
+                    value={config.flowTrendLookback ?? 20}
+                    onChange={(e) => handleConfigChange('flowTrendLookback', Number(e.target.value))}
+                    className="w-full accent-emerald-500"
+                  />
+                </div>
+              )}
+            </div>
+
             {/* Filtros de regime (F2) sobre ENTRADAS: acumulação/range curto + exaustão. Vale para as DUAS estratégias. */}
             <div className="pt-2 mt-1 border-t border-slate-800 space-y-2">
               <div className="flex items-center justify-between">

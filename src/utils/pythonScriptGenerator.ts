@@ -51,13 +51,15 @@ ARQUITETURA (2 máquinas na mesma rede Wi-Fi):
      - Tetos de risco: ${config.mt5MaxContractsPerOrder || 2} contrato(s) por ordem e
        ${config.mt5MaxOrdersPerMinute || 12} ordem(s) de entrada por minuto.
      - Toda tentativa recusada aparece no console com o IP de origem.
-  4a. TRAVA DE EXECUÇÃO (modo replay/validação): rode com a variável de ambiente ORDERS_BLOCKED=1
-     (PowerShell: $env:ORDERS_BLOCKED="1" antes de iniciar o .py) e a ponte passa a servir ticks,
-     histórico comprimido da fita real, sinais e diário sem enviar NENHUMA ordem de entrada, mesmo
-     com o robô ligado no app. É o modo de ensaiar estratégia sobre pregão gravado enquanto o loop
-     vivo continua vendo o mercado real. Sem a variável, o comportamento é o de sempre. Dá para ligar
-     e desligar essa trava sem reiniciar nada: no Simulador, ao lado dos botões de replay, o chip
-     "Validação" manda SET_REPLAY_MODE para o processo (não é persistente: reiniciou, volta desligado).
+  4a. TRAVA DE EXECUÇÃO (modo replay/validação) — LIGADA POR PADRÃO: o script nasce sem enviar
+     NENHUMA ordem de entrada, mesmo com o robô ligado no app, e segue servindo ticks, histórico
+     comprimido da fita real, sinais e diário. Para operar de verdade é preciso dizer sim
+     explicitamente: rode com ORDERS_BLOCKED=0 (PowerShell: $env:ORDERS_BLOCKED="0" antes de iniciar
+     o .py). É necessário porque o loop vivo continua julgando o pregão real enquanto a tela roda um
+     replay da fita gravada -- sem a trava o ensaio abriria posição de verdade no meio do estudo, e
+     um script iniciado por atalho/.bat sem a variável já fez isso em 13/Nov/2026. Dá para ligar e
+     desligar essa trava sem reiniciar nada: no Simulador, ao lado dos botões de replay, o chip
+     "Validação" manda SET_REPLAY_MODE para o processo (não é persistente: reiniciou, volta ao padrão).
      A trava de ambiente fica por cima -- desligar pela tela nunca vence um ORDERS_BLOCKED=1.
   4b. IDENTIDADE POR ROBÔ (magic): cada entrada carimba o magic de quem mandou — Robô 1 com
      o magic do Ajustes (${config.magicNumber || 102030}), Boleta manual com \${MANUAL_ORDER_MAGIC}.
@@ -188,12 +190,13 @@ TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_
 # mostrar o motivo real quando o MT5 não executa (horário, símbolo ausente ou RetCode).
 ORDER_EXEC_NOTE = {"msg": ""}
 
-# TRAVA DE EXECUÇÃO (MODO REPLAY/VALIDAÇÃO). PADRÃO = DESLIGADA, não muda nada. Ligue com a
-# variável de ambiente ORDERS_BLOCKED=1 no PC do terminal: a ponte passa a servir ticks, histórico,
-# sinais e diário sem enviar NENHUMA ordem de entrada, mesmo com o robô ligado no app. É necessário
-# porque o loop vivo continua julgando o pregão real enquanto a tela roda um replay da fita gravada
-# -- sem a trava o ensaio abriria posição de verdade no meio do estudo.
-ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "").strip().lower() in ("1", "true", "sim", "on")
+# TRAVA DE EXECUÇÃO (MODO REPLAY/VALIDAÇÃO). PADRÃO = LIGADA (fail-safe): a ponte serve ticks,
+# histórico, sinais e diário sem enviar NENHUMA ordem de entrada, mesmo com o robô ligado no app.
+# Operar de verdade exige dizer sim explicitamente, com ORDERS_BLOCKED=0. É necessário porque o loop
+# vivo continua julgando o pregão real enquanto a tela roda um replay da fita gravada -- sem a trava
+# o ensaio abriria posição de verdade no meio do estudo. O padrão era desligado, e em 13/Nov/2026 um
+# script iniciado sem a variável executou entradas reais.
+ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "1").strip().lower() in ("1", "true", "sim", "on")
 
 # Versão acionável da mesma trava, ligada pelo app com {"action":"SET_REPLAY_MODE","on":true}, para
 # não precisar reiniciar a ponte a cada ensaio. Não é persistente: morre com o processo. A trava de
@@ -1768,11 +1771,11 @@ async def main():
     print(f" Servidor WebSocket ativo em toda a rede local na porta {WS_PORT} — no app (outro PC da rede) use MT5 Host = IP desta maquina (veja ipconfig)")
     if ORDERS_BLOCKED:
         print(" TRAVA DE EXECUÇÃO ATIVA (ORDERS_BLOCKED): a ponte serve ticks, histórico, sinais e diário, "
-              "mas NÃO envia nenhuma ordem de ENTRADA -- modo replay/validação. Essa trava do ambiente "
-              "só cai reiniciando o processo sem a variável.")
+              "mas NÃO envia nenhuma ordem de ENTRADA -- modo replay/validação. Este é o PADRÃO: para "
+              "operar de verdade reinicie o processo com ORDERS_BLOCKED=0.")
     else:
-        print(" ▶️ TRAVA DE EXECUÇÃO desligada: entradas liberadas para clientes ARMADOS (pregão ao vivo). "
-              "Para ensaiar sem tocar na conta, ligue o MODO REPLAY na tela (ou rode com ORDERS_BLOCKED=1).")
+        print(" ▶️ TRAVA DE EXECUÇÃO desligada (ORDERS_BLOCKED=0): entradas liberadas para clientes ARMADOS "
+              "(pregão ao vivo). Para voltar ao ensaio, reinicie sem ORDERS_BLOCKED ou ligue o MODO REPLAY na tela.")
     try:
         await asyncio.gather(server.wait_closed(), mt5_stream_loop())
     except KeyboardInterrupt:
