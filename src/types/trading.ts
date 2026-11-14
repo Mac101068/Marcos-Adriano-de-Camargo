@@ -236,6 +236,13 @@ export interface AutomationConfig {
    */
   exhaustionFilterEnabled: boolean;
   exhaustionDeltaRatio: number; // Fração da força do box anterior que ainda vale (padrão 0.7)
+  /**
+   * Filtro de TENDÊNCIA DO FLUXO (cor do painel FLUXO, padrão DESLIGADO): em CVD subindo só
+   * passam sinais de compra, em CVD caindo só os de venda. O sinal contrário é calado com o
+   * motivo `CALADO_TENDENCIA_FLUXO` no diário — nunca vira ordem.
+   */
+  flowTrendFilterEnabled?: boolean;
+  flowTrendLookback?: number; // Boxes que definem a inclinação do CVD (padrão 20)
   requireCvdNewExtreme: boolean; // Exige que o CVD faça nova máxima/mínima
   confirmationMode: 'BOX_CLOSE' | 'TICK_BREAKOUT'; // Disparar no fechamento ou no rompimento
   stopLossPoints: number; // Stop Loss (ex: 100 pontos = 2 boxes)

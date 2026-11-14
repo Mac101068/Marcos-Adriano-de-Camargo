@@ -14,6 +14,7 @@ interface ActiveEAsChartHudProps {
   onOpenEAsTab: () => void;
   mainRobotActive?: boolean;
   mainStrategyName?: string | null;
+  mainRobotMagic?: number;
 }
 
 export const ActiveEAsChartHud: React.FC<ActiveEAsChartHudProps> = ({
@@ -22,6 +23,7 @@ export const ActiveEAsChartHud: React.FC<ActiveEAsChartHudProps> = ({
   onOpenEAsTab,
   mainRobotActive,
   mainStrategyName,
+  mainRobotMagic,
 }) => {
   const [isOpen, setIsOpen] = useState<boolean>(() => {
     try {
@@ -159,20 +161,43 @@ export const ActiveEAsChartHud: React.FC<ActiveEAsChartHudProps> = ({
       {/* Corpo Expandido */}
       {isOpen && (
         <div className="mt-1 rounded-lg bg-slate-950/94 backdrop-blur-md border border-slate-800/90 p-2.5 shadow-2xl space-y-2 max-h-[340px] overflow-y-auto">
-          {/* Status do Robô Global (se estiver ligado) */}
-          {mainRobotActive && (
-            <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-emerald-950/30 border border-emerald-500/30 text-[10px]">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Activity className="w-3 h-3 text-emerald-400 shrink-0" />
-                <span className="font-bold text-emerald-300 truncate">
-                  Motor Global: {mainStrategyName || 'Ativo'}
-                </span>
-              </div>
-              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 shrink-0">
-                ON
+          {/* ESCOPO 1 — robô principal do terminal: aparece SEMPRE, ligado ou não, porque é ele
+              que a caixa “Principal #magic” do gráfico troca. Antes só existia com o robô ligado e
+              sumia quando pausado, dando a impressão de que os EAs eram tudo que havia. */}
+          <div
+            className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-md border text-[10px] ${
+              mainRobotActive
+                ? 'bg-emerald-950/30 border-emerald-500/30'
+                : 'bg-slate-900/70 border-slate-700/70'
+            }`}
+            title="Robô principal do terminal (não é um EA). A estratégia dele é trocada no gráfico, na caixa “Principal”"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Activity
+                className={`w-3 h-3 shrink-0 ${mainRobotActive ? 'text-emerald-400' : 'text-slate-500'}`}
+              />
+              <span className="truncate">
+                <span className="font-bold text-slate-200">Principal #{mainRobotMagic ?? 102030}</span>
+                <span className="text-slate-400"> · {mainStrategyName || 'sem estratégia'}</span>
               </span>
             </div>
-          )}
+            <span
+              className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                mainRobotActive
+                  ? 'bg-emerald-500/20 text-emerald-300'
+                  : 'bg-slate-800 text-slate-400 border border-slate-700'
+              }`}
+            >
+              {mainRobotActive ? 'ON' : 'PAUSADO'}
+            </span>
+          </div>
+
+          {/* ESCOPO 2 — os EAs direcionais, que são o que a aba EAs controla. */}
+          <div className="flex items-center justify-between px-0.5">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+              EAs direcionais · 100001 / 100002
+            </span>
+          </div>
 
           {/* Lista de EAs Direcionais Ativos (ou gerenciando posição aberta) */}
           {visibleEAs.length === 0 ? (

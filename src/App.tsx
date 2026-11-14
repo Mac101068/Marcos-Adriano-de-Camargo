@@ -1960,6 +1960,10 @@ export default function App() {
 
     config.exhaustionDeltaRatio,
 
+    config.flowTrendFilterEnabled,
+
+    config.flowTrendLookback,
+
     config.requireCvdNewExtreme,
 
     config.symbol,
@@ -9314,12 +9318,26 @@ export default function App() {
 
     : 'Robô 2 (sombra) desligado — clique para abrir e escolher a estratégia';
 
+  // Identidade do robô que ESTA caixa governa. Deixar o magic à vista é o que separa na tela
+  // "principal" de "EAs direcionais": sem isso, o seletor parecia trocar a estratégia de todos.
+  const mainStrategyMagic = config.magicNumber ?? 102030;
+
   const strategySelectorNode = (
     <div
       className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-700/80 text-[11px] shrink-0 shadow-sm"
-      title="Selecione uma estratégia oficial ou criada no Estúdio (o Robô é pausado por segurança). Para programar ou editar, clique no ícone do Estúdio ao lado."
+      title={
+        `Estratégia do ROBÔ PRINCIPAL do terminal (magic ${mainStrategyMagic}): troca modo, limiares, ` +
+        'filtros e SL/TP, e PAUSA o robô por segurança. Não mexe nos EAs direcionais de compra (100001) ' +
+        'e venda (100002) — esses têm estratégia própria na aba EAs.'
+      }
     >
-      <span className="hidden sm:inline text-amber-400 font-semibold">Trocar:</span>
+      <span className="hidden sm:inline text-amber-400 font-semibold">Principal</span>
+      <span
+        className="hidden sm:inline text-[9.5px] font-mono px-1 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700"
+        title={`Magic do robô principal — o que esta caixa troca. EAs direcionais: 100001 (compra) e 100002 (venda).`}
+      >
+        #{mainStrategyMagic}
+      </span>
       <select
         value={currentStratSelectValue}
         onChange={(e) => {
@@ -9387,10 +9405,11 @@ export default function App() {
 
       <button
         onClick={() => setActiveTab('eas')}
-        className="text-indigo-400/90 hover:text-indigo-300 transition-colors cursor-pointer p-0.5"
-        title="Abrir a aba principal Hedge EAs (todas as estratégias com EA de Compra e EA de Venda separados)"
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-indigo-500/40 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 hover:text-indigo-200 transition-colors cursor-pointer"
+        title="Abrir a aba EAs — robôs direcionais independentes: compra (100001) e venda (100002), cada um com sua estratégia"
       >
-        <Sparkles className="w-3.5 h-3.5" />
+        <Sparkles className="w-3 h-3" />
+        <span className="hidden sm:inline text-[9.5px] font-bold">EAs</span>
       </button>
 
       <span
@@ -9929,6 +9948,7 @@ ${
                   onOpenEAsTab={() => setActiveTab('eas')}
                   mainRobotActive={config.active}
                   mainStrategyName={activeStrategyName}
+                  mainRobotMagic={mainStrategyMagic}
                 />
                 <RenkoFlowChart
                   rightContent={strategySelectorNode}
@@ -10320,7 +10340,30 @@ ${
             )}
 
             {activeTab === 'eas' && (
-              <div className="h-full w-full">
+              <div className="h-full w-full flex flex-col">
+                {/* Faixa de escopo: deixa dito que aqui moram os EAs direcionais e que o robô
+                    principal continua sendo trocado no gráfico, na caixa “Principal #magic”. */}
+                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-1.5 border-b border-slate-800 bg-slate-950/70 text-[11px]">
+                  <span className="flex items-center gap-2 min-w-0 text-slate-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
+                    <span className="truncate">
+                      <b className="text-slate-200">EAs direcionais</b> — compra (100001) e venda (100002),
+                      cada lado com a própria estratégia.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('chart')}
+                    title="O robô principal do terminal (não é um EA) troca de estratégia no gráfico, na caixa “Principal”"
+                    className="flex items-center gap-1.5 px-2 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 font-semibold hover:bg-amber-500/20 transition-colors cursor-pointer shrink-0 max-w-[46%]"
+                  >
+                    <Activity className="w-3 h-3 shrink-0" />
+                    <span className="truncate">
+                      Principal #{config.magicNumber ?? 102030} · {activeStrategyName || 'sem estratégia'} · trocar no gráfico
+                    </span>
+                  </button>
+                </div>
+                <div className="flex-1 min-h-0">
                 <DirectionalEAsPanel
                   asset={asset}
                   config={config}
@@ -10382,6 +10425,7 @@ ${
                     } catch {}
                   }}
                 />
+                </div>
               </div>
             )}
 
