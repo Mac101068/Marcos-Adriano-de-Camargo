@@ -23,6 +23,7 @@ Rodar:  venv\\Scripts\\python.exe avaliar_filtro_fluxo.py --dias 5
 import argparse
 import os
 import sys
+from datetime import datetime
 
 import pandas as pd
 
@@ -35,6 +36,12 @@ RAIZ = os.path.dirname(os.path.abspath(__file__))
 PASTA = os.path.join(RAIZ, "data", "pregoes")
 TICK_SIZE_WIN = 5.0
 BOX_POINTS = 50.0  # 10R do WIN, a escala do motor
+
+# Janela do pregão medida nos testes. Mesmo START_TIME da ponte (08:55) e fim às 18:00:
+# depois disso a fita tem lixo de fechamento (prints fora do horário regular) que só
+# inventa sinal e negócio que nunca existiu na mesa.
+INICIO_PADRAO = "08:55"
+FIM_PADRAO = "18:00"
 
 # Defaults do app, para o motor julgar como julga em produção.
 EVAL_CONFIG.update({
@@ -57,7 +64,7 @@ def carregar_ticks(caminho):
     return df.to_dict("records")
 
 
-def rodar_dia(caminho, symbol="WINZ26"):
+def rodar_dia(caminho, symbol="WINZ26", inicio=INICIO_PADRAO, fim=FIM_PADRAO):
     engine = RenkoFlowEngine(symbol=symbol, box_points=BOX_POINTS, tick_size=TICK_SIZE_WIN,
                              min_delta_threshold=150)
     sinais = []
@@ -66,6 +73,11 @@ def rodar_dia(caminho, symbol="WINZ26"):
         vol = int(t.get("volume") or t.get("volume_real") or 1)
         preco = float(t.get("last") or t.get("bid") or t.get("ask") or 0)
         if preco <= 0:
+            continue
+        hora = datetime.fromtimestamp(int(t["time_msc"]) / 1000).strftime("%H:%M")
+        if hora >= fim:
+            break
+        if hora < inicio:
             continue
         agressor = "BUY" if (flags & 32) else ("SELL" if (flags & 64) else "CROSS")
         box, sinal, _motivo = engine.process_tick(preco, vol, agressor, int(t["time_msc"]))
@@ -116,6 +128,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dias", type=int, default=5, help="quantos pregões do catálogo usar")
     ap.add_argument("--janelas", default="5,10,20")
+    ap.add_argument("--inicio", default=INICIO_PADRAO, help="primeiro horário medido (HH:MM)")
+    ap.add_argument("--fim", default=FIM_PADRAO, help="para de medir neste horário (HH:MM)")
     args = ap.parse_args()
 
     arquivos = sorted(f for f in os.listdir(PASTA) if f.startswith("winz26_ticks_") and f.endswith(".csv.gz"))
@@ -123,12 +137,12 @@ def main():
     janelas = [int(x) for x in args.janelas.split(",")]
     horizontes = [1, 3, 5]
 
-    print(f"\n=== FILTRO DE COR DO FLUXO — {len(arquivos)} pregão(ões) de fita real ===")
+    print(f"\n=== FILTRO DE COR DO FLUXO — {len(arquivos)} pregão(ões) | janela {args.inicio}–{args.fim} ===")
     dias = []
     total_sinais = 0
 
     for caminho in arquivos:
-        boxes, sinais = rodar_dia(caminho)
+        boxes, sinais = rodar_dia(caminho, inicio=args.inicio, fim=args.fim)
         total_sinais += len(sinais)
         dia = os.path.basename(caminho).replace("winz26_ticks_", "").replace(".csv.gz", "")
         buys = sum(1 for s in sinais if s["lado"] == "BUY")

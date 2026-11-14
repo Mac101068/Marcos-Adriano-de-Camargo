@@ -21,6 +21,7 @@ Rodar:  venv\\Scripts\\python.exe medir_filtro_replay.py --dias 22
 import argparse
 import os
 import sys
+from datetime import datetime
 
 import pandas as pd
 
@@ -35,6 +36,13 @@ PASTA = os.path.join(RAIZ, "data", "pregoes")
 SL_PONTOS = 50.0    # spec do WIN em bot_mt5_ciclo15.py
 TP_PONTOS = 100.0
 JANELA_FILTRO = 20
+
+# Janela do pregão: START_TIME da ponte (08:55) até 18:00. Fora dela a fita tem print de
+# fechamento, que gera sinal e negócio que a mesa nunca teria feito. A ponte para entradas
+# às 17:30 (STOP_ENTRIES_TIME); aqui o limite é 18:00 por decisão do operador — use
+# --fim 17:30 para reproduzir a regra exata da ponte.
+INICIO_PADRAO = "08:55"
+FIM_PADRAO = "18:00"
 
 EVAL_CONFIG.update({
     "strategy_mode": "PYRAMID_FLOW_CONFLUENCE",
@@ -102,7 +110,7 @@ class Carteira:
             self._fechar(preco, "FIM")
 
 
-def rodar_dia(caminho):
+def rodar_dia(caminho, inicio=INICIO_PADRAO, fim=FIM_PADRAO):
     engine = RenkoFlowEngine(symbol="WINZ26", box_points=50.0, tick_size=5.0, min_delta_threshold=150)
     todas = Carteira("sem filtro", com_filtro=False)
     filtrada = Carteira("com filtro", com_filtro=True)
@@ -113,6 +121,11 @@ def rodar_dia(caminho):
         vol = int(t.get("volume") or t.get("volume_real") or 1)
         preco = float(t.get("last") or t.get("bid") or t.get("ask") or 0)
         if preco <= 0:
+            continue
+        hora = datetime.fromtimestamp(int(t["time_msc"]) / 1000).strftime("%H:%M")
+        if hora >= fim:
+            break
+        if hora < inicio:
             continue
         ultimo = preco
         agressor = "BUY" if (flags & 32) else ("SELL" if (flags & 64) else "CROSS")
@@ -148,6 +161,8 @@ def estat(trades):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dias", type=int, default=22)
+    ap.add_argument("--inicio", default=INICIO_PADRAO, help="primeiro horário negociado (HH:MM)")
+    ap.add_argument("--fim", default=FIM_PADRAO, help="zera tudo e para neste horário (HH:MM)")
     args = ap.parse_args()
 
     arquivos = sorted(f for f in os.listdir(PASTA)
@@ -155,10 +170,10 @@ def main():
     arquivos = [os.path.join(PASTA, f) for f in arquivos[-args.dias:]]
 
     tudo_sem, tudo_com = [], []
-    print(f"\n=== SAÍDA REAL (SL {SL_PONTOS:.0f} · TP {TP_PONTOS:.0f} · FLIP) — "
-          f"{len(arquivos)} pregões de fita real ===")
+    print(f"\n=== SAÍDA REAL (SL {SL_PONTOS:.0f} · TP {TP_PONTOS:.0f} · FLIP) — {len(arquivos)} pregões "
+          f"| janela {args.inicio}–{args.fim} ===")
     for caminho in arquivos:
-        sem, com = rodar_dia(caminho)
+        sem, com = rodar_dia(caminho, inicio=args.inicio, fim=args.fim)
         tudo_sem.extend(sem)
         tudo_com.extend(com)
         dia = os.path.basename(caminho).replace("winz26_ticks_", "").replace(".csv.gz", "")
