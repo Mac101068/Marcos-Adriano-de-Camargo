@@ -4793,17 +4793,17 @@ async def main():
 
     asyncio.create_task(extrato_mt5_loop())
 
-    try:
-
-        await asyncio.gather(server.wait_closed(), mt5_stream_loop(), mt5_equity_broadcaster_loop())
-
-    except KeyboardInterrupt:
-
-        pass
-
-    finally:
-
-        mt5.shutdown()
+    while True:
+        try:
+            await asyncio.gather(server.wait_closed(), mt5_stream_loop(), mt5_equity_broadcaster_loop())
+        except KeyboardInterrupt:
+            break
+        except Exception as exc:
+            import traceback
+            print(f"⚠️ [LOOP PRINCIPAL] Exceção capturada: {exc} — recuperando conexão em 2s...", flush=True)
+            traceback.print_exc()
+            await asyncio.sleep(2)
+    mt5.shutdown()
 
 
 
