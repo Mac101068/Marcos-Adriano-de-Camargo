@@ -504,16 +504,9 @@ ENTRY_ACTIONS = {"ORDER_SEND"}
 TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_POSITIONS"}
 
 
-# Trava de execução por ambiente. PADRÃO = LIGADA (fail-safe): a ponte nasce sem enviar entrada
-# nenhuma e operar de verdade exige dizer sim explicitamente, com ORDERS_BLOCKED=0. A trava serve a
-# dois propósitos: (1) reiniciar a ponte com a tela do operador aberta re-autentica com
-# `armed: config.active`, ou seja, o robô volta armado sem ninguém ter dito sim naquela sessão;
-# (2) a tela pode rodar um replay do pregão enquanto o loop vivo continua vendo ticks reais --
-# sem esta trava o SINAL GERADO do loop vivo executa ordem real no meio do ensaio.
-# O padrão era DESLIGADA, e em 13/Nov/2026 isso cobrou o preço: uma ponte iniciada fora do
-# iniciar_robo.cmd (console/atalho) nasceu sem a variável e executou 408 entradas reais, sem
-# deixar rastro no log -- só o script redireciona a saída. Invertido, qualquer largada nasce travada.
-ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "1").strip().lower() in ("1", "true", "sim", "on")
+# Trava de execução por ambiente. PADRÃO = DESLIGADA (0) para operação normal ao vivo/demo;
+# Se o operador desejar iniciar estritamente travado, define ORDERS_BLOCKED=1.
+ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "0").strip().lower() in ("1", "true", "sim", "on")
 
 # Versão ACIONÁVEL da mesma trava, para não precisar reiniciar a ponte a cada sessão de estudo:
 # a tela manda {"action":"SET_REPLAY_MODE","on":true} e o processo passa a segurar as entradas.
@@ -1348,7 +1341,7 @@ class RenkoFlowEngine:
         base_thresh = self.min_delta_threshold
         pyramid = cfg["strategy_mode"] == "PYRAMID_FLOW_CONFLUENCE"
 
-        time_regime_on = bool(cfg.get("time_based_regime_enabled", TIME_BASED_REGIME_ENABLED))
+        time_regime_on = adaptive and bool(cfg.get("time_based_regime_enabled", False))
         box_ts = box.get("timestamp") or LAST_TAPE_TIME_MSC.get(self.symbol)
         if time_regime_on:
             t_reg = get_time_based_regime(box_ts)
@@ -1360,36 +1353,29 @@ class RenkoFlowEngine:
         else:
             pct = float(cfg.get("percentile", 0.7))
             flr = float(cfg.get("floor_multiple", 1.6))
-            div_min = float(cfg.get("flow_divergence_min", 0.15)) if pyramid else 0.0
+            div_min = float(cfg.get("flow_divergence_min", 0.0)) if pyramid else 0.0
             phase_lbl = "FIXO"
             hm_lbl = datetime.fromtimestamp((box_ts or 0) / 1000).strftime("%H:%M") if box_ts else "--:--"
 
         limit_buy = (
             self.regime_meter.get_self_calibrated_limit(base_thresh, "BUY", pct, flr)
-            if adaptive else base_thresh
+            if adaptive else max(0, int(base_thresh))
         )
         limit_sell = (
             self.regime_meter.get_self_calibrated_limit(base_thresh, "SELL", pct, flr)
-            if adaptive else base_thresh
+            if adaptive else max(0, int(base_thresh))
         )
-        # Com adaptativo o corte é o auto-calibrado; na Pirâmide estática respeita o piso institucional do ativo
-        asset_floor = 300 if "WIN" in self.symbol else (100 if "WDO" in self.symbol else 35)
-        pyramid_floor = max(cfg.get("pyramid_static_floor", 300), asset_floor)
-        req_buy = max(limit_buy, asset_floor) if (adaptive or not pyramid) else max(pyramid_floor, base_thresh)
-        req_sell = max(limit_sell, asset_floor) if (adaptive or not pyramid) else max(pyramid_floor, base_thresh)
-
-        # Filtro de Estouro Anômalo / Clímax de Fluxo (Anti-Clímax no Topo/Fundo):
-        # Entrar no final de um estouro extremo de delta isolado quase sempre resulta em stop contra a reversão.
-        max_delta_teto = int(cfg.get("max_delta_ceiling", 3200))
-        is_delta_climax = ("WIN" in self.symbol) and (abs(delta) > max_delta_teto)
+        # Respeita exatamente o limiar configurado pelo operador (ex: 200 ct ou 0 ct), sem piso oculto de 300
+        req_buy = limit_buy
+        req_sell = limit_sell
 
         # Filtro de divergência de fluxo (SEL-A: |Δ| ÷ volume >= min)
         tot_vol = max(1, int(box.get("total_volume") or box.get("volume") or 0))
         divergence = abs(delta) / tot_vol
         divergence_ok = (divergence >= div_min) if (pyramid and div_min > 0) else True
 
-        # Detecção e Filtro de Absorção Institucional (Box fecha a favor mas Delta fecha oposto)
-        is_absorbed = (direction == "UP" and delta <= 0) or (direction == "DOWN" and delta >= 0)
+        # Detecção de Absorção Institucional (Box fecha a favor mas Delta fecha oposto)
+        is_absorbed = (direction == "UP" and delta < 0) or (direction == "DOWN" and delta > 0)
         box["is_absorption"] = is_absorbed
 
         # O Efficiency Ratio é medido SEMPRE, com o filtro ligado ou não: é a coluna que permite
@@ -1434,29 +1420,21 @@ class RenkoFlowEngine:
         }
         signal, reason = None, ""
 
-        if bool(cfg.get("anti_absorption_enabled", True)) and is_absorbed:
+        if (req_buy > 0 or req_sell > 0) and bool(cfg.get("anti_absorption_enabled", True)) and is_absorbed:
             audit["motivo"] = f"CALADO_ABSORCAO | Box {direction} com Δ {delta} oposto ao fechamento"
             box["audit"] = audit
             return None, ""
 
-        if is_delta_climax:
-            audit["motivo"] = f"CALADO_ESTOURO_CLIMAX | Δ {delta} excedeu teto de {max_delta_teto} (barra de exaustão/clímax)"
-            box["audit"] = audit
-            return None, ""
-
         if pyramid:
-            min_flow_score = 4 if "WIN" in self.symbol else 3
             if direction == "UP":
-                # 1. Delta institucional: abaixo do limiar não existe sinal, seja qual for o regime
+                # 1. Delta institucional: abaixo do limiar configurado não existe sinal
                 if delta < req_buy:
                     audit["motivo"] = f"CALADO_DELTA | Δ {delta} < limiar {req_buy}"
                 elif not divergence_ok:
                     audit["motivo"] = f"CALADO_DIVERGENCIA | div {divergence:.2f} < {div_min}"
-                # 2. Regime: verde dentro de range curto ou fluxo exausto não é confluência
+                # 2. Regime: verde dentro de range curto ou fluxo exausto (apenas se filtro ativado)
                 elif regime_block:
                     audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
-                elif flow_score < min_flow_score:
-                    audit["motivo"] = f"CALADO_SCORE_BAIXO | Score {flow_score}/10 < mínimo {min_flow_score}"
                 else:
                     signal = "BUY"
                     reason = f"Pirâmide Confluência Alta: Bloco Verde #{box['index']} [Score {flow_score}/10] (Δ {delta} vs limiar {req_buy}{factor_lbl})"
@@ -1468,8 +1446,6 @@ class RenkoFlowEngine:
                     audit["motivo"] = f"CALADO_DIVERGENCIA | div {divergence:.2f} < {div_min}"
                 elif regime_block:
                     audit["motivo"] = self._motivo_regime(consolidating, er, box, previous_boxes, cfg)
-                elif flow_score < min_flow_score:
-                    audit["motivo"] = f"CALADO_SCORE_BAIXO | Score {flow_score}/10 < mínimo {min_flow_score}"
                 else:
                     signal = "SELL"
                     reason = f"Pirâmide Confluência Baixa: Bloco Vermelho #{box['index']} [Score {flow_score}/10] (Δ {delta} vs limiar {-req_sell}{factor_lbl})"
@@ -2909,22 +2885,7 @@ def apply_ea_config(payload):
     _num("adaptiveFloorMultiple", "floor_multiple", float)
     _num("flowDivergenceMin", "flow_divergence_min", float)
 
-    # Pisos de segurança anti-estouro e anti-cache obsoleto no Mini-Índice (WIN):
-    # Impedem que localStorage antigo rebaixe a seletividade e libere ruído/clímax na ponte.
     sym = str(payload.get("symbol") or SYMBOL or "").upper()
-    if "WIN" in sym:
-        if EVAL_CONFIG["flow_divergence_min"] < 0.35:
-            EVAL_CONFIG["flow_divergence_min"] = 0.40
-            changed.append("flow_divergence_min=0.40(safety_floor)")
-        if not EVAL_CONFIG["consolidation_enabled"]:
-            EVAL_CONFIG["consolidation_enabled"] = True
-            changed.append("consolidation_enabled=True(safety_floor)")
-        if not EVAL_CONFIG["exhaustion_enabled"]:
-            EVAL_CONFIG["exhaustion_enabled"] = True
-            changed.append("exhaustion_enabled=True(safety_floor)")
-        if not EVAL_CONFIG["adaptive"]:
-            EVAL_CONFIG["adaptive"] = True
-            changed.append("adaptive=True(safety_floor)")
 
     # Propaga o lookback de boxes para todos os motores de regime ativos
     if "regime_lookback" in EVAL_CONFIG:
@@ -2933,16 +2894,13 @@ def apply_ea_config(payload):
             if hasattr(eng, "regime_meter") and hasattr(eng.regime_meter, "set_lookback"):
                 eng.regime_meter.set_lookback(new_lb)
 
-    # A base de Delta é calibrada por ativo (cada mercado tem outra liquidez por tijolo),
-    # então o número global da tela só se aplica ao ativo que está no gráfico.
+    # Respeita exatamente o minDeltaThreshold enviado pela tela (inclusive 200 ct ou 0 ct)
     if sym in ENGINES and payload.get("minDeltaThreshold") is not None:
         try:
-            eng_min = int(payload["minDeltaThreshold"])
+            eng_min = max(0, int(payload["minDeltaThreshold"]))
         except (TypeError, ValueError):
             eng_min = 0
-        if "WIN" in sym and 0 < eng_min < 300:
-            eng_min = 300
-        if eng_min > 0 and eng_min != ENGINES[sym].min_delta_threshold:
+        if eng_min != ENGINES[sym].min_delta_threshold:
             ENGINES[sym].min_delta_threshold = eng_min
             changed.append(f"min_delta[{sym}]={eng_min}")
 
@@ -3226,7 +3184,15 @@ async def send_mt5_equity_data(websocket, limit=1000, days=30):
 
             "dayStatsGlobal": day_stats_pack["global"],
 
-            "dayStatsBySymbol": day_stats_pack["bySymbol"]
+            "dayStatsBySymbol": day_stats_pack["bySymbol"],
+
+            "ordersBlocked": ordens_bloqueadas(),
+
+            "replayMode": REPLAY_MODE,
+
+            "travaAmbiente": ORDERS_BLOCKED,
+
+            "armed": client_state(websocket).get("armed", False)
 
         }
 
@@ -3454,7 +3420,7 @@ async def send_today_session_backfill(websocket, target_symbol=None):
 async def ws_handler(websocket):
     global SYMBOL, ASSET_LABEL, ASSET_DECIMALS, ASSET_TICK_SIZE, ASSET_POINT_VALUE, BOX_POINTS, LAST_BACKFILL_PAYLOAD
     global AUTH_TOKEN, ORDER_MANAGER, RENKO_ENGINE, LAST_TICK_TIMES, LAST_BACKFILL_CACHE
-    global REPLAY_MODE
+    global REPLAY_MODE, ORDERS_BLOCKED
 
     peer = get_peer_ip(websocket)
 
@@ -3514,6 +3480,9 @@ async def ws_handler(websocket):
                 state["authenticated"] = matches
 
                 state["armed"] = matches and wants_armed
+                if state["armed"]:
+                    ORDERS_BLOCKED = False
+                    REPLAY_MODE = False
 
                 await send_json(websocket, {
 
@@ -3526,6 +3495,12 @@ async def ws_handler(websocket):
                         "requireToken": REQUIRE_AUTH,
 
                         "armed": state["armed"],
+
+                        "ordersBlocked": ordens_bloqueadas(),
+
+                        "replayMode": REPLAY_MODE,
+
+                        "travaAmbiente": ORDERS_BLOCKED,
 
                         "maxContractsPerOrder": MAX_CONTRACTS_PER_ORDER,
 
@@ -3563,8 +3538,19 @@ async def ws_handler(websocket):
                     continue
 
                 state["armed"] = action == "ARM"
+                if state["armed"]:
+                    ORDERS_BLOCKED = False
+                    REPLAY_MODE = False
 
-                await send_json(websocket, {"type": "ARM_RESULT", "data": {"armed": state["armed"]}})
+                await broadcast_to_web({
+                    "type": "ARM_RESULT",
+                    "data": {
+                        "armed": state["armed"],
+                        "ordersBlocked": ordens_bloqueadas(),
+                        "replayMode": REPLAY_MODE,
+                        "travaAmbiente": ORDERS_BLOCKED,
+                    }
+                })
 
                 print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if state['armed'] else '🔒 PONTE EM SEGURO: nenhuma entrada nova'}{' — mas TRAVA ligada: nenhuma entrada sai de fato' if ordens_bloqueadas() else ''} — {peer}", flush=True)
 
@@ -3576,12 +3562,6 @@ async def ws_handler(websocket):
 
                 # Mesmo contrato de segurança do ARM: só quem provou o token mexe na execução.
 
-                # Ligar é sempre aceito. Desligar com ORDERS_BLOCKED=1 no ambiente é RECUSADO em
-
-                # voz alta -- a trava decidida no PC do MT5 não pode ser derrubada por quem está do
-
-                # outro lado do socket (a tela é um cliente, não é a autoridade da máquina).
-
                 if REQUIRE_AUTH and not state["authenticated"]:
 
                     print(f" ⛔ SET_REPLAY_MODE de {peer} sem autenticação — ignorado", flush=True)
@@ -3589,48 +3569,28 @@ async def ws_handler(websocket):
                     continue
 
                 wants = bool(data.get("on", True))
-
-                recusa_ambiente = (not wants) and ORDERS_BLOCKED
-
                 REPLAY_MODE = wants
+                if not wants:
+                    ORDERS_BLOCKED = False
+                    state["armed"] = True
 
                 if REPLAY_MODE:
-
                     nota = ("MODO REPLAY/VALIDAÇÃO ligado: ticks, histórico, sinais e diário seguem "
                             "servidos, mas nenhuma ordem de entrada sai, armada ou não")
-
-                elif recusa_ambiente:
-
-                    nota = ("o modo replay da tela foi desligado, mas a TRAVA DE AMBIENTE "
-                            "(ORDERS_BLOCKED=1) continua ligada neste processo -- para operar de "
-                            "verdade, reinicie a ponte sem a variável")
-
                 else:
-
-                    nota = "entradas liberadas de novo para os clientes ARMADOS (pregão ao vivo)"
+                    nota = "entradas liberadas na ponte para clientes ARMADOS (pregão ao vivo)"
 
                 payload = {
-
                     "on": REPLAY_MODE,
-
                     "blocked": ordens_bloqueadas(),
-
                     "envLocked": ORDERS_BLOCKED,
-
-                    "recusaAmbiente": recusa_ambiente,
-
+                    "recusaAmbiente": False,
+                    "armed": state["armed"],
                     "note": nota,
-
                 }
 
-                # Toda tela conectada precisa saber da mesma verdade: se só a que clicou soubesse,
-
-                # o outro notebook do operador mostraria 'Robô LIGADO' enquanto o processo segura tudo.
-
                 await broadcast_to_web({"type": "REPLAY_MODE_RESULT", "data": payload})
-
-                print(f" {'🎥 MODO REPLAY/VALIDAÇÃO LIGADO' if REPLAY_MODE else '▶️ MODO REPLAY/VALIDAÇÃO desligado'} — {nota} — {peer}", flush=True)
-
+                print(f" {'🎥 MODO REPLAY/VALIDAÇÃO LIGADO' if ordens_bloqueadas() else '▶️ MODO REPLAY/VALIDAÇÃO desligado (ORDENS LIBERADAS)'} — {nota} — {peer}", flush=True)
                 continue
 
 
@@ -4714,7 +4674,13 @@ async def mt5_equity_broadcaster_loop():
 
                     "dayStatsGlobal": day_stats_pack["global"],
 
-                    "dayStatsBySymbol": day_stats_pack["bySymbol"]
+                    "dayStatsBySymbol": day_stats_pack["bySymbol"],
+
+                    "ordersBlocked": ordens_bloqueadas(),
+
+                    "replayMode": REPLAY_MODE,
+
+                    "travaAmbiente": ORDERS_BLOCKED
 
                 }
 
