@@ -74,6 +74,7 @@ interface HeaderProps {
   activeStrategyLive?: boolean;
   onOpenStudio?: () => void;
   totalFinancialVolume?: number;
+  onToggleReplayMode?: (on: boolean) => void;
 }
 
 interface MenuItem {
@@ -119,9 +120,8 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
     <div ref={rootRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${
-          groupActive ? 'bg-slate-800/70 text-slate-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-        }`}
+        className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${groupActive ? 'bg-slate-800/70 text-slate-300 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+          }`}
       >
         {GroupIcon && <GroupIcon className={`w-3.5 h-3.5 ${groupActive ? 'text-slate-300' : 'text-slate-500'}`} />}
         {label}
@@ -130,9 +130,8 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
 
       {open && (
         <div
-          className={`absolute top-full mt-1.5 z-50 min-w-[220px] py-1 rounded-lg bg-slate-900 border border-slate-700/80 shadow-2xl shadow-black/50 ${
-            rightAlign ? 'right-0' : 'left-0'
-          }`}
+          className={`absolute top-full mt-1.5 z-50 min-w-[220px] py-1 rounded-lg bg-slate-900 border border-slate-700/80 shadow-2xl shadow-black/50 ${rightAlign ? 'right-0' : 'left-0'
+            }`}
         >
           {items.map((it) => {
             const Icon = it.icon;
@@ -145,11 +144,10 @@ const MenuGroup: React.FC<MenuGroupProps> = ({ label, icon: GroupIcon, items, ac
                   setOpen(false);
                 }}
                 title={it.title}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors text-left cursor-pointer ${
-                  isActive
-                    ? 'bg-slate-800 text-slate-50 font-semibold'
-                    : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
-                }`}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors text-left cursor-pointer ${isActive
+                  ? 'bg-slate-800 text-slate-50 font-semibold'
+                  : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
+                  }`}
               >
                 <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-slate-100' : 'text-slate-500'}`} />
                 <span className="flex-1">{it.label}</span>
@@ -183,9 +181,8 @@ interface AssetSelectorProps {
  */
 const SymbolChip: React.FC<{ sym: string; role?: string; off?: boolean }> = ({ sym, role, off }) => (
   <span
-    className={`flex items-center gap-0.5 rounded px-1 py-px font-mono leading-none ${
-      off ? 'bg-amber-500/15 text-amber-200' : 'bg-slate-800 text-slate-100'
-    }`}
+    className={`flex items-center gap-0.5 rounded px-1 py-px font-mono leading-none ${off ? 'bg-amber-500/15 text-amber-200' : 'bg-slate-800 text-slate-100'
+      }`}
     title={off ? `Gráfico aberto em ${sym} (${role || 'papel não padrão'}), não no vigente` : `Gráfico aberto em ${sym}`}
   >
     <span className="text-[9px] font-semibold">{sym}</span>
@@ -287,9 +284,8 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
           />
         )}
         <span
-          className={`w-2 h-2 rounded-full shrink-0 ${
-            asset.status === 'a_confirmar' ? 'bg-amber-400' : mt5SymbolOk === false ? 'bg-amber-400' : 'bg-emerald-400'
-          }`}
+          className={`w-2 h-2 rounded-full shrink-0 ${asset.status === 'a_confirmar' ? 'bg-amber-400' : mt5SymbolOk === false ? 'bg-amber-400' : 'bg-emerald-400'
+            }`}
         />
         <ChevronDown className={`w-3 h-3 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -314,12 +310,11 @@ const AssetSelector: React.FC<AssetSelectorProps> = ({ asset, assetId, onSelect,
                   locked
                     ? `${spec.contractNote} — homologue em src/assets/assetRegistry.ts para habilitar`
                     : spec.status === 'a_confirmar'
-                    ? `${spec.contractNote} — clicável para ENSAIAR com o Robô bloqueado`
-                    : spec.contractNote
+                      ? `${spec.contractNote} — clicável para ENSAIAR com o Robô bloqueado`
+                      : spec.contractNote
                 }
-                className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
-                  isActive ? 'bg-slate-800 text-slate-50 font-semibold' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
-                }`}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${isActive ? 'bg-slate-800 text-slate-50 font-semibold' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
+                  }`}
               >
                 <span className="flex-1 min-w-0">
                   <span className="block">{spec.label}</span>
@@ -449,6 +444,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeStrategyLive,
   onOpenStudio,
   totalFinancialVolume,
+  onToggleReplayMode,
 }) => {
   const chartItems: MenuItem[] = [
     { tab: 'chart', label: 'Terminal & Gráficos', icon: Activity },
@@ -505,8 +501,8 @@ export const Header: React.FC<HeaderProps> = ({
               {totalFinancialVolume >= 1_000_000
                 ? `R$ ${(totalFinancialVolume / 1_000_000).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}M`
                 : totalFinancialVolume >= 1_000
-                ? `R$ ${(totalFinancialVolume / 1_000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}k`
-                : `R$ ${totalFinancialVolume.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  ? `R$ ${(totalFinancialVolume / 1_000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}k`
+                  : `R$ ${totalFinancialVolume.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             </span>
           </div>
         )}
@@ -516,16 +512,15 @@ export const Header: React.FC<HeaderProps> = ({
       <nav className="hidden lg:flex items-center gap-1 bg-slate-900/80 p-0.5 rounded-lg border border-slate-800 flex-1 justify-start ml-1">
         <MenuGroup label="Gráficos" icon={LineChart} items={chartItems} activeTab={activeTab} onSelect={setActiveTab} />
         <MenuGroup label="Análise" icon={BarChart2} items={analysisItems} activeTab={activeTab} onSelect={setActiveTab} />
-        
+
         {/* Botão de Destaque Dedicado para a Aba dos Robôs EAs */}
         <button
           onClick={() => setActiveTab('eas')}
           title="Acessar o Painel Central dos Robôs Hedge EAs (RoboCompra 100001 e RoboVenda 100002)"
-          className={`flex items-center gap-1.5 h-6 px-2.5 rounded-md text-[10px] leading-none font-bold transition-all whitespace-nowrap cursor-pointer ${
-            activeTab === 'eas'
-              ? 'bg-indigo-600 text-white shadow-xs'
-              : 'text-indigo-400 hover:text-indigo-200 hover:bg-indigo-950/40'
-          }`}
+          className={`flex items-center gap-1.5 h-6 px-2.5 rounded-md text-[10px] leading-none font-bold transition-all whitespace-nowrap cursor-pointer ${activeTab === 'eas'
+            ? 'bg-indigo-600 text-white shadow-xs'
+            : 'text-indigo-400 hover:text-indigo-200 hover:bg-indigo-950/40'
+            }`}
         >
           <Bot className="w-3.5 h-3.5" />
           Hedge EAs
@@ -537,11 +532,10 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleDadosPanel}
           title="Abrir/fechar a janela de controles do painel Renko (Sinal, Exibição, Escalas, Desenho, Ordem rápida)"
-          className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${
-            dadosPanelOpen
-              ? 'bg-slate-800/70 text-slate-300 font-semibold'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-          }`}
+          className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${dadosPanelOpen
+            ? 'bg-slate-800/70 text-slate-300 font-semibold'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+            }`}
         >
           <AppWindow className="w-3.5 h-3.5" />
           Dados
@@ -552,11 +546,10 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleBoxWindow}
           title="Abrir/fechar a janela do Box Renko (OHLC, fluxo Heikin-Ashi, CVD e convergência do box ativo)"
-          className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${
-            boxWindowOpen
-              ? 'bg-slate-800/70 text-slate-300 font-semibold'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-          }`}
+          className={`flex items-center gap-1.5 h-6 px-2 rounded-md text-[10px] leading-none font-medium transition-colors whitespace-nowrap cursor-pointer ${boxWindowOpen
+            ? 'bg-slate-800/70 text-slate-300 font-semibold'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+            }`}
         >
           <Box className="w-3.5 h-3.5" />
           Box Renko
@@ -566,68 +559,120 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Zone 3: Primary Actions and Subscription Status Badge (Far Right) */}
       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-        {/* Botão de Conexão MT5 Live Bridge */}
+        {/* Botão de Conexão MT5 Live Bridge - ícone limpo sem bolinha duplicada */}
         <button
           onClick={() => onToggleMT5Connect()}
-          className={`hidden sm:flex items-center gap-1.5 h-6 px-2 text-[10px] leading-none font-semibold rounded-md border transition-all whitespace-nowrap cursor-pointer ${
-            mt5State.status === 'CONNECTED'
-              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
-              : mt5State.status === 'CONNECTING'
+          className={`hidden sm:flex items-center gap-1.5 h-6 px-2 text-[10px] leading-none font-semibold rounded-md border transition-all whitespace-nowrap cursor-pointer ${mt5State.status === 'CONNECTED'
+            ? mt5State.bridgeOrdersBlocked
+              ? 'bg-amber-500/15 border-amber-500/50 text-amber-300 hover:bg-amber-500/25'
+              : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25'
+            : mt5State.status === 'CONNECTING'
               ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
               : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600'
-          }`}
+            }`}
           title={
             mt5State.status !== 'CONNECTED'
               ? 'Conectar com o MetaTrader 5 via WebSocket local'
               : mt5State.bridgeLegacy
               ? 'Ponte antiga (sem token): aceita ordem de qualquer aparelho da rede. Baixe o script novo em Ajustes > Segurança da Ponte.'
               : mt5State.bridgeOrdersBlocked
-              ? 'Ponte em MODO REPLAY/VALIDAÇÃO (TRAVA ORDERS_BLOCKED ligada no PC do MT5): ela transmite ticks, histórico, sinais e diário, mas nenhuma ordem de ENTRADA sai, com este robô ligado ou desligado. Para voltar a operar, reinicie a ponte sem a trava.'
+              ? 'Ponte em MODO REPLAY/VALIDAÇÃO (TRAVA ativa): transmite ticks e sinais, mas NÃO envia ordens ao MT5. Clique no botão ao lado "🔒 Ponte: Replay (Destravar)" para destravar.'
               : mt5State.bridgeArmed === false
-              ? 'Ponte autenticada e EM SEGURO: com o Robô desligado ela recusa ordens de entrada (saídas e zeragem seguem liberadas).'
-              : 'Ponte autenticada e ARMADA: ordens de entrada liberadas, dentro dos tetos de contrato e de ordens por minuto.'
+              ? 'Ponte autenticada e NÃO ARMADA (EM SEGURO): recusa ordens de entrada automáticas até armar.'
+              : 'Ponte autenticada e ARMADA: ordens de entrada liberadas para o MT5.'
           }
         >
-          {/* Conexão com a ponte: só o ícone do MT5 e uma bolinha de status. O texto
-              "CONECTADO · ARMADO" saiu do cabeçalho — quem precisa do detalhe lê o tooltip
-              e a tira de status abaixo. Verde = conectado e armado; âmbar = conectado em
-              seguro (ou conectando); cinza = desconectado. */}
-          {mt5State.status === 'CONNECTED' ? (
-            <>
-              <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  mt5State.bridgeArmed || robotActive
-                    ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
-                    : 'bg-amber-400'
-                }`}
-              />
-            </>
-          ) : mt5State.status === 'CONNECTING' ? (
-            <>
-              <Wifi className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            </>
-          ) : (
-            <>
-              <WifiOff className="w-3.5 h-3.5 text-slate-400" />
-              <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
-            </>
-          )}
+          <Wifi
+            className={`w-3.5 h-3.5 ${
+              mt5State.status === 'CONNECTED'
+                ? mt5State.bridgeOrdersBlocked
+                  ? 'text-amber-400'
+                  : 'text-emerald-400'
+                : mt5State.status === 'CONNECTING'
+                ? 'text-amber-400 animate-pulse'
+                : 'text-slate-500'
+            }`}
+          />
         </button>
 
-        {/* Toggle do Robô Automático — clean: chrome neutro, cor só no ponto de status */}
+        {/* Selo explícito de Estado da Ponte MT5 (Modo Replay vs Armada vs Em Seguro) com 1 clique */}
+        {mt5State.status === 'CONNECTED' && (
+          <button
+            onClick={() => {
+              if (mt5State.bridgeOrdersBlocked) {
+                onToggleReplayMode?.(false);
+              } else if (!mt5State.bridgeArmed || !robotActive) {
+                setRobotActive(true);
+              } else {
+                onToggleReplayMode?.(true);
+              }
+            }}
+            className={`flex items-center gap-1.5 h-6 px-2 text-[10px] leading-none font-bold rounded-md border transition-all whitespace-nowrap cursor-pointer ${mt5State.bridgeOrdersBlocked
+              ? 'border-amber-500/70 bg-amber-950/60 text-amber-200 hover:bg-amber-900/70 shadow-[0_0_8px_rgba(245,158,11,0.25)]'
+              : mt5State.bridgeArmed && robotActive
+                ? 'border-emerald-500/60 bg-emerald-950/50 text-emerald-200 hover:bg-emerald-900/50 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
+                : 'border-amber-500/50 bg-slate-900 text-amber-300 hover:border-amber-400'
+              }`}
+            title={
+              mt5State.bridgeOrdersBlocked
+                ? 'A ponte Python está em MODO REPLAY (Trava ativa: nenhuma ordem vai para o MT5). Clique aqui para DESTRAVAR e liberar ordens no MT5!'
+                : mt5State.bridgeArmed && robotActive
+                  ? 'Ponte ARMADA e DESTRAVADA: enviando ordens reais/demo para o MT5. Clique se quiser ativar a Trava de Replay.'
+                  : 'Ponte NÃO ARMADA (Em Seguro): clique para ARMAR a ponte.'
+            }
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${mt5State.bridgeOrdersBlocked
+                ? 'bg-amber-400 animate-pulse'
+                : mt5State.bridgeArmed && robotActive
+                  ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
+                  : 'bg-amber-400'
+                }`}
+            />
+            <span>
+              {mt5State.bridgeOrdersBlocked
+                ? 'Ponte: Replay (Destravar)'
+                : mt5State.bridgeArmed && robotActive
+                  ? 'Ponte Armada'
+                  : 'Ponte: Não Armada'}
+            </span>
+          </button>
+        )}
+
+        {/* Toggle do Robô Automático — Destaque nítido e imediato para identificação fácil */}
         <button
           onClick={() => setRobotActive(!robotActive)}
-          className={`flex items-center gap-1.5 h-6 px-2 text-[10px] leading-none font-semibold rounded-md border transition-all whitespace-nowrap cursor-pointer ${
+          className={`flex items-center gap-1.5 h-6 px-2.5 text-[10px] leading-none font-bold rounded-md border transition-all whitespace-nowrap cursor-pointer ${
             robotActive
-              ? 'border-emerald-600/70 bg-emerald-950/40 text-emerald-200'
-              : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600'
+              ? mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked
+                ? 'border-amber-500 bg-amber-950/60 text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                : 'border-emerald-500 bg-emerald-950/60 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.35)]'
+              : 'border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-600'
           }`}
-          title="Ativar/Pausar Envio Automático de Ordens (sincronizado em todos os dispositivos)"
+          title={
+            robotActive && mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked
+              ? 'Robô LIGADO, MAS a ponte está travada em Modo Replay! Clique em "Ponte: Replay (Destravar)" para liberar envios ao MT5.'
+              : robotActive
+              ? 'Robô LIGADO e ARMADO: gerando e executando ordens no MT5. Clique para pausar.'
+              : 'Robô PAUSADO (Desligado): clique para ligar e armar a execução automática.'
+          }
         >
-          <span className={`w-1.5 h-1.5 rounded-full ${robotActive ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-rose-400'}`} />
-          <span className="hidden md:inline">{robotActive ? 'On' : 'Off'}</span>
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              robotActive
+                ? mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked
+                  ? 'bg-amber-400 animate-pulse'
+                  : 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse'
+                : 'bg-rose-500'
+            }`}
+          />
+          <span>
+            {robotActive
+              ? mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked
+                ? 'Robô ON (Replay)'
+                : 'Robô ON'
+              : 'Robô OFF'}
+          </span>
         </button>
 
         {/* Toggle do Feed de Mercado — clean: chrome neutro, cor só no ícone de ação */}

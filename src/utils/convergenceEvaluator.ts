@@ -306,15 +306,16 @@ function evaluateBoxConvergenceCore(
 
   // Corte do momento: auto-calibrado (percentil da sessão + piso relativo à média do dia) ou limiar estático
   const adaptive = config.adaptiveThresholdEnabled === true && meter !== undefined;
-  const timeRegimeOn = config.timeBasedRegimeEnabled !== false;
+  const timeRegimeOn = adaptive && config.timeBasedRegimeEnabled === true;
   const timeRegime = getTimeBasedFlowRegime(box.timeEnd);
 
   const SESSION_PERCENTILE = timeRegimeOn ? timeRegime.percentile : (config.adaptiveThresholdPercentile ?? 0.7);
   const FLOOR_MULTIPLE = timeRegimeOn ? timeRegime.floorMultiple : (config.adaptiveFloorMultiple ?? 1.6);
   const effectiveDivMin = timeRegimeOn ? timeRegime.flowDivergenceMin : config.flowDivergenceMin;
 
-  const limitBuy = adaptive ? meter!.getSelfCalibratedLimit('BUY', SESSION_PERCENTILE, FLOOR_MULTIPLE, config.minDeltaThreshold) : config.minDeltaThreshold;
-  const limitSell = adaptive ? meter!.getSelfCalibratedLimit('SELL', SESSION_PERCENTILE, FLOOR_MULTIPLE, config.minDeltaThreshold) : config.minDeltaThreshold;
+  const baseDelta = Math.max(0, config.minDeltaThreshold ?? 0);
+  const limitBuy = adaptive ? meter!.getSelfCalibratedLimit('BUY', SESSION_PERCENTILE, FLOOR_MULTIPLE, baseDelta) : baseDelta;
+  const limitSell = adaptive ? meter!.getSelfCalibratedLimit('SELL', SESSION_PERCENTILE, FLOOR_MULTIPLE, baseDelta) : baseDelta;
   const factorLabel = adaptive ? ` | [Fita ${timeRegime.timeStr} · ${timeRegime.phase} · P${Math.round(SESSION_PERCENTILE * 100)}]` : '';
 
   // Filtros de regime: CONSOLIDAÇÃO (range curto) e EXAUSTÃO
@@ -329,20 +330,15 @@ function evaluateBoxConvergenceCore(
 
   // SE A ESTRATÉGIA ATIVA FOR: PIRÂMIDE DE CONFLUÊNCIA FLUXO & RENKO
   if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') {
-    // Corte opcional e escala-free (undefined = não aplica): só vale box com divergência de
+    // Corte opcional e escala-free (undefined ou <= 0 = não aplica): só vale box com divergência de
     // fluxo acima do mínimo — volume empatado ou box fantasma de interpolação não sinaliza.
-    if (effectiveDivMin !== undefined && flowDivergence(box) < effectiveDivMin) {
+    if (effectiveDivMin !== undefined && effectiveDivMin > 0 && flowDivergence(box) < effectiveDivMin) {
       return { isConvergence: false };
     }
-    // Filtro anti-estouro clímax no Mini-Índice B3 (evita compras no pico de barras anômalas isoladas)
-    if ((config.symbol || '').includes('WIN') && Math.abs(box.delta) > 4500) {
-      return { isConvergence: false, reason: 'Calado por clímax de estouro' };
-    }
 
-    // Exige delta institucional representativo (mínimo calibrado de 300 contratos no WIN)
-    const assetFloor = (config.symbol || '').includes('WIN') ? 300 : ((config.symbol || '').includes('WDO') ? 100 : 35);
-    const reqBuyDelta = adaptive ? Math.max(limitBuy, assetFloor) : Math.max(assetFloor, config.minDeltaThreshold ?? 300);
-    const reqSellDelta = adaptive ? Math.max(limitSell, assetFloor) : Math.max(assetFloor, config.minDeltaThreshold ?? 300);
+    // Respeita exatamente o limiar configurado pelo operador (ex: 200 ct ou 0 ct sem piso oculto)
+    const reqBuyDelta = adaptive ? limitBuy : baseDelta;
+    const reqSellDelta = adaptive ? limitSell : baseDelta;
 
     if (box.direction === 'UP') {
       // 1. Delta deve ser positivo e superior ao limiar institucional

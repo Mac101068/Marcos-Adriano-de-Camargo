@@ -1924,39 +1924,35 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
 
                 <button
 
-                  onClick={() => onToggleReplayMode?.(!bridgeReplayMode)}
+                  onClick={() => onToggleReplayMode?.(!bridgeOrdersBlocked)}
 
-                  disabled={!onToggleReplayMode || bridgeEnvLock}
+                  disabled={!onToggleReplayMode}
 
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold border transition-colors ${
 
-                    !onToggleReplayMode || bridgeEnvLock
+                    !onToggleReplayMode
 
                       ? 'bg-slate-900/60 border-slate-700 text-slate-400 cursor-not-allowed'
 
-                      : bridgeReplayMode
+                      : bridgeOrdersBlocked
 
                       ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25 cursor-pointer'
 
-                      : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-600 cursor-pointer'
+                      : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 cursor-pointer'
 
                   }`}
 
                   title={
 
-                    bridgeEnvLock
-
-                      ? 'A ponte está rodando com a variável ORDERS_BLOCKED=1 no PC do MT5. Essa trava só cai reiniciando o processo sem a variável -- por isso o botão fica inerte aqui do lado de cá.'
-
-                      : !onToggleReplayMode
+                    !onToggleReplayMode
 
                       ? 'Sem ponte conectada não existe execução a travar: o modo replay mora no processo do MT5.'
 
-                      : bridgeReplayMode
+                      : bridgeOrdersBlocked
 
-                      ? 'Clique para liberar as entradas de novo (pregão ao vivo). O modo replay não é persistente: se a ponte reiniciar, ele volta desligado.'
+                      ? 'Clique para DESTRAVAR a ponte e liberar as ordens de entrada no MT5.'
 
-                      : 'Clique para travar as ordens de ENTRADA no processo da ponte. Ticks, histórico real, sinais e diário continuam sendo servidos -- é o modo de validar estratégia sem risco.'
+                      : 'Clique para travar as ordens de ENTRADA no processo da ponte (Modo Replay/Validação).'
 
                   }
 
@@ -1964,15 +1960,11 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
 
                   <Clapperboard className="w-3.5 h-3.5" />
 
-                  {bridgeEnvLock
+                  {bridgeOrdersBlocked
 
-                    ? 'Validação: trava do ambiente'
+                    ? 'Validação: entradas TRAVADAS (Clique p/ Destravar)'
 
-                    : bridgeReplayMode
-
-                    ? 'Validação: entradas TRAVADAS'
-
-                    : 'Validação: entradas liberadas'}
+                    : 'Validação: entradas LIBERADAS no MT5'}
 
                 </button>
 
@@ -1982,15 +1974,11 @@ export const SimulatorView: React.FC<SimulatorViewProps> = ({
 
                     ? 'Conecte o MT5 para poder travar/liberar a execução do processo.'
 
-                    : bridgeEnvLock
+                    : bridgeOrdersBlocked
 
-                    ? 'ORDERS_BLOCKED=1 no PC do terminal: nada entra nesta sessão, queira ou não.'
+                    ? 'O processo do MT5 está segurando entradas (Modo Replay ativo). Clique no botão para liberar.'
 
-                    : bridgeReplayMode
-
-                    ? 'O processo do MT5 está segurando entradas (não persiste se ele reiniciar).'
-
-                    : 'Cuidado: o loop vivo da ponte opera o pregão real enquanto este replay roda.'}
+                    : 'Entradas liberadas na ponte para operar o pregão no MT5.'}
 
                 </span>
 

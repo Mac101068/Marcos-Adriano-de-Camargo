@@ -98,23 +98,73 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
 
         {leading}
 
-        {/* Modo: AUTO é o estado "ligado" (acentos azul); FIXO some no chrome. */}
-        <span
-          className={`${chip} shrink-0 ${
+        {/* Modo: AUTO é o estado "ligado" (acentos azul); FIXO some no chrome. Clicável para alternar direto! */}
+        <button
+          type="button"
+          onClick={() => canPatch && onPatchConfig?.({ adaptiveThresholdEnabled: !auto })}
+          className={`${chip} shrink-0 cursor-pointer transition-colors ${
             auto
-              ? 'bg-sky-500/15 border-sky-500/40 text-sky-300'
-              : 'bg-zinc-950/60 border-zinc-700/70 text-zinc-400'
+              ? 'bg-sky-500/15 border-sky-500/40 text-sky-300 hover:bg-sky-500/25'
+              : 'bg-zinc-950/60 border-zinc-700/70 text-zinc-300 hover:border-zinc-500'
           }`}
           title={
             auto
-              ? `Limiar AUTO-CALIBRADO do pregão: maior entre o percentil P${Math.round(
+              ? `Limiar AUTO-CALIBRADO ATIVO: maior entre P${Math.round(
                   metrics.percentile * 100
-                )} da janela e o piso ${dec(metrics.floorMultiple)}× a média do dia. Zera na virada de pregão.`
-              : 'Limiar FÍSICO fixo (adaptativo desligado): ' + int(metrics.baseThreshold) + ' ctros.'
+                )} da janela e piso ${dec(metrics.floorMultiple)}× média do dia. Clique para DESLIGAR e usar apenas o Delta Físico (${int(metrics.baseThreshold)} ct)!`
+              : `Limiar FÍSICO FIXO (${int(metrics.baseThreshold)} ctros). Clique para ligar o Auto-Calibrado.`
           }
         >
-          {auto ? 'AUTO-CALIBRADO' : 'FIXO'}
-        </span>
+          {auto ? 'AUTO-CALIBRADO' : `FIXO (${int(metrics.baseThreshold)} ct)`}
+        </button>
+
+        {/* Botão 1-Clique na tira para ELIMINAR TODOS OS FILTROS quando houver qualquer filtro ativo */}
+        {canPatch && (auto || metrics.consolidationEnabled || metrics.exhaustionEnabled || metrics.flowTrendEnabled || metrics.requireCvdExtreme || (metrics.divergenceMin ?? 0) > 0) && (
+          <button
+            type="button"
+            onClick={() =>
+              onPatchConfig?.({
+                adaptiveThresholdEnabled: false,
+                timeBasedRegimeEnabled: false,
+                consolidationFilterEnabled: false,
+                exhaustionFilterEnabled: false,
+                flowTrendFilterEnabled: false,
+                requireCvdNewExtreme: false,
+                flowDivergenceMin: 0,
+              })
+            }
+            className={`${chip} shrink-0 cursor-pointer bg-amber-500/15 border-amber-500/50 text-amber-300 hover:bg-amber-500/30 font-bold transition-colors`}
+            title="Desliga em 1 clique: Auto-Calibrado (P70/Piso), Regime de Horário, Acumulação (ER), Exaustão, Tendência CVD e Divergência — deixando apenas o seu Delta Físico configurado!"
+          >
+            ⚡ Eliminar Filtros (Usar só {int(metrics.baseThreshold)} ct)
+          </button>
+        )}
+
+        {canPatch && (
+          <button
+            type="button"
+            onClick={() =>
+              onPatchConfig?.({
+                adaptiveThresholdEnabled: false,
+                timeBasedRegimeEnabled: false,
+                consolidationFilterEnabled: false,
+                exhaustionFilterEnabled: false,
+                flowTrendFilterEnabled: false,
+                requireCvdNewExtreme: false,
+                flowDivergenceMin: 0,
+                minDeltaThreshold: 0,
+              })
+            }
+            className={`${chip} shrink-0 cursor-pointer transition-colors ${
+              !auto && metrics.baseThreshold === 0 && !metrics.consolidationEnabled && !metrics.exhaustionEnabled && !metrics.flowTrendEnabled
+                ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 font-bold'
+                : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500'
+            }`}
+            title="Zera todos os filtros e coloca Delta Físico = 0 ct: todo fechamento de bloco sinaliza!"
+          >
+            🔓 Sem Filtro (Δ=0)
+          </button>
+        )}
 
         {auto && (() => {
           const tReg = getTimeBasedFlowRegime();
@@ -277,6 +327,54 @@ export const FunnelMetricsPanel: React.FC<FunnelMetricsPanelProps> = ({ metrics,
                 hint="Fração mínima do volume que precisa ser agressão LÍQUIDA (|Δ| ÷ volume). Escala-free: sobrevive a mudança de volatilidade. 0 desliga; 40% exige convicção no box."
               />
             )}
+
+            <label
+              className="flex items-center gap-1.5 cursor-pointer select-none shrink-0"
+              title="Filtro Anti-Acumulação (Efficiency Ratio): quando ligado, bloqueia sinais em regiões laterais."
+            >
+              <input
+                type="checkbox"
+                className="accent-amber-400 w-3.5 h-3.5"
+                checked={Boolean(metrics.consolidationEnabled)}
+                disabled={!canPatch}
+                onChange={(e) => onPatchConfig?.({ consolidationFilterEnabled: e.target.checked })}
+              />
+              <span className={`text-[10px] font-sans uppercase tracking-wide ${metrics.consolidationEnabled ? 'text-amber-300' : 'text-zinc-500'}`}>
+                Anti-Acumulação
+              </span>
+            </label>
+
+            <label
+              className="flex items-center gap-1.5 cursor-pointer select-none shrink-0"
+              title="Filtro de Exaustão: quando ligado, bloqueia entradas quando o delta cai abaixo de 70% do box anterior."
+            >
+              <input
+                type="checkbox"
+                className="accent-amber-400 w-3.5 h-3.5"
+                checked={Boolean(metrics.exhaustionEnabled)}
+                disabled={!canPatch}
+                onChange={(e) => onPatchConfig?.({ exhaustionFilterEnabled: e.target.checked })}
+              />
+              <span className={`text-[10px] font-sans uppercase tracking-wide ${metrics.exhaustionEnabled ? 'text-amber-300' : 'text-zinc-500'}`}>
+                Exaustão
+              </span>
+            </label>
+
+            <label
+              className="flex items-center gap-1.5 cursor-pointer select-none shrink-0"
+              title="Filtro de Tendência CVD: quando ligado, só compra com CVD subindo e só vende com CVD caindo."
+            >
+              <input
+                type="checkbox"
+                className="accent-amber-400 w-3.5 h-3.5"
+                checked={Boolean(metrics.flowTrendEnabled)}
+                disabled={!canPatch}
+                onChange={(e) => onPatchConfig?.({ flowTrendFilterEnabled: e.target.checked })}
+              />
+              <span className={`text-[10px] font-sans uppercase tracking-wide ${metrics.flowTrendEnabled ? 'text-amber-300' : 'text-zinc-500'}`}>
+                Tendência CVD
+              </span>
+            </label>
           </div>
 
           {/* Como ler: direciona o iniciante sem esconder o trade-off honesto. */}

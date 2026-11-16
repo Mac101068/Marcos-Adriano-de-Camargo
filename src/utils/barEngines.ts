@@ -15,6 +15,7 @@ export type ChartSeries = 'renko' | 'range' | 'tempo';
 export interface BarEngineResult {
   newBarClosed: boolean;
   closedBox?: RenkoBox;
+  closedBoxes: RenkoBox[];
 }
 
 /** Dia local (YYYY-MM-DD) de um timestamp — usada pela âncora de sessão do Range. */
@@ -59,6 +60,7 @@ function accumulateTick(curr: Partial<RenkoBox>, tick: Tick, cvd: number): numbe
   curr.high = Math.max(curr.high || tick.price, tick.price);
   curr.low = Math.min(curr.low || tick.price, tick.price);
   curr.close = tick.price;
+  curr.direction = curr.close >= (curr.open ?? curr.close) ? 'UP' : 'DOWN';
   curr.timeEnd = tick.timestamp;
   // CVD ao vivo da barra em formação (mesma lição da Opção B no Renko: não defasar do preço)
   curr.cvdAtClose = newCvd;
@@ -91,7 +93,7 @@ export class RangeBarEngine {
   private regimeMeter = new SessionRegimeMeter(20);
 
   constructor(rangePoints: number = 50) {
-    this.rangePoints = Math.max(5, rangePoints);
+    this.rangePoints = Math.max(0.5, rangePoints);
   }
 
   public getRegimeMeter(): SessionRegimeMeter {
@@ -99,7 +101,11 @@ export class RangeBarEngine {
   }
 
   public setRangePoints(points: number) {
-    this.rangePoints = Math.max(5, points);
+    this.rangePoints = Math.max(0.5, points);
+  }
+
+  public getRangePoints(): number {
+    return this.rangePoints;
   }
 
   public getBoxes(): RenkoBox[] {
@@ -124,6 +130,10 @@ export class RangeBarEngine {
   }
 
   public processTick(tick: Tick): BarEngineResult {
+    if (!tick || !Number.isFinite(tick.price) || tick.price <= 0) {
+      return { newBarClosed: false, closedBoxes: [] };
+    }
+
     if (!this.currentBox) {
       this.initialize(tick.price, tick.timestamp);
     }
@@ -137,22 +147,83 @@ export class RangeBarEngine {
       this.currentBox.cvdAtClose = this.cvd;
     }
 
-    const curr = this.currentBox!;
-    this.cvd = accumulateTick(curr, tick, this.cvd);
+    // Guarda contra salto espúrio (> 100 barras em um único tick)
+    const refPrice = this.currentBox?.close ?? this.currentBox?.open ?? tick.price;
+    if (Math.abs(tick.price - refPrice) > this.rangePoints * 100) {
+      return { newBarClosed: false, closedBoxes: [] };
+    }
 
-    const reached = (curr.high || 0) - (curr.low || 0) >= this.rangePoints;
-    if (reached) {
-      const closed = finalizeBar(curr, this.boxes.length);
-      // Regime: alimenta o medidor e grava o fator vigente antes de qualquer avaliação
+    const tickDelta = tick.aggressor === 'BUY' ? tick.volume : tick.aggressor === 'SELL' ? -tick.volume : 0;
+    this.cvd += tickDelta;
+
+    const curr = this.currentBox!;
+    curr.ticksCount = (curr.ticksCount || 0) + 1;
+    curr.totalVolume = (curr.totalVolume || 0) + tick.volume;
+    if (tick.aggressor === 'BUY') {
+      curr.buyVolume = (curr.buyVolume || 0) + tick.volume;
+    } else if (tick.aggressor === 'SELL') {
+      curr.sellVolume = (curr.sellVolume || 0) + tick.volume;
+    }
+    curr.delta = (curr.buyVolume || 0) - (curr.sellVolume || 0);
+    curr.timeEnd = tick.timestamp;
+    curr.cvdAtClose = this.cvd;
+
+    const closedBoxes: RenkoBox[] = [];
+    const eps = 1e-7;
+
+    // Loop de fatiamento exato do Range: garante que CADA barra fechada tenha
+    // rigorosamente (high - low) === this.rangePoints, carregando a sobra para a próxima barra.
+    for (let lap = 0; lap < 500; lap++) {
+      const c = this.currentBox!;
+      const prevHigh = c.high ?? c.open ?? tick.price;
+      const prevLow = c.low ?? c.open ?? tick.price;
+      const candHigh = Math.max(prevHigh, tick.price);
+      const candLow = Math.min(prevLow, tick.price);
+
+      if (candHigh - candLow < this.rangePoints - eps) {
+        c.high = candHigh;
+        c.low = candLow;
+        c.close = tick.price;
+        c.direction = c.close >= (c.open ?? c.close) ? 'UP' : 'DOWN';
+        break;
+      }
+
+      if (tick.price >= prevLow + this.rangePoints - eps) {
+        const exactClose = Math.round((prevLow + this.rangePoints) * 10000) / 10000;
+        c.low = prevLow;
+        c.high = exactClose;
+        c.close = exactClose;
+        c.direction = 'UP';
+      } else {
+        const exactClose = Math.round((prevHigh - this.rangePoints) * 10000) / 10000;
+        c.high = prevHigh;
+        c.low = exactClose;
+        c.close = exactClose;
+        c.direction = 'DOWN';
+      }
+
+      const closed = finalizeBar(c, this.boxes.length);
+      closed.direction = c.direction as 'UP' | 'DOWN';
+      closed.sessionDate = tickSession;
       this.regimeMeter.feedClosedBox(closed);
       closed.regimeFactor = this.regimeMeter.getFactor();
       this.boxes.push(closed);
-      this.currentBox = makeBlankBar(tick.price, tick.timestamp);
+      closedBoxes.push(closed);
+
+      // Abre a nova barra exatamente no fechamento da barra anterior para continuar absorvendo o tick
+      this.currentBox = makeBlankBar(closed.close, tick.timestamp);
       this.currentBox.cvdAtClose = this.cvd;
-      return { newBarClosed: true, closedBox: closed };
     }
 
-    return { newBarClosed: false };
+    if (closedBoxes.length > 0) {
+      return {
+        newBarClosed: true,
+        closedBox: closedBoxes[closedBoxes.length - 1],
+        closedBoxes,
+      };
+    }
+
+    return { newBarClosed: false, closedBoxes: [] };
   }
 }
 
@@ -222,6 +293,6 @@ export class TimeBarEngine {
 
     this.cvd = accumulateTick(this.currentBox!, tick, this.cvd);
 
-    return closed ? { newBarClosed: true, closedBox: closed } : { newBarClosed: false };
+    return closed ? { newBarClosed: true, closedBox: closed, closedBoxes: [closed] } : { newBarClosed: false, closedBoxes: [] };
   }
 }

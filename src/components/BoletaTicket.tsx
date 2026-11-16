@@ -529,11 +529,16 @@ export const BoletaTicket: React.FC<BoletaTicketProps> = ({
         <button
           onClick={toggleParams}
           className="w-full flex items-center justify-between gap-2 px-2 py-1.5 cursor-pointer transition-colors hover:bg-zinc-900/60"
-          title={paramsOpen ? 'Recolher os parâmetros da boleta' : 'Expandir os parâmetros da boleta'}
+          title={`Parâmetros operacionais individualizados para ${asset.label}. As alterações feitas aqui são salvas exclusivamente para o ativo ${asset.id}.`}
           aria-label={paramsOpen ? 'Recolher parâmetros' : 'Expandir parâmetros'}
           aria-expanded={paramsOpen}
         >
-          <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-white">Parâmetros</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[9px] font-sans font-bold uppercase tracking-wider text-white">Parâmetros</span>
+            <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40">
+              {asset.id}
+            </span>
+          </div>
           {paramsOpen ? (
             <ChevronUp className="w-3 h-3 text-zinc-500" />
           ) : (

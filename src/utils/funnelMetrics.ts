@@ -49,6 +49,10 @@ export interface FunnelMetricsSnapshot {
   lookbackBoxes: number; // tamanho da janela rolante de boxes recentes
   baseThreshold: number; // minDeltaThreshold (físico / aquecimento)
   divergenceMin?: number; // flowDivergenceMin (só faz sentido na Pirâmide)
+  consolidationEnabled?: boolean;
+  exhaustionEnabled?: boolean;
+  flowTrendEnabled?: boolean;
+  requireCvdExtreme?: boolean;
   buy: SideFunnelMetric;
   sell: SideFunnelMetric;
   boxesToday: number; // boxes fechados no medidor (régua da sessão corrente)
@@ -64,8 +68,7 @@ const flowDivergence = (box: RenkoBox): number => {
 
 /**
  * Requisito efetivo de agressão para o lado, igual ao `convergenceEvaluator`: no modo auto é o
- * limiar calibrado; no físico a Pirâmide usa `max(50, minDeltaThreshold)` e o Reteste usa o
- * próprio `minDeltaThreshold`. Manter essa cópia fiel é o que impede a tela de mentir.
+ * limiar calibrado; no físico usa exatamente `minDeltaThreshold` configurado pelo operador (inclusive 0).
  */
 function effectiveLimit(
   side: 'BUY' | 'SELL',
@@ -74,8 +77,7 @@ function effectiveLimit(
   auto: SideFunnelMetric
 ): number {
   if (adaptive) return auto.limit;
-  const base = config.minDeltaThreshold ?? 150;
-  if (config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE') return Math.max(50, base);
+  const base = Math.max(0, config.minDeltaThreshold ?? 0);
   return side === 'BUY' ? base : base;
 }
 
@@ -91,10 +93,10 @@ export function computeFunnelMetrics(
   const adaptive = config.adaptiveThresholdEnabled === true;
   const percentile = config.adaptiveThresholdPercentile ?? 0.6;
   const floorMultiple = config.adaptiveFloorMultiple ?? 1.3;
-  const base = config.minDeltaThreshold ?? 150;
+  const base = Math.max(0, config.minDeltaThreshold ?? 0);
   const isPyramid = config.strategyMode === 'PYRAMID_FLOW_CONFLUENCE';
   // O corte de divergência só governa a Pirâmide (mesma regra do avaliador).
-  const divergenceMin = isPyramid ? config.flowDivergenceMin : undefined;
+  const divergenceMin = isPyramid && (config.flowDivergenceMin ?? 0) > 0 ? config.flowDivergenceMin : undefined;
 
   const sideMetric = (side: 'BUY' | 'SELL'): SideFunnelMetric => {
     if (adaptive) {
@@ -163,6 +165,10 @@ export function computeFunnelMetrics(
     lookbackBoxes: config.regimeLookbackBoxes ?? 20,
     baseThreshold: base,
     divergenceMin,
+    consolidationEnabled: config.consolidationFilterEnabled === true,
+    exhaustionEnabled: config.exhaustionFilterEnabled === true,
+    flowTrendEnabled: config.flowTrendFilterEnabled === true,
+    requireCvdExtreme: config.requireCvdNewExtreme === true,
     buy,
     sell,
     boxesToday: meter.getBoxCount(),

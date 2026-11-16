@@ -1924,11 +1924,12 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
       const openY = priceToY(b.open);
       const closeY = priceToY(b.close);
-      const topY = Math.min(openY, closeY);
-      const boxH = Math.max(3, Math.abs(closeY - openY));
-
       const highY = priceToY(b.high);
       const lowY = priceToY(b.low);
+      const topY = chartSeries === 'range' ? Math.min(highY, lowY) : Math.min(openY, closeY);
+      const boxH = chartSeries === 'range'
+        ? Math.max(3, Math.abs(lowY - highY))
+        : Math.max(3, Math.abs(closeY - openY));
 
       // Recorte vertical do painel de preço: com o arrasto livre o centro da escala sai da
       // auto-escala, então tijolos fora da janela deixam de cair dentro do painel. Sem isso eles
@@ -1937,28 +1938,6 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
       ctx.beginPath();
       ctx.rect(0, 0, Math.max(0, lineRight), Math.max(1, pricePaneHeight - 1));
       ctx.clip();
-
-      // Pavio limpo apenas no Range: desenhado externamente ao corpo (nunca atravessa o bloco)
-      if (chartSeries === 'range') {
-        const topBodyY = Math.min(openY, closeY);
-        const bottomBodyY = Math.max(openY, closeY);
-        ctx.strokeStyle = isUp ? 'rgba(52, 211, 153, 0.85)' : 'rgba(248, 113, 113, 0.85)';
-        ctx.lineWidth = 1;
-        // Pavio superior (da máxima ao topo do corpo)
-        if (highY < topBodyY - 0.5) {
-          ctx.beginPath();
-          ctx.moveTo(centerX, highY);
-          ctx.lineTo(centerX, topBodyY);
-          ctx.stroke();
-        }
-        // Pavio inferior (do fundo do corpo à mínima)
-        if (lowY > bottomBodyY + 0.5) {
-          ctx.beginPath();
-          ctx.moveTo(centerX, bottomBodyY);
-          ctx.lineTo(centerX, lowY);
-          ctx.stroke();
-        }
-      }
 
       if (showRenkoGhost) {
         const targetClosePrice = isUp ? b.open + renkoBoxPoints : b.open - renkoBoxPoints;
@@ -2003,10 +1982,28 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
           );
         }
       } else if (isForming && chartSeries === 'range') {
-        // BARRA DE RANGE EM FORMAÇÃO (GHOST ATIVO COM CONTAGEM DO RANGE)
-        const rangeCovered = Math.max(0, (b.high ?? currentPrice) - (b.low ?? currentPrice));
+        // BARRA DE RANGE EM FORMAÇÃO (GHOST DA ESCALA EXATA + PREENCHIMENTO ATIVO)
+        const baseLow = b.low ?? b.open ?? currentPrice;
+        const baseHigh = b.high ?? b.open ?? currentPrice;
+        const rangeCovered = Math.max(0, baseHigh - baseLow);
         const ptsRemaining = Math.max(0, rangePoints - rangeCovered);
         const radius = boxWidth >= 6 ? 2 : 1;
+
+        const ghostStartPrice = isUp ? baseLow : baseHigh;
+        const ghostEndPrice = isUp ? baseLow + rangePoints : baseHigh - rangePoints;
+        const ghostY1 = priceToY(ghostStartPrice);
+        const ghostY2 = priceToY(ghostEndPrice);
+        const ghostTopY = Math.min(ghostY1, ghostY2);
+        const ghostH = Math.max(3, Math.abs(ghostY2 - ghostY1));
+
+        ctx.fillStyle = isUp ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)';
+        ctx.strokeStyle = isUp ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)';
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.roundRect(left, ghostTopY, boxWidth, ghostH, radius);
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
 
         ctx.fillStyle = isUp ? 'rgba(16, 185, 129, 0.55)' : 'rgba(239, 68, 68, 0.55)';
         ctx.strokeStyle = isUp ? '#34d399' : '#f87171';
@@ -2022,15 +2019,16 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
         ctx.fill();
 
         if (!isMobile) {
+          const ghostLabelY = Math.min(topY, ghostTopY);
           ctx.fillStyle = '#38bdf8';
           ctx.font = '9px "JetBrains Mono", monospace';
           ctx.textAlign = 'center';
-          ctx.fillText(`+${b.ticksCount || 0}t`, centerX, highY - 12);
+          ctx.fillText(`+${b.ticksCount || 0}t`, centerX, ghostLabelY - 12);
           ctx.fillStyle = isUp ? '#34d399' : '#f87171';
           ctx.fillText(
             `${ptsRemaining > 0 ? `faltam ${formatPrice(ptsRemaining, asset)}p` : 'fechando'}`,
             centerX,
-            highY - 3
+            ghostLabelY - 3
           );
         }
       } else if (chartSeries === 'renko' || chartSeries === 'range') {
@@ -2771,7 +2769,7 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
 
         // 3. Stop Loss e Trailing Stop / Breakeven (apenas se configurado > 0)
         if (o.stopLoss > 0) {
-          const isProtected = o.isBreakevenActive || (o.highestPriceSinceEntry && trailingStop);
+          const isProtected = Boolean(o.isBreakevenActive);
           const slY = priceToY(o.stopLoss);
 
           if (slY >= 0 && slY <= pricePaneHeight) {
@@ -3727,25 +3725,57 @@ export const RenkoFlowChart: React.FC<RenkoFlowChartProps> = ({
                 </button>
               </div>
             )}
-            {chartSeries === 'range' && (
-              <select
-                value={rangePoints}
-                onChange={(e) => onRangePointsChange?.(Number(e.target.value))}
-                className="h-[22px] rounded bg-zinc-900 border border-zinc-600/70 text-emerald-300 text-[11px] px-1.5 cursor-pointer focus:outline-none focus:border-emerald-500"
-                title="Escala do Range em pontos (variação High-Low por barra)"
-              >
-                {(asset.id === 'WDO'
-                  ? [2.5, 5, 7.5, 10, 15, 20]
-                  : asset.id === 'BTCBR'
-                  ? [200, 400, 500, 1000, 2000]
-                  : [50, 75, 100, 150, 200, 250, 300, 400, 500]
-                ).map((p) => (
-                  <option key={p} value={p}>
-                    {formatPrice(p, asset)} pts
-                  </option>
-                ))}
-              </select>
-            )}
+            {chartSeries === 'range' && (() => {
+              const baseLadder = asset.id === 'WDO'
+                ? [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10, 15, 20]
+                : asset.id === 'BTCBR'
+                ? [50, 100, 150, 200, 300, 400, 500, 1000, 2000]
+                : [15, 20, 25, 30, 35, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300, 400, 500];
+              const rangeLadder = baseLadder.includes(rangePoints)
+                ? baseLadder
+                : [...baseLadder, rangePoints].sort((a, b) => a - b);
+              const curIdx = rangeLadder.indexOf(rangePoints);
+              return (
+                <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-700/80 rounded px-1 py-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (curIdx > 0) onRangePointsChange?.(rangeLadder[curIdx - 1]);
+                    }}
+                    disabled={curIdx <= 0}
+                    className="w-4 h-4 flex items-center justify-center rounded bg-zinc-800 text-[10px] font-bold text-zinc-300 hover:bg-zinc-700 hover:text-white cursor-pointer select-none disabled:opacity-40"
+                    title="Diminuir escala do Range"
+                  >
+                    -
+                  </button>
+                  <select
+                    value={rangePoints}
+                    onChange={(e) => onRangePointsChange?.(Number(e.target.value))}
+                    className="h-4 rounded bg-black/60 border border-zinc-700 text-emerald-300 font-bold text-[10.5px] px-1 cursor-pointer focus:outline-none focus:border-emerald-500"
+                    title="Escala exata do bloco Range em pontos (amplitude Máx-Mín por barra)"
+                  >
+                    {rangeLadder.map((p) => (
+                      <option key={p} value={p} className="bg-zinc-900 text-zinc-100">
+                        {formatPrice(p, asset)} pts
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (curIdx >= 0 && curIdx < rangeLadder.length - 1) {
+                        onRangePointsChange?.(rangeLadder[curIdx + 1]);
+                      }
+                    }}
+                    disabled={curIdx >= rangeLadder.length - 1}
+                    className="w-4 h-4 flex items-center justify-center rounded bg-zinc-800 text-[10px] font-bold text-zinc-300 hover:bg-zinc-700 hover:text-white cursor-pointer select-none disabled:opacity-40"
+                    title="Aumentar escala do Range"
+                  >
+                    +
+                  </button>
+                </div>
+              );
+            })()}
           </div>
 
           {/* MULTI-ROBÔS / COPILOTO (WIN, WDO, BIT) COM SINAIS E PNL */}

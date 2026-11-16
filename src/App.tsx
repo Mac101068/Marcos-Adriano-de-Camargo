@@ -83,24 +83,26 @@ export const getAssetTradeParams = (assetId: AssetId): AssetTradeDefaults => {
       return {
         ...def,
         ...parsed,
-        boxPoints: Number(parsed.boxPoints) || def.boxPoints,
-        stopLossPoints: Number(parsed.stopLossPoints) || def.stopLossPoints,
-        takeProfitPoints: Number(parsed.takeProfitPoints) || def.takeProfitPoints,
-        partialPoints: Number(parsed.partialPoints) || def.partialPoints,
-        breakevenOffsetPoints: Number(parsed.breakevenOffsetPoints) || def.breakevenOffsetPoints,
-        trailingDistancePoints: Number(parsed.trailingDistancePoints) || def.trailingDistancePoints,
-        minDeltaThreshold: Number(parsed.minDeltaThreshold) || def.minDeltaThreshold,
-        contracts: Number(parsed.contracts) || def.contracts,
-        rangePoints: Number(parsed.rangePoints) || def.rangePoints,
+        boxPoints: typeof parsed.boxPoints === 'number' && Number.isFinite(parsed.boxPoints) ? parsed.boxPoints : def.boxPoints,
+        stopLossPoints: typeof parsed.stopLossPoints === 'number' && Number.isFinite(parsed.stopLossPoints) ? parsed.stopLossPoints : def.stopLossPoints,
+        takeProfitPoints: typeof parsed.takeProfitPoints === 'number' && Number.isFinite(parsed.takeProfitPoints) ? parsed.takeProfitPoints : def.takeProfitPoints,
+        partialPoints: typeof parsed.partialPoints === 'number' && Number.isFinite(parsed.partialPoints) ? parsed.partialPoints : def.partialPoints,
+        breakevenOffsetPoints: typeof parsed.breakevenOffsetPoints === 'number' && Number.isFinite(parsed.breakevenOffsetPoints) ? parsed.breakevenOffsetPoints : def.breakevenOffsetPoints,
+        trailingDistancePoints: typeof parsed.trailingDistancePoints === 'number' && Number.isFinite(parsed.trailingDistancePoints) ? parsed.trailingDistancePoints : def.trailingDistancePoints,
+        breakevenTriggerPoints: typeof parsed.breakevenTriggerPoints === 'number' && Number.isFinite(parsed.breakevenTriggerPoints) ? parsed.breakevenTriggerPoints : 0,
+        breakevenLockPoints: typeof parsed.breakevenLockPoints === 'number' && Number.isFinite(parsed.breakevenLockPoints) ? parsed.breakevenLockPoints : 0,
+        minDeltaThreshold: typeof parsed.minDeltaThreshold === 'number' && Number.isFinite(parsed.minDeltaThreshold) ? parsed.minDeltaThreshold : def.minDeltaThreshold,
+        contracts: typeof parsed.contracts === 'number' && Number.isFinite(parsed.contracts) && parsed.contracts > 0 ? parsed.contracts : def.contracts,
+        rangePoints: typeof parsed.rangePoints === 'number' && Number.isFinite(parsed.rangePoints) ? parsed.rangePoints : def.rangePoints,
       };
     }
   } catch {
     // ignora
   }
-  return { ...def };
+  return { ...def, breakevenTriggerPoints: 0, breakevenLockPoints: 0 } as any;
 };
 
-export const saveAssetTradeParams = (assetId: AssetId, patch: Partial<AssetTradeDefaults>) => {
+export const saveAssetTradeParams = (assetId: AssetId, patch: Partial<AssetTradeDefaults & { breakevenTriggerPoints?: number; breakevenLockPoints?: number }>) => {
   try {
     const current = getAssetTradeParams(assetId);
     const updated = { ...current, ...patch };
@@ -254,7 +256,8 @@ function annotateActiveBar(
 
 ): ConvergenceResult {
 
-  const pts = Math.max(1, Math.round(Math.abs(box.close - box.open)));
+  const rawSpan = (box.high ?? 0) - (box.low ?? 0);
+  const pts = Math.max(1, Math.round(rawSpan > 0 ? rawSpan : Math.abs(box.close - box.open)));
 
   const conv = evaluateBoxConvergence(box, config, previousBoxes, {
 
@@ -528,10 +531,25 @@ export default function App() {
     // vinculado pelo id (não duplica); sem nada, semeia "Estratégia ativa" a partir do config.
 
     const loaded = EaConfigService.loadSavedConfig();
+    const resolvedAssetId = (loaded.assetId || 'WIN') as AssetId;
+    const initialAssetParams = getAssetTradeParams(resolvedAssetId);
+    const mergedWithAsset: AutomationConfig = {
+      ...loaded,
+      boxPoints: initialAssetParams.boxPoints,
+      stopLossPoints: initialAssetParams.stopLossPoints,
+      takeProfitPoints: initialAssetParams.takeProfitPoints,
+      partialPoints: initialAssetParams.partialPoints,
+      breakevenOffsetPoints: initialAssetParams.breakevenOffsetPoints,
+      trailingDistancePoints: initialAssetParams.trailingDistancePoints,
+      breakevenTriggerPoints: (initialAssetParams as any).breakevenTriggerPoints ?? 0,
+      breakevenLockPoints: (initialAssetParams as any).breakevenLockPoints ?? 0,
+      minDeltaThreshold: initialAssetParams.minDeltaThreshold,
+      contracts: initialAssetParams.contracts,
+    };
 
-    const { strategy } = StrategyLibraryService.ensureActiveStrategy(loaded);
+    const { strategy } = StrategyLibraryService.ensureActiveStrategy(mergedWithAsset);
 
-    return StrategyLibraryService.resolveOperational(strategy, loaded);
+    return StrategyLibraryService.resolveOperational(strategy, mergedWithAsset);
 
   });
 
@@ -1101,6 +1119,7 @@ export default function App() {
 
     EaConfigService.saveConfig(updated);
     setConfig(updated);
+    setReplayOperates(false);
 
     if (!isRemoteSync) {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -1196,6 +1215,7 @@ export default function App() {
     EaConfigService.saveConfig(updated);
 
     setConfig(updated);
+    setReplayOperates(false);
 
     refreshStrategyLibrary();
 
@@ -1756,6 +1776,12 @@ export default function App() {
   useEffect(() => {
 
     const reference = referencePrice(asset);
+    const initState = assetStateRef.current[asset.id];
+    if (initState) {
+      engineRef.current = initState.engine;
+      rangeEngineRef.current = initState.rangeEngine;
+      timeEngineRef.current = initState.timeEngine;
+    }
 
     engineRef.current.initialize(reference);
 
@@ -1797,9 +1823,23 @@ export default function App() {
               curState.engine.loadBackfillBoxes(cachedBoxes, cachedPrice, cachedCvd);
               curState.sessionGaps = [...curState.engine.getSessionGaps()];
             }
+            rangeEngineRef.current.setRangePoints(rangePoints);
             rangeEngineRef.current.initialize(synth[0].price, synth[0].timestamp);
-            for (const st of synth) rangeEngineRef.current.processTick(st);
-            setRangeBoxes([...rangeEngineRef.current.getBoxes()]);
+            for (const st of synth) {
+              const rr = rangeEngineRef.current.processTick(st);
+              if (rr.newBarClosed && rr.closedBoxes.length > 0) {
+                const allR = rangeEngineRef.current.getBoxes();
+                for (const cb of rr.closedBoxes) {
+                  annotateActiveBar(cb, allR.slice(0, cb.index), config, `Range ${rangePoints} pts`, rangeEngineRef.current.getRegimeMeter());
+                }
+              }
+            }
+            const rBxs = [...rangeEngineRef.current.getBoxes()];
+            if (curState) {
+              curState.rangeBoxes = rBxs;
+              curState.rangeCurrentBox = rangeEngineRef.current.getCurrentBox();
+            }
+            setRangeBoxes(rBxs);
             setRangeCurrentBox(rangeEngineRef.current.getCurrentBox());
           }
         }
@@ -1997,8 +2037,13 @@ export default function App() {
   // Recalcula toda a história em Range quando a escala mudar ou quando alternar para Range
   const rebuildRangeSeries = useCallback((targetPoints?: number) => {
     const pts = targetPoints ?? rangePoints;
+    const curState = assetStateRef.current[asset.id];
+    if (curState) {
+      rangeEngineRef.current = curState.rangeEngine;
+    }
     const eng = rangeEngineRef.current;
     eng.setRangePoints(pts);
+    saveAssetTradeParams(asset.id, { rangePoints: pts });
 
     let hist = allTicksRef.current;
     if (hist.length === 0 && boxes.length > 0) {
@@ -2008,13 +2053,26 @@ export default function App() {
 
     if (hist.length > 0) {
       eng.initialize(hist[0].price, hist[0].timestamp);
-      for (const t of hist) eng.processTick(t);
+      for (const t of hist) {
+        const rr = eng.processTick(t);
+        if (rr.newBarClosed && rr.closedBoxes.length > 0) {
+          const allR = eng.getBoxes();
+          for (const cb of rr.closedBoxes) {
+            annotateActiveBar(cb, allR.slice(0, cb.index), config, `Range ${pts} pts`, eng.getRegimeMeter());
+          }
+        }
+      }
     }
     const bxs = [...eng.getBoxes()];
+    if (curState) {
+      curState.rangeBoxes = bxs;
+      curState.rangeCurrentBox = eng.getCurrentBox();
+    }
     setRangeBoxes(bxs);
     setRangeCurrentBox(eng.getCurrentBox());
     return bxs;
-  }, [rangePoints, boxes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangePoints, asset.id]);
 
   useEffect(() => {
     rebuildRangeSeries(rangePoints);
@@ -2515,12 +2573,12 @@ export default function App() {
 
       let rangeConv: ConvergenceResult | null = null;
 
-      if (rangeRes.newBarClosed && rangeRes.closedBox) {
-
-        rangeConv = annotateActiveBar(rangeRes.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`, rangeEng.getRegimeMeter());
-
-        seriesCollectorService.ingest('range', rangeRes.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`, rangeEng.getRegimeMeter());
-
+      if (rangeRes.newBarClosed && rangeRes.closedBoxes.length > 0) {
+        const allRangeBxs = rangeEng.getBoxes();
+        for (const rBox of rangeRes.closedBoxes) {
+          rangeConv = annotateActiveBar(rBox, allRangeBxs.slice(0, rBox.index), config, `Range ${rangePoints} pts`, rangeEng.getRegimeMeter());
+          seriesCollectorService.ingest('range', rBox, allRangeBxs.slice(0, rBox.index), config, `${rangePoints} pts`, rangeEng.getRegimeMeter());
+        }
       }
 
       let timeConv: ConvergenceResult | null = null;
@@ -2949,6 +3007,12 @@ export default function App() {
 
 
 
+                  const mainEntryAnchor = useLimitEntry ? pyrLimitPrice : tick.price;
+                  const mainSlPts = config.strategyMode === 'SIGNAL_STACK' ? 0 : (config.stopLossPoints && config.stopLossPoints > 0 ? config.stopLossPoints : 0);
+                  const mainSlPrice = mainSlPts > 0
+                    ? (signalType === 'BUY' ? mainEntryAnchor - mainSlPts : mainEntryAnchor + mainSlPts)
+                    : 0;
+
                   newOrder = {
 
                     id: `ord-main-${Date.now()}`,
@@ -2963,7 +3027,7 @@ export default function App() {
 
                     role: 'MAIN',
 
-                    entryPrice: useLimitEntry ? pyrLimitPrice : tick.price,
+                    entryPrice: mainEntryAnchor,
 
                     limitPrice: useLimitEntry ? pyrLimitPrice : undefined,
 
@@ -2971,7 +3035,7 @@ export default function App() {
 
                     contracts: config.contracts,
 
-                    stopLoss: 0,
+                    stopLoss: mainSlPrice,
 
                     takeProfit: 0,
 
@@ -4086,15 +4150,20 @@ export default function App() {
 
               const offsetPts = config.breakevenOffsetPoints ?? 0;
 
+              const tickStep = asset.tickSize || 5;
+
               if (isBuy) {
 
                 curHigh = Math.max(curHigh, curPrice);
 
-                if (curHigh - ord.entryPrice >= actPts) {
+                const maxFav = curHigh - ord.entryPrice;
 
-                  // piso do gatilho (entrada + offset) ou o rastro da máxima — vale o que proteger mais
+                if (maxFav >= actPts) {
 
-                  const trailTarget = Math.max(ord.entryPrice + offsetPts, curHigh - distPts);
+                  // piso do gatilho (entrada + offset) ou o rastro da máxima — nunca acima do extremo atingido
+                  const safeOffset = Math.min(offsetPts, Math.max(0, maxFav - tickStep));
+
+                  const trailTarget = Math.min(curHigh - tickStep, Math.max(ord.entryPrice + safeOffset, curHigh - distPts));
 
                   // sem stop fixo (0) é o próprio trailing que coloca o primeiro stop da operação
 
@@ -4114,9 +4183,13 @@ export default function App() {
 
                 curLow = Math.min(curLow, curPrice);
 
-                if (ord.entryPrice - curLow >= actPts) {
+                const maxFav = ord.entryPrice - curLow;
 
-                  const trailTarget = Math.min(ord.entryPrice - offsetPts, curLow + distPts);
+                if (maxFav >= actPts) {
+
+                  const safeOffset = Math.min(offsetPts, Math.max(0, maxFav - tickStep));
+
+                  const trailTarget = Math.max(curLow + tickStep, Math.min(ord.entryPrice - safeOffset, curLow + distPts));
 
                   if (trailTarget > 0 && (currentSL <= 0 || trailTarget < currentSL)) {
 
@@ -4130,6 +4203,17 @@ export default function App() {
 
                 }
 
+              }
+
+              if (currentSL !== ord.stopLoss && currentSL > 0 && isManagedByMT5 && ord.ticket && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(
+                  JSON.stringify({
+                    action: 'ORDER_MODIFY_SL',
+                    ticket: ord.ticket,
+                    newSL: currentSL,
+                    robotMagic: ord.magicNumber || mainRobotMagic(config),
+                  })
+                );
               }
 
             }
@@ -4255,9 +4339,8 @@ export default function App() {
 
 
 
-            // 4. CHECAGEM DE STOP LOSS (apenas se configurado > 0 e NÃO for gerenciado pelo MT5 real)
-            //    Para posições do MT5, a liquidação no SL é feita pela corretora e sincronizada pelo MT5_EQUITY_UPDATE.
-            const hitSL = !isManagedByMT5 && currentSL > 0 && (isBuy ? curPrice <= currentSL : curPrice >= currentSL);
+            // 4. CHECAGEM DE STOP LOSS E BREAKEVEN
+            const hitSL = currentSL > 0 && (isBuy ? curPrice <= currentSL : curPrice >= currentSL);
 
             if (hitSL) {
 
@@ -4269,7 +4352,19 @@ export default function App() {
 
               const fin = pointsToBRL(points, activeCtros, asset) + (ord.partialFinancial || 0);
 
-              const isBE = ord.isBreakevenActive && fin >= 0;
+              const isBE = beActive && fin >= 0;
+
+              if (isManagedByMT5 && ord.ticket && !sentDirCloseRef.current.has(ord.ticket) && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                sentDirCloseRef.current.add(ord.ticket);
+                wsRef.current.send(
+                  JSON.stringify({
+                    action: 'ORDER_PARTIAL_CLOSE',
+                    ticket: ord.ticket,
+                    partialVolume: activeCtros,
+                    robotMagic: ord.magicNumber || mainRobotMagic(config),
+                  })
+                );
+              }
 
 
 
@@ -4940,15 +5035,24 @@ export default function App() {
 
                 // 2. Atualiza ou vincula ordens vivas vindas do terminal MT5 (sem duplicatas)
                 for (const pos of relevantLive) {
+                  // Se já enviamos fechamento por SL/TP/BE para este ticket, não ressuscita a ordem enquanto o MT5 liquida
+                  if (sentDirCloseRef.current.has(pos.ticket)) continue;
+
                   // Procura primeiro pelo ticket exato
                   let existingIdx = updated.findIndex((o) => o.ticket === pos.ticket);
 
-                  // Se não achou pelo ticket, vincula a ordem local recente aberta do mesmo tipo
+                  // Se já foi encerrada localmente (status !== 'OPEN'), não reabre
+                  if (existingIdx >= 0 && updated[existingIdx].status !== 'OPEN' && updated[existingIdx].status !== 'PENDING_LIMIT') {
+                    continue;
+                  }
+
+                  // Se não achou pelo ticket, vincula a ordem local recente aberta do mesmo tipo E mesmo magic
                   if (existingIdx < 0) {
                     existingIdx = updated.findIndex(
                       (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') &&
-                             !o.ticket &&
+                             (!o.ticket || o.ticket < 1000000) &&
                              o.type === pos.type &&
+                             (!o.magicNumber || !pos.magic || Number(o.magicNumber) === Number(pos.magic)) &&
                              isOrderForAsset(o, curActiveAsset)
                     );
                   }
@@ -4964,7 +5068,8 @@ export default function App() {
                   const pnlPts = isBuy ? (saneCur - saneOpen) : (saneOpen - saneCur);
 
                   const isHedgeEA = ALL_DIRECTIONAL_MAGICS.has(Number(pos.magic) || 0);
-                  const fallbackSl = isHedgeEA ? (isBuy ? saneOpen - 100 : saneOpen + 100) : 0;
+                  const defSlPts = config.stopLossPoints && config.stopLossPoints > 0 ? config.stopLossPoints : 100;
+                  const fallbackSl = isBuy ? saneOpen - defSlPts : saneOpen + defSlPts;
                   const fallbackTp = isHedgeEA ? (isBuy ? saneOpen + 50 : saneOpen - 50) : 0;
 
                   if (existingIdx >= 0) {
@@ -5039,8 +5144,15 @@ export default function App() {
           } else if (payload.type === 'ARM_RESULT') {
 
             const armed = Boolean(payload.data?.armed);
+            const ordersBlocked = payload.data?.ordersBlocked !== undefined ? Boolean(payload.data.ordersBlocked) : undefined;
 
-            setMt5State((prev) => ({ ...prev, bridgeArmed: armed }));
+            setMt5State((prev) => ({
+              ...prev,
+              bridgeArmed: armed,
+              ...(ordersBlocked !== undefined ? { bridgeOrdersBlocked: ordersBlocked } : {}),
+              ...(payload.data?.replayMode !== undefined ? { bridgeReplayMode: Boolean(payload.data.replayMode) } : {}),
+              ...(payload.data?.travaAmbiente !== undefined ? { bridgeEnvLock: Boolean(payload.data.travaAmbiente) } : {}),
+            }));
             setConfig((prev) => {
               if (prev.active === armed) return prev;
               isRemoteArmSyncRef.current = true;
@@ -5055,14 +5167,18 @@ export default function App() {
 
               id: `mt5-arm-${Date.now()}`,
 
-              type: armed ? 'BUY' : 'INFO',
+              type: armed ? (ordersBlocked ? 'INFO' : 'BUY') : 'INFO',
 
-              title: armed ? '🟢 ROBÔ ARMADO (SINCRONIZADO)' : '🔒 ROBÔ EM SEGURO (SINCRONIZADO)',
+              title: armed
+                ? ordersBlocked
+                  ? '🟡 ROBÔ ARMADO, MAS PONTE EM MODO REPLAY'
+                  : '🟢 ROBÔ ARMADO E PONTE LIBERADA'
+                : '🔒 ROBÔ EM SEGURO (SINCRONIZADO)',
 
               description: armed
-
-                ? 'A ponte do MT5 liberou as ordens de entrada em todos os dispositivos.'
-
+                ? ordersBlocked
+                  ? 'O robô está armado, porém a Trava de Replay está ativa na ponte (nenhuma ordem vai ao MT5). Clique em "🔒 Ponte: Replay (Destravar)" no topo para liberar envios ao MT5.'
+                  : 'A ponte do MT5 liberou as ordens de entrada em todos os dispositivos.'
                 : 'A ponte do MT5 pausou as entradas em todos os dispositivos. Saídas e zeragem seguem liberadas.',
 
               timestamp: Date.now(),
@@ -5186,6 +5302,8 @@ export default function App() {
 
             const blocked = Boolean(payload.data?.blocked);
 
+            const armedNow = payload.data?.armed !== undefined ? Boolean(payload.data.armed) : undefined;
+
             setMt5State((prev) => ({
 
               ...prev,
@@ -5195,6 +5313,8 @@ export default function App() {
               bridgeOrdersBlocked: blocked,
 
               bridgeEnvLock: Boolean(payload.data?.envLocked),
+
+              ...(armedNow !== undefined ? { bridgeArmed: armedNow } : {}),
 
             }));
 
@@ -5406,6 +5526,10 @@ export default function App() {
               setBfDiag(`PONTE → ${bfSym}: ${bfRecebidos} box(es) recebido(s), ${bfBoxes.length} válido(s) · ativo=${bfAssetId} · série=${chartSeries}`);
 
               const synthTicks = synthesizeTicksFromBoxes(bfBoxes);
+              const baseTicks = incomingTicks.length > 0 ? incomingTicks : synthTicks;
+              const targetRangePts = bfAssetId === activeAssetIdRef.current
+                ? rangePoints
+                : (getAssetTradeParams(bfAssetId).rangePoints || bfAssetSpec.tradeDefaults.rangePoints);
 
               if (targetState) {
                 targetState.boxes = bfBoxes;
@@ -5413,17 +5537,36 @@ export default function App() {
                 targetState.cvd = Number(payload.data?.cvd) || lastBf.cvdAtClose;
                 targetState.engine.loadBackfillBoxes(bfBoxes, lastPrice, targetState.cvd);
                 targetState.sessionGaps = [...targetState.engine.getSessionGaps()];
-                if (synthTicks.length > 0) {
+                if (baseTicks.length > 0) {
                   // Preserva ticks ao vivo que já tenham chegado após o fim do último box do backfill
                   const lastBfTs = lastBf.timeEnd || lastBf.timeStart || 0;
-                  const recentLive = targetState.allTicks.filter((t) => !String(t.id).startsWith('synth-') && t.timestamp > lastBfTs);
-                  targetState.allTicks = [...synthTicks, ...recentLive];
+                  const recentLive = targetState.allTicks.filter((t) => !String(t.id).startsWith('synth-') && !String(t.id).startsWith('mt5-bf-') && t.timestamp > lastBfTs);
+                  targetState.allTicks = [...baseTicks, ...recentLive];
+
+                  targetState.rangeEngine.setRangePoints(targetRangePts);
+                  targetState.rangeEngine.initialize(targetState.allTicks[0].price, targetState.allTicks[0].timestamp);
+                  for (const st of targetState.allTicks) {
+                    const rr = targetState.rangeEngine.processTick(st);
+                    if (rr.newBarClosed && rr.closedBoxes.length > 0) {
+                      const allR = targetState.rangeEngine.getBoxes();
+                      for (const cb of rr.closedBoxes) {
+                        annotateActiveBar(cb, allR.slice(0, cb.index), config, `Range ${targetRangePts} pts`, targetState.rangeEngine.getRegimeMeter());
+                      }
+                    }
+                  }
+                  targetState.rangeBoxes = [...targetState.rangeEngine.getBoxes()];
+                  targetState.rangeCurrentBox = targetState.rangeEngine.getCurrentBox();
                 }
               }
 
               const isCurrent = bfAssetId === activeAssetIdRef.current;
 
               if (isCurrent) {
+                if (targetState) {
+                  engineRef.current = targetState.engine;
+                  rangeEngineRef.current = targetState.rangeEngine;
+                  timeEngineRef.current = targetState.timeEngine;
+                }
                 engineRef.current.loadBackfillBoxes(bfBoxes, lastPrice, Number(payload.data?.cvd) || lastBf.cvdAtClose);
                 setBoxes(bfBoxes);
                 setSessionGaps([...engineRef.current.getSessionGaps()]);
@@ -5431,13 +5574,23 @@ export default function App() {
                 setCurrentBox(engineRef.current.getCurrentBox());
                 if (Number.isFinite(Number(payload.data?.cvd))) setCvd(Number(payload.data.cvd));
 
-                // Sintetiza e popula imediatamente o motor de Range e o buffer de ticks
-                if (synthTicks.length > 0) {
-                  allTicksRef.current = targetState ? targetState.allTicks : synthTicks;
+                // Popula imediatamente o motor de Range e o buffer de ticks na escala ativa
+                if (baseTicks.length > 0) {
+                  allTicksRef.current = targetState ? targetState.allTicks : baseTicks;
                   const rEng = rangeEngineRef.current;
-                  rEng.setRangePoints(rangePoints);
-                  rEng.initialize(synthTicks[0].price, synthTicks[0].timestamp);
-                  for (const st of allTicksRef.current) rEng.processTick(st);
+                  if (!targetState) {
+                    rEng.setRangePoints(rangePoints);
+                    rEng.initialize(baseTicks[0].price, baseTicks[0].timestamp);
+                    for (const st of allTicksRef.current) {
+                      const rr = rEng.processTick(st);
+                      if (rr.newBarClosed && rr.closedBoxes.length > 0) {
+                        const allR = rEng.getBoxes();
+                        for (const cb of rr.closedBoxes) {
+                          annotateActiveBar(cb, allR.slice(0, cb.index), config, `Range ${rangePoints} pts`, rEng.getRegimeMeter());
+                        }
+                      }
+                    }
+                  }
                   setRangeBoxes([...rEng.getBoxes()]);
                   setRangeCurrentBox(rEng.getCurrentBox());
                 }
@@ -5495,6 +5648,11 @@ export default function App() {
               dayStats: payload.data?.dayStats ?? prev.dayStats,
 
               dayStatsBySymbol: payload.data?.dayStatsBySymbol ?? (prev as any).dayStatsBySymbol,
+
+              ...(payload.data?.ordersBlocked !== undefined ? { bridgeOrdersBlocked: Boolean(payload.data.ordersBlocked) } : {}),
+              ...(payload.data?.replayMode !== undefined ? { bridgeReplayMode: Boolean(payload.data.replayMode) } : {}),
+              ...(payload.data?.travaAmbiente !== undefined ? { bridgeEnvLock: Boolean(payload.data.travaAmbiente) } : {}),
+              ...(payload.data?.armed !== undefined ? { bridgeArmed: Boolean(payload.data.armed) } : {}),
 
             }));
 
@@ -5983,8 +6141,11 @@ export default function App() {
       'partialPoints',
       'breakevenOffsetPoints',
       'trailingDistancePoints',
+      'breakevenTriggerPoints',
+      'breakevenLockPoints',
       'minDeltaThreshold',
       'contracts',
+      'rangePoints',
     ];
     const tradePatch: Record<string, unknown> = {};
     for (const k of tradeKeys) {
@@ -7228,10 +7389,7 @@ export default function App() {
 
   /**
    * Liga/desliga o MODO REPLAY direto no processo da ponte ({ action: 'SET_REPLAY_MODE' }).
-   * Existe por dois motivos: (1) a trava por variável de ambiente obrigaria reiniciar o .py a cada
-   * ensaio; (2) o botão 'Robô' NÃO protege uma sessão de validação -- a própria tela reenvia
-   * `armed: config.active` no AUTH, então qualquer reconexão religaria as entradas sozinha. Com o
-   * modo ligado, nada abre posição no PC do MT5 enquanto o replay roda, nem o loop vivo dele.
+   * Ao desligar o replay (on=false), destrava o envio de ordens imediatamente e arma a execução.
    */
   const handleToggleReplayMode = (on: boolean) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -7239,16 +7397,41 @@ export default function App() {
         id: `replay-mode-offline-${Date.now()}`,
         type: 'SELL',
         title: '⛔ PONTE DESCONECTADA',
-        description: 'Para ligar o modo replay/validação é preciso estar conectado ao MT5: a trava mora no processo que envia as ordens, não nesta aba.',
+        description: 'Para ligar ou desligar o modo replay/validação é preciso estar conectado ao MT5.',
         timestamp: Date.now(),
       });
       return;
     }
-    try {
-      wsRef.current.send(JSON.stringify({ action: 'SET_REPLAY_MODE', on }));
-    } catch {
-      // conexão caindo: o onclose limpa o estado e a tela mostra a ponte fora do ar
+    // Atualização otimista imediata para feedback instantâneo na tela
+    setMt5State((prev) => ({
+      ...prev,
+      bridgeOrdersBlocked: on,
+      bridgeReplayMode: on,
+      bridgeArmed: on ? prev.bridgeArmed : true,
+    }));
+    if (!on) {
+      setReplayOperates(true);
+      setConfig((prev) => {
+        const updated = { ...prev, active: true, lastSavedTimestamp: Date.now() };
+        EaConfigService.saveConfig(updated);
+        return updated;
+      });
     }
+    try {
+      wsRef.current.send(JSON.stringify({ action: 'SET_REPLAY_MODE', on, unlockEnv: true }));
+      if (!on) {
+        wsRef.current.send(JSON.stringify({ action: 'ARM' }));
+      }
+    } catch {
+      // conexão caindo: o onclose limpa o estado
+    }
+    setLatestToast({
+      id: `mt5-replay-${Date.now()}`,
+      type: on ? 'INFO' : 'BUY',
+      title: on ? '🎥 MODO REPLAY ATIVADO' : '▶️ EXECUÇÃO LIBERADA',
+      description: on ? 'Ponte em modo replay/ensaio: nenhuma ordem sai para o MT5.' : 'Ponte MT5 destravada e armada: ordens liberadas para execução!',
+      timestamp: Date.now(),
+    });
   };
 
 
@@ -7579,12 +7762,12 @@ export default function App() {
 
         const rr = rangeEng.processTick(t);
 
-        if (rr.newBarClosed && rr.closedBox) {
-
-          annotateActiveBar(rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `Range ${rangePoints} pts`, rangeEng.getRegimeMeter());
-
-          seriesCollectorService.ingest('range', rr.closedBox, rangeEng.getBoxes().slice(0, -1), config, `${rangePoints} pts`, rangeEng.getRegimeMeter());
-
+        if (rr.newBarClosed && rr.closedBoxes.length > 0) {
+          const allRangeBxs = rangeEng.getBoxes();
+          for (const rBox of rr.closedBoxes) {
+            annotateActiveBar(rBox, allRangeBxs.slice(0, rBox.index), config, `Range ${rangePoints} pts`, rangeEng.getRegimeMeter());
+            seriesCollectorService.ingest('range', rBox, allRangeBxs.slice(0, rBox.index), config, `${rangePoints} pts`, rangeEng.getRegimeMeter());
+          }
         }
 
         const tr = timeEng.processTick(t);
@@ -8532,6 +8715,21 @@ export default function App() {
     }
     OrderAuditService.saveIntradayOrders(orders, asset.id);
 
+    // Salva os parâmetros da boleta/estratégia do ativo que está saindo para persistência individualizada
+    saveAssetTradeParams(asset.id, {
+      boxPoints: config.boxPoints,
+      stopLossPoints: config.stopLossPoints,
+      takeProfitPoints: config.takeProfitPoints,
+      partialPoints: config.partialPoints,
+      breakevenOffsetPoints: config.breakevenOffsetPoints,
+      trailingDistancePoints: config.trailingDistancePoints,
+      breakevenTriggerPoints: (config as any).breakevenTriggerPoints ?? 0,
+      breakevenLockPoints: (config as any).breakevenLockPoints ?? 0,
+      minDeltaThreshold: config.minDeltaThreshold,
+      contracts: config.contracts,
+      rangePoints: rangePoints,
+    });
+
     // Limpeza de robôs em memória contra contaminação cruzada entre ativos (WIN vs WDO)
     shadowRobotService.resetBook();
     seriesCollectorService.reset();
@@ -8548,22 +8746,22 @@ export default function App() {
       });
     }
 
-
-
     const assetParams = getAssetTradeParams(id);
     const unconfirmed = next.status === 'a_confirmar';
 
-    // TROCAR DE ATIVO NÃO TROCA A ESTRATÉGIA.
-    // Antes, este trecho sobrescrevia stop, alvo, parcial, breakeven, trailing, delta e contratos
-    // com os `tradeDefaults` do REGISTRO do ativo. Efeito real: o operador escolhia o preset
-    // C/V DÓLAR (stop 0, alvo 0, box 2,5) e, ao clicar na aba do dólar, tudo era derrubado pelos
-    // números de fábrica do ativo — a C/V voltava a ter stop e alvo sem ninguém pedir.
-    //
-    // Nova regra: do ativo vem só o que é DELE (box, range, símbolo). Os campos de gestão ficam
-    // com a estratégia ativa — que é a fonte única, conforme a padronização de 07/11.
+    // Os parâmetros da Boleta e do motor (SL, TP, Parcial, BE, Trailing, Lote, Box, Range, MinDelta)
+    // são INDIVIDUALIZADOS POR ATIVO: cada contrato possui sua própria escala, volatilidade e margem.
     const assetOwned = {
       boxPoints: assetParams.boxPoints,
+      stopLossPoints: assetParams.stopLossPoints,
+      takeProfitPoints: assetParams.takeProfitPoints,
+      partialPoints: assetParams.partialPoints,
+      breakevenOffsetPoints: assetParams.breakevenOffsetPoints,
+      trailingDistancePoints: assetParams.trailingDistancePoints,
+      breakevenTriggerPoints: (assetParams as any).breakevenTriggerPoints ?? 0,
+      breakevenLockPoints: (assetParams as any).breakevenLockPoints ?? 0,
       minDeltaThreshold: assetParams.minDeltaThreshold,
+      contracts: assetParams.contracts,
     };
     const updated: AutomationConfig = {
       ...config,
@@ -8579,9 +8777,11 @@ export default function App() {
     activeAssetIdRef.current = id;
     EaConfigService.saveConfig(updated);
     setConfig(updated);
+    setReplayOperates(false);
 
     // Motores e eixos no preço de referência do ativo novo; o livro é o DELE (persistido à parte).
     const nextRangePts = assetParams.rangePoints || next.tradeDefaults.rangePoints;
+    setRangePoints(nextRangePts);
     const targetState = assetStateRef.current[id];
 
     const isPriceSane = (p?: number) =>
@@ -8678,7 +8878,7 @@ export default function App() {
       StrategyLibraryService.updateStrategyConfig(config.strategyId, {
         assetId: id,
         symbol: chartSymbolFor(next),
-        boxPoints: assetParams.boxPoints,
+        ...assetOwned,
       });
     }
 
@@ -8690,9 +8890,13 @@ export default function App() {
         symbol: chartSymbolFor(next),
         boxPoints: assetParams.boxPoints,
       }));
+      wsRef.current.send(JSON.stringify({
+        action: 'SYNC_EA_CONFIG',
+        config: updated,
+      }));
       // O backfill é por contrato: ao trocar de ativo, o gráfico novo precisa do próprio pregão
       // (o Dólar não recebia nada porque o pedido saía com o símbolo do ativo anterior).
-      wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(next), days: 5, boxPoints: (next.id === 'WDO' ? getAssetTradeParams('WDO').boxPoints : (next.id === 'WIN' ? getAssetTradeParams('WIN').boxPoints : config.boxPoints)) }));
+      wsRef.current.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(next), days: 5, boxPoints: assetParams.boxPoints }));
       wsRef.current.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(next) }));
     }
 
@@ -9104,7 +9308,14 @@ export default function App() {
 
   const finLockNow = sessionFinancialLock(orders, config, sessionStartRef.current);
 
-  if (mt5State.status !== 'CONNECTED') {
+  if (mt5State.status === 'CONNECTED') {
+    if (mt5State.bridgeOrdersBlocked) {
+      gateReasons.push('PONTE EM MODO REPLAY (TRAVA ATIVA): nenhuma ordem de entrada é enviada ao MT5. Clique em "🔒 Ponte: Replay (Destravar)" no topo para liberar.');
+    }
+    if (mt5State.bridgeArmed === false) {
+      gateReasons.push('PONTE NÃO ARMADA (EM SEGURO): clique em "On" ou "Opera" para armar a ponte.');
+    }
+  } else {
 
     if (config.tradingHoursEnabled) {
 
@@ -9463,7 +9674,9 @@ export default function App() {
 
           setReplayOperates(active);
 
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          if (active && mt5State.bridgeOrdersBlocked) {
+            handleToggleReplayMode(false);
+          } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             try {
               wsRef.current.send(JSON.stringify({ action: active ? 'ARM' : 'DISARM' }));
             } catch {}
@@ -9530,6 +9743,8 @@ export default function App() {
 
         onOpenStudio={() => setActiveTab('eas')}
 
+        onToggleReplayMode={handleToggleReplayMode}
+
       />
 
 
@@ -9542,7 +9757,7 @@ export default function App() {
 
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 overflow-x-auto no-scrollbar">
 
-          {/* Botão compacto OPERA: ícone + bolinha pulsante + texto 'Opera' */}
+          {/* Botão de destaque OPERA: visual vibrante e fácil de identificar */}
           <button
             onClick={() => {
               const nextVal = !replayOperates;
@@ -9552,7 +9767,10 @@ export default function App() {
                 EaConfigService.saveConfig(updated);
                 return updated;
               });
-              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              // Se ligou o Opera mas a ponte está em Replay, destrava automaticamente
+              if (nextVal && mt5State.bridgeOrdersBlocked) {
+                handleToggleReplayMode(false);
+              } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                 try {
                   wsRef.current.send(JSON.stringify({ action: nextVal ? 'ARM' : 'DISARM' }));
                 } catch {}
@@ -9564,17 +9782,65 @@ export default function App() {
                 });
               } catch {}
             }}
-            className={`flex items-center gap-1.5 h-6 px-2 rounded border transition-all cursor-pointer select-none text-[11px] font-semibold ${
+            className={`flex items-center gap-1.5 h-6 px-2.5 rounded border transition-all cursor-pointer select-none text-[11px] font-bold ${
               replayOperates
-                ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300 hover:border-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
-                : 'bg-slate-900 border-slate-800 text-zinc-500 hover:text-zinc-300'
+                ? mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked
+                  ? 'bg-amber-500/20 border-amber-400 text-amber-200 hover:bg-amber-500/30 shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                  : 'bg-emerald-500/25 border-emerald-400 text-emerald-100 hover:bg-emerald-500/35 shadow-[0_0_12px_rgba(16,185,129,0.35)]'
+                : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600'
             }`}
-            title={replayOperates ? 'Robô Opera: LIGADO (paper trading ativo)' : 'Robô Opera: DESLIGADO (modo silencioso)'}
+            title={
+              replayOperates
+                ? mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked
+                  ? 'Opera LIGADO, mas a Ponte MT5 está em Modo Replay. Clique aqui ou no botão ao lado para DESTRAVAR e permitir ordens no MT5!'
+                  : 'Robô Opera: LIGADO (Executando ordens ao vivo no MT5). Clique para pausar.'
+                : 'Robô Opera: PAUSADO (Desligado). Clique para ligar e armar a execução no MT5.'
+            }
           >
-            <Zap className={`w-3.5 h-3.5 ${replayOperates ? 'text-emerald-400 fill-emerald-400' : 'text-zinc-600'}`} />
-            <span className={`w-2 h-2 rounded-full ${replayOperates ? 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse' : 'bg-zinc-600'}`} />
-            <span>Opera</span>
+            <Zap className={`w-3.5 h-3.5 ${replayOperates ? (mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked ? 'text-amber-400 fill-amber-400 animate-pulse' : 'text-emerald-400 fill-emerald-400') : 'text-slate-500'}`} />
+            <span className={`w-2 h-2 rounded-full ${replayOperates ? (mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse') : 'bg-rose-500'}`} />
+            <span>
+              {replayOperates
+                ? mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked
+                  ? 'Opera (Em Replay - Clique p/ Destravar)'
+                  : '⚡ OPERA (ON)'
+                : '⏸ Opera (Off)'}
+            </span>
           </button>
+
+          {/* Alerta e Atalho com 1 clique quando a ponte está em Modo Replay */}
+          {mt5State.status === 'CONNECTED' && mt5State.bridgeOrdersBlocked && (
+            <button
+              onClick={() => handleToggleReplayMode(false)}
+              className="flex items-center gap-1.5 h-6 px-2.5 rounded border border-amber-500 bg-amber-950/80 hover:bg-amber-900 text-amber-100 text-[11px] font-bold transition-all cursor-pointer select-none shrink-0 shadow-[0_0_10px_rgba(245,158,11,0.25)]"
+              title="A ponte Python está segurando ordens em Modo Replay. Clique aqui para DESTRAVAR imediatamente e liberar envios ao MT5!"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span>🔓 DESTRAVAR MT5 (Sair do Replay)</span>
+            </button>
+          )}
+          {mt5State.status === 'CONNECTED' && !mt5State.bridgeOrdersBlocked && mt5State.bridgeArmed === false && (
+            <button
+              onClick={() => {
+                setReplayOperates(true);
+                setConfig((prev) => {
+                  const updated = { ...prev, active: true, lastSavedTimestamp: Date.now() };
+                  EaConfigService.saveConfig(updated);
+                  return updated;
+                });
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  try {
+                    wsRef.current.send(JSON.stringify({ action: 'ARM', unlockEnv: true }));
+                  } catch {}
+                }
+              }}
+              className="flex items-center gap-1.5 h-6 px-2 rounded border border-amber-500/60 bg-slate-900 hover:bg-slate-800 text-amber-300 text-[11px] font-bold transition-all cursor-pointer select-none shrink-0"
+              title="A ponte está NÃO ARMADA (Em Seguro). Clique aqui para armar imediatamente."
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              <span>Ponte Não Armada · Clique p/ Armar</span>
+            </button>
+          )}
 
           {/* Janela de Seleção do Pregão com chip compacto (mostra só o código Flow1, 2, 3) */}
           <div className="flex items-center gap-1.5 ml-3 pl-3 border-l border-slate-800">
@@ -10174,17 +10440,18 @@ ${
                   robotActive={config.active}
 
                   onToggleRobot={() => {
-
+                    const nextVal = !config.active;
+                    setReplayOperates(nextVal);
                     setConfig((prev) => {
-
-                      const updated = { ...prev, active: !prev.active, lastSavedTimestamp: Date.now() };
-
+                      const updated = { ...prev, active: nextVal, lastSavedTimestamp: Date.now() };
                       EaConfigService.saveConfig(updated);
-
                       return updated;
-
                     });
-
+                    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                      try {
+                        wsRef.current.send(JSON.stringify({ action: nextVal ? 'ARM' : 'DISARM' }));
+                      } catch {}
+                    }
                   }}
 
                   currentPrice={currentPrice}
