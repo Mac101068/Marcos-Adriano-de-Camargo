@@ -367,10 +367,10 @@ EVAL_CONFIG = {
     "exhaustion_enabled": EXHAUSTION_FILTER_ENABLED,
     "exhaustion_ratio": EXHAUSTION_DELTA_RATIO,
     # Filtro de tendência do fluxo (cor do painel FLUXO): em CVD subindo só BUY, caindo só SELL.
-    # LIGADO por decisão do operador (15/Nov/2026), após replay de 22 pregões: os sinais contra
-    # a cor de 20 boxes respondiam pela conta inteira (−1.650 pts de −1.650). A tela pode
-    # desligar pelo checkbox; o SYNC sobrescreve este padrão.
-    "flow_trend_filter": True,
+    # DESLIGADO após medição em 22 pregões (replay real): o filtro cortou +850 pts de lucro
+    # nos sinais "matados" e reduziu o PnL de +655 pts (sem filtro) para −245 pts (com filtro).
+    # A tela pode ligar pelo checkbox; o SYNC sobrescreve este padrão.
+    "flow_trend_filter": False,
     "flow_trend_lookback": 20,
     "max_delta_ceiling": MAX_DELTA_CEILING,
     "require_cvd_extreme": REQUIRE_CVD_EXTREME,
@@ -2470,89 +2470,111 @@ class MT5OrderManager:
             print(f"⚠️ [MERCADO FECHADO [{self.symbol}]] Negociação desativada pela corretora (trade_mode=DISABLED). Zeragem evitada no MT5.", flush=True)
             return True
 
-        positions = mt5.positions_get(symbol=self.symbol)
-
-        if not positions:
-
-            return True
-
         side_type = {"BUY": mt5.ORDER_TYPE_BUY, "SELL": mt5.ORDER_TYPE_SELL}.get(side)
-
         magic_filter = self.magic_number if magic == "robot" else (int(magic) if magic not in (None, "ALL", "all") else None)
 
-        closed_n = 0
+        spec = get_asset_spec(self.symbol)
+        pt_value = spec.get("point_value", ASSET_POINT_VALUE)
 
+        # 1. ZERA POSIÇÕES A MERCADO
+        positions = mt5.positions_get(symbol=self.symbol)
+        closed_n = 0
         pnl_brl = 0.0
 
-        for pos in positions:
+        if positions:
+            for pos in positions:
+                if side_type is not None and pos.type != side_type:
+                    continue
 
-            if side_type is not None and pos.type != side_type:
+                if magic_filter is not None and pos.magic != magic_filter:
+                    continue
 
-                continue
+                close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
 
-            if magic_filter is not None and pos.magic != magic_filter:
+                tick = mt5.symbol_info_tick(self.symbol)
+                if not tick:
+                    continue
 
-                continue
+                price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
+                if not price or price <= 0:
+                    continue
 
-            close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+                closed_n += 1
+                dir_sign = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else -1.0
+                pnl_brl += (price - pos.price_open) * dir_sign * pt_value * pos.volume
 
-            tick = mt5.symbol_info_tick(self.symbol)
-            if not tick:
-                continue
+                req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "position": pos.ticket,
+                    "symbol": self.symbol,
+                    "volume": pos.volume,
+                    "type": close_type,
+                    "price": price,
+                    "deviation": 20,
+                    "magic": magic_filter if magic_filter is not None else self.magic_number,
+                    "comment": "Zerar Terminal Web",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": self.get_filling_mode(),
+                }
 
-            price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
-            if not price or price <= 0:
-                continue
+                res = mt5.order_send(req)
+                if res and res.retcode != mt5.TRADE_RETCODE_DONE:
+                    print(f"⚠️ [MT5 AVISO [{self.symbol}]] RetCode={res.retcode} ({res.comment}) ao zerar #{pos.ticket}", flush=True)
+                # A zeragem também vai para a trilha, com magic e ticket da posição: é o que permite
+                # atribuir o resultado ao dono certo no cruzamento com o extrato.
+                _ok_zero = bool(res) and res.retcode == mt5.TRADE_RETCODE_DONE
+                self._audit_ordem("CLOSE_POSITION", "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY",
+                                  pos.volume, None, None, price, getattr(res, "order", None),
+                                  getattr(res, "retcode", None), _ok_zero,
+                                  "ZERAGEM_ACCEPTED" if _ok_zero else f"ZERAGEM_REJEITADA | {getattr(res, 'comment', '')}",
+                                  magic=magic_filter, position=pos.ticket)
 
-            closed_n += 1
+        # 2. CANCELA ORDENS PENDENTES (Buy Limit, Sell Limit, Buy Stop, Sell Stop)
+        with MT5_LOCK:
+            pending_orders = mt5.orders_get(symbol=self.symbol)
+        removed_orders_n = 0
+        if pending_orders:
+            for ord_item in pending_orders:
+                if magic_filter is not None and ord_item.magic != magic_filter:
+                    continue
+                if side_type is not None:
+                    is_buy_ord = ord_item.type in (mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_BUY_STOP)
+                    if side == "BUY" and not is_buy_ord:
+                        continue
+                    if side == "SELL" and is_buy_ord:
+                        continue
+                req_cancel = {
+                    "action": mt5.TRADE_ACTION_REMOVE,
+                    "order": ord_item.ticket,
+                    "symbol": self.symbol,
+                    "magic": ord_item.magic,
+                }
+                with MT5_LOCK:
+                    res_c = mt5.order_send(req_cancel)
+                if res_c and res_c.retcode == mt5.TRADE_RETCODE_DONE:
+                    removed_orders_n += 1
+                    print(f"🗑️ [{self.symbol}] Ordem pendente #{ord_item.ticket} removida via Zerar", flush=True)
+                else:
+                    err_msg = getattr(res_c, 'comment', 'falha') if res_c else 'sem resposta'
+                    print(f"⚠️ [{self.symbol}] Falha ao remover ordem pendente #{ord_item.ticket}: {err_msg}", flush=True)
 
-            dir_sign = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else -1.0
+        # 3. LIMPA VARAL DO ATIVO SE FOR ZERAGEM GERAL OU MAGIC DO VARAL
+        if magic_filter is None or str(magic_filter).startswith("150"):
+            try:
+                vmgr = get_or_create_varal_manager(self.symbol)
+                vmgr.cancel_pending_orders()
+                vmgr.close_all_positions()
+                vmgr.placed_orders_count = 0
+            except Exception:
+                pass
 
-            pnl_brl += (price - pos.price_open) * dir_sign * ASSET_POINT_VALUE * pos.volume
+        # 4. LIMPA FILA INTERNA DE ORDENS PENDENTES DO ROBÔ
+        if magic_filter is None or magic_filter == self.magic_number:
+            self.pending_orders.clear()
 
-            req = {
-
-                "action": mt5.TRADE_ACTION_DEAL,
-
-                "position": pos.ticket,
-
-                "symbol": self.symbol,
-
-                "volume": pos.volume,
-
-                "type": close_type,
-
-                "price": price,
-
-                "deviation": 20,
-
-                "magic": magic_filter if magic_filter is not None else self.magic_number,
-
-                "comment": "Zerar Terminal Web",
-
-                "type_time": mt5.ORDER_TIME_GTC,
-
-                "type_filling": self.get_filling_mode(),
-
-            }
-
-            res = mt5.order_send(req)
-            if res and res.retcode != mt5.TRADE_RETCODE_DONE:
-                print(f"⚠️ [MT5 AVISO [{self.symbol}]] RetCode={res.retcode} ({res.comment}) ao zerar #{pos.ticket}", flush=True)
-            # A zeragem também vai para a trilha, com magic e ticket da posição: é o que permite
-            # atribuir o resultado ao dono certo no cruzamento com o extrato.
-            _ok_zero = bool(res) and res.retcode == mt5.TRADE_RETCODE_DONE
-            self._audit_ordem("CLOSE_POSITION", "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY",
-                              pos.volume, None, None, price, getattr(res, "order", None),
-                              getattr(res, "retcode", None), _ok_zero,
-                              "ZERAGEM_ACCEPTED" if _ok_zero else f"ZERAGEM_REJEITADA | {getattr(res, 'comment', '')}",
-                              magic=magic_filter, position=pos.ticket)
-
-        alvo = f"lado {side}" if side_type is not None else "posições"
-
+        alvo = f"lado {side}" if side_type is not None else "posições e ordens"
         donos = f"magic {magic_filter}" if magic_filter is not None else "TODOS os magics"
-
-        print(f"🛑 {alvo} zeradas a mercado ({closed_n} posição(ões), {donos}) | PnL aproximado: R$ {pnl_brl:.2f}.")
+        print(f"🛑 {alvo} zeradas/canceladas [{self.symbol}] ({closed_n} posições, {removed_orders_n} pendentes canceladas, {donos}) | PnL aprox: R$ {pnl_brl:.2f}.")
 
         return True
 
@@ -3956,14 +3978,47 @@ async def ws_handler(websocket):
                     )
 
                 elif action == "CLOSE_POSITIONS":
+                    m_val = data.get("robotMagic") or data.get("magic") or None
+                    c_type = data.get("type")
+                    raw_sym = data.get("symbol")
 
-                    mgr.close_all_positions(
+                    if raw_sym and str(raw_sym).upper() not in ("ALL", "*"):
+                        mgr = get_or_create_order_manager(str(raw_sym))
+                        mgr.close_all_positions(c_type, magic=m_val)
+                    else:
+                        # Zerar tudo global: percorre todos os ativos suportados e ativos conhecidos
+                        syms_to_close = set(STREAM_SYMBOLS)
+                        if SYMBOL:
+                            syms_to_close.add(SYMBOL)
+                        for s_k in SUPPORTED_ASSETS:
+                            syms_to_close.add(SUPPORTED_ASSETS[s_k]["symbol"])
+                        for s_item in ORDER_MANAGERS:
+                            syms_to_close.add(s_item)
 
-                        data.get("type"),
+                        for s_target in syms_to_close:
+                            try:
+                                _mgr = get_or_create_order_manager(s_target)
+                                _mgr.close_all_positions(c_type, magic=m_val)
+                            except Exception as _e_close:
+                                print(f"⚠️ Erro ao zerar {s_target}: {_e_close}", flush=True)
 
-                        magic=data.get("robotMagic") if data.get("robotMagic") else None
-
-                    )
+                    # Confirmação imediata para toda a rede web da conclusão da zeragem
+                    try:
+                        latest_pos = await asyncio.to_thread(fetch_mt5_positions)
+                        latest_ords = await asyncio.to_thread(fetch_mt5_orders)
+                        await broadcast_to_web({
+                            "type": "POSITIONS_CLOSED_CONFIRM",
+                            "data": {
+                                "symbol": str(raw_sym) if raw_sym else "ALL",
+                                "type": c_type or "ALL",
+                                "magic": m_val,
+                                "positions": latest_pos,
+                                "orders": latest_ords,
+                            }
+                        })
+                        await send_account_info(websocket)
+                    except Exception as _e_conf:
+                        print(f"⚠️ Erro ao emitir confirmacao de zeragem: {_e_conf}", flush=True)
 
                 elif action == "SET_ROBOT_MODE":
 

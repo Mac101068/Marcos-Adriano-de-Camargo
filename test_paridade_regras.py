@@ -154,7 +154,7 @@ check("ER máximo = 0,35", CONFIG_ORIGINAL["consolidation_er_max"], 0.35)
 check("exaustão ligada por padrão", CONFIG_ORIGINAL["exhaustion_enabled"], True)
 check("piso estático = 300", CONFIG_ORIGINAL["pyramid_static_floor"], 300)
 check("teto anti-clímax = 3200", CONFIG_ORIGINAL["max_delta_ceiling"], 3200)
-check("filtro de tendência do fluxo ligado por padrão", CONFIG_ORIGINAL["flow_trend_filter"], True)
+check("filtro de tendência do fluxo desligado por padrão", CONFIG_ORIGINAL["flow_trend_filter"], False)
 check("janela padrão do filtro de fluxo = 20 boxes", CONFIG_ORIGINAL["flow_trend_lookback"], 20)
 
 for k, v in CONFIG_ORIGINAL.items():

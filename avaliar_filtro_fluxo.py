@@ -57,10 +57,19 @@ EVAL_CONFIG.update({
 })
 
 
-def carregar_ticks(caminho):
+def carregar_ticks(caminho, inicio=None, fim=None):
     df = pd.read_csv(caminho).dropna(subset=["time_msc"])
     if "last" in df.columns:
-        df["last"] = df["last"].replace(0, pd.NA).fillna(df["bid"])
+        df["last"] = pd.to_numeric(df["last"], errors="coerce").replace(0, pd.NA)
+        df["last"] = df["last"].fillna(df["bid"])
+    if inicio or fim:
+        # Filtro vetorizado por hora: evita chamar datetime.fromtimestamp
+        # tick a tick no loop Python (1M+ de chamadas são lentíssimas).
+        horas = pd.to_datetime(df["time_msc"], unit="ms").dt.strftime("%H:%M")
+        if inicio:
+            df = df[horas >= inicio]
+        if fim:
+            df = df[horas < fim]
     return df.to_dict("records")
 
 
@@ -68,16 +77,11 @@ def rodar_dia(caminho, symbol="WINZ26", inicio=INICIO_PADRAO, fim=FIM_PADRAO):
     engine = RenkoFlowEngine(symbol=symbol, box_points=BOX_POINTS, tick_size=TICK_SIZE_WIN,
                              min_delta_threshold=150)
     sinais = []
-    for t in carregar_ticks(caminho):
+    for t in carregar_ticks(caminho, inicio=inicio, fim=fim):
         flags = int(t.get("flags") or 0)
         vol = int(t.get("volume") or t.get("volume_real") or 1)
         preco = float(t.get("last") or t.get("bid") or t.get("ask") or 0)
         if preco <= 0:
-            continue
-        hora = datetime.fromtimestamp(int(t["time_msc"]) / 1000).strftime("%H:%M")
-        if hora >= fim:
-            break
-        if hora < inicio:
             continue
         agressor = "BUY" if (flags & 32) else ("SELL" if (flags & 64) else "CROSS")
         box, sinal, _motivo = engine.process_tick(preco, vol, agressor, int(t["time_msc"]))
