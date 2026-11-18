@@ -205,6 +205,198 @@ SUPPORTED_ASSETS = {
     },
 }
 
+# ==============================================================================
+# PERFIL DE STOP LOSS E TAKE PROFIT MÍNIMO SEGURO POR ATIVO (RISK HARDENING)
+# Evita rejeições de 'Invalid stops' por distância menor que o StopsLevel da B3/XP
+# ==============================================================================
+ASSET_MIN_STOPS = {
+    "WIN": {
+        "min_sl": 50.0,
+        "min_tp": 30.0,
+        "default_sl": 100.0,
+        "default_tp": 200.0,
+    },
+    "WDO": {
+        "min_sl": 2.5,
+        "min_tp": 2.0,
+        "default_sl": 5.0,
+        "default_tp": 10.0,
+    },
+    "BIT": {
+        "min_sl": 250.0,
+        "min_tp": 120.0,
+        "default_sl": 250.0,
+        "default_tp": 300.0,
+    },
+    "BTC": {
+        "min_sl": 250.0,
+        "min_tp": 120.0,
+        "default_sl": 250.0,
+        "default_tp": 300.0,
+    },
+}
+
+def get_asset_min_stops(symbol: str) -> dict:
+    """Retorna os parâmetros mínimos e defaults seguros de SL/TP para o ativo."""
+    sym_u = str(symbol or "").upper()
+    if "BIT" in sym_u or "BTC" in sym_u:
+        return ASSET_MIN_STOPS["BIT"]
+    if "WDO" in sym_u:
+        return ASSET_MIN_STOPS["WDO"]
+    return ASSET_MIN_STOPS["WIN"]
+
+def validate_order_stops(symbol: str, sl_points: float, tp_points: float) -> tuple:
+    """
+    Valida se SL/TP atendem ao mínimo seguro exigido pelo ativo na corretora.
+    Retorna (is_valid: bool, block_reason: str, safe_sl: float, safe_tp: float).
+    """
+    min_cfg = get_asset_min_stops(symbol)
+    min_sl = float(min_cfg["min_sl"])
+    min_tp = float(min_cfg["min_tp"])
+
+    sl_val = float(sl_points or 0.0)
+    tp_val = float(tp_points or 0.0)
+
+    # Se informado SL > 0 e menor que o mínimo seguro do ativo: BLOQUEIO INEGOCIÁVEL
+    if 0 < sl_val < min_sl:
+        reason = f"BLOQUEADO: Stop abaixo do mínimo seguro para o ativo ({sl_val:.1f} pts < mín {min_sl:.1f} pts em {symbol})"
+        return False, reason, sl_val, tp_val
+
+    # Se for 0 (ordem sem stop informado), assume o default seguro do ativo
+    if sl_val <= 0:
+        sl_val = float(min_cfg["default_sl"])
+
+    if tp_val <= 0:
+        tp_val = float(min_cfg["default_tp"])
+    elif tp_val < min_tp:
+        tp_val = min_tp
+
+    return True, "", sl_val, tp_val
+
+
+# ==============================================================================
+# HARD CAP DE PERDA EMERGENCIAL POR MAGIC NUMBER (RISK PROTECTION)
+# Interrompe drawdown destrutivo de estratégias com assimetria de cauda negativa
+# ==============================================================================
+MAGIC_HARD_CAPS = {
+    26092301: {
+        "enabled": True,
+        "description": "Hard Cap assimétrico para Magic 26092301",
+        "assets": {
+            "BIT": {"max_loss_pts": 100.0},   # ~R$ 100,00 no BITX
+            "WIN": {"max_loss_pts": 150.0},   # R$ 30,00 no WIN (30 pts de tolerância)
+            "WDO": {"max_loss_pts": 5.0},     # R$ 5,00 no WDO (10 ticks)
+        }
+    }
+}
+
+def get_symbol_filling_mode(symbol: str) -> int:
+    """Obtém o filling mode suportado pela corretora para o ativo."""
+    sym_info = mt5.symbol_info(symbol)
+    if not sym_info:
+        return mt5.ORDER_FILLING_IOC
+    fill_flags = sym_info.filling_mode
+    if fill_flags & 2:
+        return mt5.ORDER_FILLING_RETURN
+    if fill_flags & 1:
+        return mt5.ORDER_FILLING_IOC
+    return mt5.ORDER_FILLING_RETURN
+
+def check_magic_hard_caps(symbol: str = None) -> list:
+    """
+    Monitora posições abertas no MT5 e encerra a mercado qualquer posição que atinja
+    o Hard Cap de perda configurado para aquele magic específico.
+    """
+    closed_positions = []
+    if not MAGIC_HARD_CAPS:
+        return closed_positions
+
+    try:
+        with MT5_LOCK:
+            positions = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
+        if not positions:
+            return closed_positions
+
+        for pos in positions:
+            magic = int(pos.magic)
+            cap_cfg = MAGIC_HARD_CAPS.get(magic)
+            if not cap_cfg or not cap_cfg.get("enabled", False):
+                continue
+
+            pos_sym = str(pos.symbol)
+            pos_sym_u = pos_sym.upper()
+            asset_k = "BIT" if ("BIT" in pos_sym_u or "BTC" in pos_sym_u) else ("WDO" if "WDO" in pos_sym_u else "WIN")
+            assets_cfg = cap_cfg.get("assets", {})
+            if asset_k in assets_cfg:
+                max_loss_pts = float(assets_cfg[asset_k].get("max_loss_pts", 100.0))
+            else:
+                max_loss_pts = float(cap_cfg.get("max_loss_pts", 100.0))
+
+            is_buy = (pos.type == mt5.POSITION_TYPE_BUY)
+
+            with MT5_LOCK:
+                tick = mt5.symbol_info_tick(pos_sym)
+            if not tick:
+                continue
+
+            curr_price = float(tick.bid if is_buy else tick.ask)
+            if curr_price <= 0:
+                continue
+
+            # Cálculo de resultado flutuante em pontos
+            pts_result = (curr_price - pos.price_open) if is_buy else (pos.price_open - curr_price)
+
+            if pts_result <= -max_loss_pts:
+                print(f"🚨 [HARD CAP ATIVADO | Magic {magic}] Posição #{pos.ticket} em {pos_sym}: "
+                      f"perda flutuante atingiu {pts_result:.1f} pts (Hard Cap = -{max_loss_pts:.1f} pts). "
+                      f"FORÇANDO FECHAMENTO IMEDIATO A MERCADO!", flush=True)
+
+                close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+                req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "position": pos.ticket,
+                    "symbol": pos_sym,
+                    "volume": float(pos.volume),
+                    "type": close_type,
+                    "price": curr_price,
+                    "deviation": 25,
+                    "magic": magic,
+                    "comment": f"HARD_CAP_{int(max_loss_pts)}P"[:31],
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": get_symbol_filling_mode(pos_sym),
+                }
+                with MT5_LOCK:
+                    res = mt5.order_send(req)
+
+                is_done = bool(res and res.retcode == mt5.TRADE_RETCODE_DONE)
+                ret_code = getattr(res, "retcode", None)
+                ret_comment = getattr(res, "comment", "")
+
+                if is_done:
+                    print(f"✅ [HARD CAP SUCESSO] Posição #{pos.ticket} zerada com corte de perda em {curr_price:.1f} pts.", flush=True)
+                else:
+                    print(f"❌ [HARD CAP FALHA] Falha ao zerar #{pos.ticket}: RetCode={ret_code} ({ret_comment})", flush=True)
+
+                log_trade_execution(
+                    symbol=pos_sym,
+                    side="SELL" if is_buy else "BUY",
+                    action="CLOSE_POSITION",
+                    volume=float(pos.volume),
+                    exec_price=curr_price,
+                    ticket=getattr(res, "order", pos.ticket),
+                    magic=magic,
+                    comment=f"HARD_CAP_TRIGGERED | {pts_result:.1f}pts",
+                    status="HARD_CAP_CLOSED" if is_done else "HARD_CAP_FAILED",
+                    result_pnl=float(pos.profit),
+                    position_ticket=pos.ticket,
+                )
+                closed_positions.append(pos.ticket)
+
+    except Exception as exc:
+        print(f"⚠️ [AVISO HARD CAP] Falha ao monitorar posições: {exc}", flush=True)
+
+    return closed_positions
+
 
 
 # ==============================================================================
@@ -236,11 +428,11 @@ VARAL_CONFIG = {
         "enabled": False,     # Independente: inicia pausado até ativação explícita
         "magic": 150302,
         "execution_type": "MARKET",  # "MARKET" ou "LIMIT"
-        "step_points": 100.0,
+        "step_points": 250.0,
         "max_orders": 3,
         "contracts": 1,
-        "tp_points": 200.0,   # Editável
-        "sl_points": 100.0,
+        "tp_points": 250.0,   # Editável (mínimo 120 pts seguro para BIT)
+        "sl_points": 250.0,   # Editável (mínimo 250 pts seguro para BIT)
     },
 }
 
@@ -348,7 +540,9 @@ EXHAUSTION_DELTA_RATIO = 0.7
 # Teto anti-estouro (clímax institucional): deltas isolados absurdos acima deste teto são filtrados
 MAX_DELTA_CEILING = 3200
 
-
+STOP_LOSS_POINTS = 50
+TAKE_PROFIT_POINTS = 100
+BREAKEVEN_OFFSET_POINTS = 5
 
 # Valores VIGENTES na avaliação do sinal. É o que check_convergence lê.
 EVAL_CONFIG = {
@@ -374,6 +568,18 @@ EVAL_CONFIG = {
     "flow_trend_lookback": 20,
     "max_delta_ceiling": MAX_DELTA_CEILING,
     "require_cvd_extreme": REQUIRE_CVD_EXTREME,
+    # ── Parâmetros da boleta (ordem mãe + pirâmide) — defaults, podem ser sobrescritos via SYNC ──
+    "pyramid_tp_points": PYRAMID_TP_POINTS,
+    "pyramid_sl_points": PYRAMID_SL_POINTS,
+    "pyramid_contracts": PYRAMID_CONTRACTS,
+    "main_contracts": MAIN_CONTRACTS,
+    "hold_main_until_flip": HOLD_MAIN_UNTIL_FLIP,
+    "close_all_on_flip": CLOSE_ALL_ON_FLIP,
+    "main_breakeven_on_pyr_tp": MAIN_BREAKEVEN_ON_PYR_TP,
+    "pyramid_entry_market_on_close": PYRAMID_ENTRY_TYPE == "MARKET_ON_CLOSE",
+    "sl_points": STOP_LOSS_POINTS,
+    "tp_points": TAKE_PROFIT_POINTS,
+    "breakeven_offset_points": BREAKEVEN_OFFSET_POINTS,
 }
 
 
@@ -504,9 +710,9 @@ ENTRY_ACTIONS = {"ORDER_SEND"}
 TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_POSITIONS"}
 
 
-# Trava de execução por ambiente. PADRÃO = DESLIGADA (0) para operação normal ao vivo/demo;
-# Se o operador desejar iniciar estritamente travado, define ORDERS_BLOCKED=1.
-ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "0").strip().lower() in ("1", "true", "sim", "on")
+# Trava de execução por ambiente. PADRÃO = LIGADA (1) para segurança (Fail-Closed);
+# Para operar de verdade, define explicitamente ORDERS_BLOCKED=0.
+ORDERS_BLOCKED = os.environ.get("ORDERS_BLOCKED", "1").strip().lower() in ("1", "true", "sim", "on")
 
 # Versão ACIONÁVEL da mesma trava, para não precisar reiniciar a ponte a cada sessão de estudo:
 # a tela manda {"action":"SET_REPLAY_MODE","on":true} e o processo passa a segurar as entradas.
@@ -538,7 +744,7 @@ VOLUME_SOURCE_M1 = "M1_RATE"
 
 
 
-WS_HOST = "0.0.0.0"
+WS_HOST = "127.0.0.1"
 
 WS_PORT = 8765
 
@@ -554,9 +760,89 @@ BACKFILL_SESSIONS = max(1, int(os.getenv("BACKFILL_SESSIONS", "3")))
 
 
 CLIENT_STATES = {}
+BRIDGE_ARMED = False
 
 
+def set_bridge_armed(armed: bool):
+    global BRIDGE_ARMED, REPLAY_MODE, ORDERS_BLOCKED
+    BRIDGE_ARMED = bool(armed)
+    if BRIDGE_ARMED:
+        REPLAY_MODE = False
+        ORDERS_BLOCKED = False
+    for st in CLIENT_STATES.values():
+        if isinstance(st, dict):
+            st["armed"] = BRIDGE_ARMED
 
+
+# ==============================================================================
+# PERSISTÊNCIA AUTOMÁTICA DE TRADES (DATA LOGGING - SINGLE SOURCE OF TRUTH)
+# ==============================================================================
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+
+def log_trade_execution(
+    symbol: str,
+    side: str,
+    action: str,
+    volume: float,
+    signal_price: float = None,
+    exec_price: float = None,
+    ticket: int = None,
+    magic: int = None,
+    comment: str = "",
+    status: str = "CONFIRMED",
+    result_pnl: float = 0.0,
+    box_index: str = "",
+    sl_points: float = None,
+    tp_points: float = None,
+    position_ticket: int = None
+):
+    """
+    Persiste o histórico de trades em formato JSONL em data/trades_YYYY-MM-DD.json.
+    Non-blocking I/O, resiliente a falhas de disco e sem expor tokens ou dados sensíveis.
+    """
+    try:
+        if not os.path.exists(DATA_DIR):
+            os.makedirs(DATA_DIR, exist_ok=True)
+
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        log_file = os.path.join(DATA_DIR, f"trades_{date_str}.json")
+
+        slippage = None
+        if signal_price is not None and exec_price is not None and signal_price > 0 and exec_price > 0:
+            if str(side).upper() == "BUY":
+                slippage = round(exec_price - signal_price, 2)
+            elif str(side).upper() == "SELL":
+                slippage = round(signal_price - exec_price, 2)
+
+        record = {
+            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            "timestamp_iso": now.isoformat() + "Z",
+            "symbol": str(symbol),
+            "side": str(side).upper(),
+            "action": str(action).upper(),
+            "volume": float(volume) if volume is not None else 1.0,
+            "signal_price": float(signal_price) if signal_price is not None else None,
+            "exec_price": float(exec_price) if exec_price is not None else None,
+            "slippage": slippage,
+            "ticket": int(ticket) if ticket is not None else None,
+            "position_ticket": int(position_ticket) if position_ticket is not None else None,
+            "magic": int(magic) if magic is not None else None,
+            "comment": str(comment or "")[:32],
+            "status": str(status),
+            "result_pnl": float(result_pnl),
+            "box_index": str(box_index),
+            "sl_points": float(sl_points) if sl_points is not None else None,
+            "tp_points": float(tp_points) if tp_points is not None else None,
+            "orders_blocked": bool(ordens_bloqueadas()),
+        }
+
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    except Exception as exc:
+        print(f"[AVISO LOGGING] Falha não-bloqueante ao registrar trade em disco: {exc}", flush=True)
 
 
 def get_peer_ip(websocket):
@@ -583,7 +869,7 @@ def client_state(websocket):
 
             "authenticated": not REQUIRE_AUTH,
 
-            "armed": not REQUIRE_AUTH,
+            "armed": BRIDGE_ARMED if not REQUIRE_AUTH else False,
 
             "order_times": [],
 
@@ -625,7 +911,7 @@ def check_trade_allowed(state, data, action):
         or data.get("magic") in OPERATOR_MAGICS
     )
 
-    if action in ENTRY_ACTIONS and not state["armed"] and not is_operator_order:
+    if action in ENTRY_ACTIONS and not (state.get("armed") or BRIDGE_ARMED) and not is_operator_order:
 
         return False, "ponte EM SEGURO: ligue o Robô no app para liberar entradas automáticas"
 
@@ -1534,6 +1820,17 @@ class MT5OrderManager:
 
         self.pyramid_tickets = {}
 
+        # ── Parâmetros da boleta (podem ser sobrescritos via SYNC da tela) ──
+        self.pyramid_tp_points = float(PYRAMID_TP_POINTS)
+        self.pyramid_sl_points = float(PYRAMID_SL_POINTS)
+        self.hold_main_until_flip = bool(HOLD_MAIN_UNTIL_FLIP)
+        self.close_all_on_flip = bool(CLOSE_ALL_ON_FLIP)
+        self.main_breakeven_on_pyr_tp = bool(MAIN_BREAKEVEN_ON_PYR_TP)
+        self.pyramid_entry_market_on_close = bool(PYRAMID_ENTRY_TYPE == "MARKET_ON_CLOSE")
+        self.sl_points = float(STOP_LOSS_POINTS)
+        self.tp_points = float(TAKE_PROFIT_POINTS)
+        self.breakeven_offset_points = float(BREAKEVEN_OFFSET_POINTS)
+
 
 
     def get_filling_mode(self):
@@ -1946,28 +2243,25 @@ class MT5OrderManager:
 
 
         sym_info = mt5.symbol_info(self.symbol)
-
         if not sym_info:
+            return False, 0
 
+        # Validação estrita de perfil de stops seguros por ativo
+        is_valid_stops, block_reason, sl_val, tp_val = validate_order_stops(self.symbol, sl_points, tp_points)
+        if not is_valid_stops:
+            print(f"🛑 [TRAVA STOP MÍNIMO LIMIT [{self.symbol}]] {block_reason}", flush=True)
             return False, 0
 
         point = sym_info.point
-
         use_volume = float(volume) if volume is not None else self.contracts
-
         order_type = mt5.ORDER_TYPE_BUY_LIMIT if signal == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
 
         sl_price = 0.0
-
         tp_price = 0.0
-
-        if sl_points > 0:
-
-            sl_price = limit_price - (sl_points * point) if signal == "BUY" else limit_price + (sl_points * point)
-
-        if tp_points > 0:
-
-            tp_price = limit_price + (tp_points * point) if signal == "BUY" else limit_price - (tp_points * point)
+        if sl_val > 0:
+            sl_price = limit_price - (sl_val * point) if signal == "BUY" else limit_price + (sl_val * point)
+        if tp_val > 0:
+            tp_price = limit_price + (tp_val * point) if signal == "BUY" else limit_price - (tp_val * point)
 
 
 
@@ -2053,8 +2347,29 @@ class MT5OrderManager:
         print(f"🛡️ [BREAKEVEN AUTOMÁTICO [{self.symbol}]] Movendo SL da Ordem Mãe #{target_pos.ticket} de {current_sl} para {be_sl} (preço entrada={target_pos.price_open})", flush=True)
         return self.modify_stop_loss(target_pos.ticket, be_sl)
 
+    def apply_boleta_config(self, cfg: dict):
+        """Atualiza os parâmetros da boleta vindos do SYNC da tela."""
+        if "pyramid_tp_points" in cfg:
+            self.pyramid_tp_points = float(cfg["pyramid_tp_points"])
+        if "pyramid_sl_points" in cfg:
+            self.pyramid_sl_points = float(cfg["pyramid_sl_points"])
+        if "hold_main_until_flip" in cfg:
+            self.hold_main_until_flip = bool(cfg["hold_main_until_flip"])
+        if "close_all_on_flip" in cfg:
+            self.close_all_on_flip = bool(cfg["close_all_on_flip"])
+        if "main_breakeven_on_pyr_tp" in cfg:
+            self.main_breakeven_on_pyr_tp = bool(cfg["main_breakeven_on_pyr_tp"])
+        if "pyramid_entry_market_on_close" in cfg:
+            self.pyramid_entry_market_on_close = bool(cfg["pyramid_entry_market_on_close"])
+        if "sl_points" in cfg:
+            self.sl_points = float(cfg["sl_points"])
+        if "tp_points" in cfg:
+            self.tp_points = float(cfg["tp_points"])
+        if "breakeven_offset_points" in cfg:
+            self.breakeven_offset_points = float(cfg["breakeven_offset_points"])
+
     def watch_closed_pyramids(self):
-        if not MAIN_BREAKEVEN_ON_PYR_TP or not self.pyramid_tickets:
+        if not self.main_breakeven_on_pyr_tp or not self.pyramid_tickets:
             return
 
         positions = mt5.positions_get(symbol=self.symbol)
@@ -2122,6 +2437,26 @@ class MT5OrderManager:
         except Exception as exc:
             print(f"[AVISO] falha ao gravar diário de ordens: {exc}", flush=True)
 
+        try:
+            log_trade_execution(
+                symbol=self.symbol,
+                side=direcao or "",
+                action=acao,
+                volume=self.contracts if volume is None else volume,
+                signal_price=preco_box,
+                exec_price=preco_fill or preco_solicitado,
+                ticket=ticket,
+                magic=magic if magic is not None else getattr(self, "magic_number", None),
+                comment=motivo,
+                status="EXECUTED" if executada else "REJECTED_OR_SKIPPED",
+                box_index=box_index,
+                sl_points=sl_points,
+                tp_points=tp_points,
+                position_ticket=position,
+            )
+        except Exception:
+            pass
+
 
     def execute_market_order(self, order_type, comment="", volume=None, sl_points=None, tp_points=None, magic=None,
                              box_index="", preco_box=None, acao="MERCADO", tick_time_msc=None):
@@ -2173,18 +2508,24 @@ class MT5OrderManager:
                               msg_spread, box_index, sl_points, tp_points, magic=magic)
             return False, 0
 
-        default_sl = spec.get("sl_points", STOP_LOSS_POINTS)
-        default_tp = spec.get("tp_points", TAKE_PROFIT_POINTS)
-        sl_val = float(sl_points) if sl_points is not None else float(default_sl)
-        tp_val = float(tp_points) if tp_points is not None else float(default_tp)
-
-        # Guarda anti-contaminação do Mini-Índice: nunca aceitar stops curtos herdados de WDO (ex: 2.5 pts)
-        if "WIN" in self.symbol:
-            if 0 < sl_val < 30.0:
-                print(f"🛡️ [PROTEÇÃO SL {self.symbol}] Stop de {sl_val} pts rejeitado (muito curto para Índice B3). Corrigido para {default_sl} pts.", flush=True)
-                sl_val = float(default_sl)
-            if 0 < tp_val < 30.0:
-                tp_val = float(default_tp)
+        # Validação estrita de perfil de stops seguros por ativo (evita 'Invalid stops' da corretora)
+        is_valid_stops, block_reason, sl_val, tp_val = validate_order_stops(self.symbol, sl_points, tp_points)
+        if not is_valid_stops:
+            print(f"🛑 [TRAVA STOP MÍNIMO [{self.symbol}]] {block_reason}", flush=True)
+            self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None, None, False,
+                              block_reason, box_index, sl_points, tp_points, magic=magic)
+            log_trade_execution(
+                symbol=self.symbol,
+                side=order_type,
+                action=acao,
+                volume=use_volume,
+                signal_price=entry_price,
+                magic=magic,
+                comment=block_reason,
+                status="REJECTED_MIN_STOP",
+                box_index=str(box_index)
+            )
+            return False, 0
 
         if sl_val > 0:
             raw_sl = (entry_price - sl_val) if is_buy else (entry_price + sl_val)
@@ -2258,11 +2599,19 @@ class MT5OrderManager:
             active_positions = []
 
         spec = get_asset_spec(self.symbol)
-        base_vol = spec.get("contracts", MAIN_CONTRACTS)
-        pyr_vol = spec.get("pyramid_contracts", PYRAMID_CONTRACTS)
-        pyr_sl = spec.get("pyramid_sl_points", PYRAMID_SL_POINTS)
-        pyr_tp = spec.get("pyramid_tp_points", PYRAMID_TP_POINTS)
-        max_pyr = spec.get("max_pyramids", 3)
+        # ── Parâmetros da boleta via SYNC (tela) têm prioridade sobre o spec do ativo ──
+        base_vol = float(EVAL_CONFIG.get("main_contracts", spec.get("contracts", MAIN_CONTRACTS)))
+        pyr_vol = float(EVAL_CONFIG.get("pyramid_contracts", spec.get("pyramid_contracts", PYRAMID_CONTRACTS)))
+        pyr_sl = float(EVAL_CONFIG.get("pyramid_sl_points", spec.get("pyramid_sl_points", PYRAMID_SL_POINTS)))
+        pyr_tp = float(EVAL_CONFIG.get("pyramid_tp_points", spec.get("pyramid_tp_points", PYRAMID_TP_POINTS)))
+        max_pyr = int(EVAL_CONFIG.get("max_pyramids", spec.get("max_pyramids", 3)))
+        hold_main = bool(EVAL_CONFIG.get("hold_main_until_flip", HOLD_MAIN_UNTIL_FLIP))
+        close_all_flip = bool(EVAL_CONFIG.get("close_all_on_flip", CLOSE_ALL_ON_FLIP))
+        main_be_on_pyr_tp = bool(EVAL_CONFIG.get("main_breakeven_on_pyr_tp", MAIN_BREAKEVEN_ON_PYR_TP))
+        pyr_entry_market = bool(EVAL_CONFIG.get("pyramid_entry_market_on_close", PYRAMID_ENTRY_TYPE == "MARKET_ON_CLOSE"))
+        sl_pts = float(EVAL_CONFIG.get("sl_points", spec.get("sl_points", STOP_LOSS_POINTS)))
+        tp_pts = float(EVAL_CONFIG.get("tp_points", spec.get("tp_points", TAKE_PROFIT_POINTS)))
+        be_offset = float(EVAL_CONFIG.get("breakeven_offset_points", spec.get("breakeven_offset_ticks", BREAKEVEN_OFFSET_POINTS)))
 
         # Dimensionamento Dinâmico de Lotes por Score de Convicção Institucional (Item 4)
         flow_score = box.get("flow_score", 5) if isinstance(box, dict) else 5
@@ -2289,10 +2638,7 @@ class MT5OrderManager:
                 pyramid_count += 1
 
         if not has_main_order and not active_positions:
-            sl_pts = spec.get("sl_points", 0)
-            tp_pts = spec.get("tp_points", 0)
-
-            if PYRAMID_ENTRY_TYPE != "MARKET_ON_CLOSE":
+            if not pyr_entry_market:
                 success, ticket, placed = self.place_pyramid_limit_order(
                     current_dir,
                     box,
@@ -2336,7 +2682,7 @@ class MT5OrderManager:
             pyramid_num = pyramid_count + 1
             print(f"🪜 [PIRAMIDAÇÃO #{pyramid_num} [{self.symbol}]] Adicionando {pyr_vol} ctro(s) a favor de {current_dir} no Box #{box['index']}", flush=True)
 
-            if PYRAMID_ENTRY_TYPE != "MARKET_ON_CLOSE":
+            if not pyr_entry_market:
                 success, ticket, placed = self.place_pyramid_limit_order(
                     current_dir,
                     box,
@@ -2347,7 +2693,8 @@ class MT5OrderManager:
                 )
                 if success:
                     self.pyramid_tickets[ticket] = current_dir
-                    self.move_main_to_breakeven(current_dir)
+                    if main_be_on_pyr_tp:
+                        self.move_main_to_breakeven(current_dir)
                 return success, ticket, "PYRAMID"
 
 
@@ -2906,6 +3253,18 @@ def apply_ea_config(payload):
     _num("adaptiveThresholdPercentile", "percentile", float)
     _num("adaptiveFloorMultiple", "floor_multiple", float)
     _num("flowDivergenceMin", "flow_divergence_min", float)
+    # ── Parâmetros da boleta (ordem mãe + pirâmide) lidos da tela via SYNC ──
+    _num("pyramidTpPoints", "pyramid_tp_points", float)
+    _num("pyramidSlPoints", "pyramid_sl_points", float)
+    _num("pyramidContracts", "pyramid_contracts", float)
+    _num("contracts", "main_contracts", float)
+    _bool("holdMainUntilFlip", "hold_main_until_flip")
+    _bool("closeAllOnFlowFlip", "close_all_on_flip")
+    _bool("moveMainToBreakevenOnPyramidTp", "main_breakeven_on_pyr_tp")
+    _bool("pyramidEntryTypeMarketOnClose", "pyramid_entry_market_on_close")
+    _num("stopLossPoints", "sl_points", float)
+    _num("takeProfitPoints", "tp_points", float)
+    _num("breakevenOffsetPoints", "breakeven_offset_points", float)
 
     sym = str(payload.get("symbol") or SYMBOL or "").upper()
 
@@ -2928,6 +3287,17 @@ def apply_ea_config(payload):
 
     if changed:
         print(" 🧠 REGRAS DO SINAL SINCRONIZADAS COM A TELA: " + ", ".join(changed), flush=True)
+
+    # ── Propaga parâmetros da boleta para todos os order managers ──
+    boleta_keys = ("pyramid_tp_points", "pyramid_sl_points", "hold_main_until_flip",
+                   "close_all_on_flip", "main_breakeven_on_pyr_tp",
+                   "pyramid_entry_market_on_close", "sl_points", "tp_points",
+                   "breakeven_offset_points")
+    boleta_cfg = {k: EVAL_CONFIG[k] for k in boleta_keys if k in EVAL_CONFIG}
+    if boleta_cfg:
+        for mgr in ORDER_MANAGERS.values():
+            mgr.apply_boleta_config(boleta_cfg)
+
     return changed
 
 def get_or_create_order_manager(sym):
@@ -3290,7 +3660,7 @@ async def send_account_info(websocket):
 
             "travaAmbiente": ORDERS_BLOCKED,
 
-            "armed": state["armed"],
+            "armed": BRIDGE_ARMED or state.get("armed", False),
 
             "symbol": SYMBOL,
 
@@ -3470,7 +3840,17 @@ async def ws_handler(websocket):
 
             action = data.get("action")
 
-
+            if action == "PING":
+                with MT5_LOCK:
+                    term_info = mt5.terminal_info()
+                    term_conn = bool(term_info.connected) if term_info else False
+                await send_json(websocket, {
+                    "type": "PONG",
+                    "clientTimestamp": data.get("timestamp"),
+                    "serverTimestamp": time.time() * 1000,
+                    "terminalConnected": term_conn,
+                })
+                continue
 
             if action == "AUTH":
 
@@ -3491,20 +3871,15 @@ async def ws_handler(websocket):
                 elif token_file_content and secrets.compare_digest(provided, token_file_content):
                     AUTH_TOKEN = token_file_content
                     matches = True
-                elif is_local and len(provided) >= 16:
-                    AUTH_TOKEN = provided
-                    sync_token_files(AUTH_TOKEN)
-                    matches = True
                     print(f" 🔑 TOKEN SINCRONIZADO com cliente local {peer}", flush=True)
 
                 wants_armed = bool(data.get("armed", False))
 
                 state["authenticated"] = matches
-
-                state["armed"] = matches and wants_armed
-                if state["armed"]:
-                    ORDERS_BLOCKED = False
-                    REPLAY_MODE = False
+                if matches and wants_armed:
+                    set_bridge_armed(True)
+                else:
+                    state["armed"] = BRIDGE_ARMED
 
                 await send_json(websocket, {
 
@@ -3516,7 +3891,7 @@ async def ws_handler(websocket):
 
                         "requireToken": REQUIRE_AUTH,
 
-                        "armed": state["armed"],
+                        "armed": BRIDGE_ARMED or state.get("armed", False),
 
                         "ordersBlocked": ordens_bloqueadas(),
 
@@ -3559,22 +3934,19 @@ async def ws_handler(websocket):
 
                     continue
 
-                state["armed"] = action == "ARM"
-                if state["armed"]:
-                    ORDERS_BLOCKED = False
-                    REPLAY_MODE = False
+                set_bridge_armed(action == "ARM")
 
                 await broadcast_to_web({
                     "type": "ARM_RESULT",
                     "data": {
-                        "armed": state["armed"],
+                        "armed": BRIDGE_ARMED,
                         "ordersBlocked": ordens_bloqueadas(),
                         "replayMode": REPLAY_MODE,
                         "travaAmbiente": ORDERS_BLOCKED,
                     }
                 })
 
-                print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if state['armed'] else '🔒 PONTE EM SEGURO: nenhuma entrada nova'}{' — mas TRAVA ligada: nenhuma entrada sai de fato' if ordens_bloqueadas() else ''} — {peer}", flush=True)
+                print(f" {'🟢 PONTE ARMADA: ordens de entrada liberadas' if BRIDGE_ARMED else '🔒 PONTE EM SEGURO: nenhuma entrada nova'}{' — mas TRAVA ligada: nenhuma entrada sai de fato' if ordens_bloqueadas() else ''} — {peer}", flush=True)
 
                 continue
 
@@ -3594,7 +3966,7 @@ async def ws_handler(websocket):
                 REPLAY_MODE = wants
                 if not wants:
                     ORDERS_BLOCKED = False
-                    state["armed"] = True
+                    set_bridge_armed(True)
 
                 if REPLAY_MODE:
                     nota = ("MODO REPLAY/VALIDAÇÃO ligado: ticks, histórico, sinais e diário seguem "
@@ -3607,7 +3979,7 @@ async def ws_handler(websocket):
                     "blocked": ordens_bloqueadas(),
                     "envLocked": ORDERS_BLOCKED,
                     "recusaAmbiente": False,
-                    "armed": state["armed"],
+                    "armed": BRIDGE_ARMED or state.get("armed", False),
                     "note": nota,
                 }
 
@@ -3625,6 +3997,28 @@ async def ws_handler(websocket):
 
                 await send_mt5_equity_data(websocket, limit=limit, days=days)
 
+                continue
+
+            if action == "GET_TRADES_LOG":
+                target_date = str(data.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
+                log_file = os.path.join(DATA_DIR, f"trades_{target_date}.json")
+                trades = []
+                if os.path.exists(log_file):
+                    try:
+                        with open(log_file, "r", encoding="utf-8") as f:
+                            for line in f:
+                                line = line.strip()
+                                if line:
+                                    trades.append(json.loads(line))
+                    except Exception as err:
+                        print(f"⚠️ Erro ao ler trades em {log_file}: {err}", flush=True)
+
+                await send_json(websocket, {
+                    "type": "TRADES_LOG_RESULT",
+                    "date": target_date,
+                    "count": len(trades),
+                    "trades": trades
+                })
                 continue
 
 
@@ -3900,6 +4294,31 @@ async def ws_handler(websocket):
                             req_timestamp = None
                     print(f" 📥 [WEBSOCKET] RECEBIDA SOLICITAÇÃO ORDER_SEND: {target_sym} {data.get('type')} {data.get('contracts', 1)} ctros | Magic={order_magic} SL={data.get('sl')} TP={data.get('tp')}", flush=True)
 
+                    raw_sl = data.get("sl", 0) or 0
+                    raw_tp = data.get("tp", 0) or 0
+                    is_valid_stops, block_reason, safe_sl, safe_tp = validate_order_stops(target_sym, raw_sl, raw_tp)
+                    if not is_valid_stops:
+                        print(f"🛑 [WEBSOCKET ORDER_SEND BLOQUEADA] {block_reason}", flush=True)
+                        mgr._audit_ordem("APP_ORDER_SEND", data.get("type", "BUY"),
+                                         data.get("contracts", 1), None, None, None, None, None,
+                                         False, block_reason, magic=order_magic)
+                        log_trade_execution(
+                            symbol=target_sym,
+                            side=data.get("type", "BUY"),
+                            action="APP_ORDER_SEND",
+                            volume=float(data.get("contracts", 1)),
+                            magic=order_magic,
+                            comment=block_reason,
+                            status="REJECTED_MIN_STOP"
+                        )
+                        await send_json(websocket, {
+                            "type": "ORDER_REJECTED",
+                            "symbol": target_sym,
+                            "reason": block_reason,
+                            "data": {"ticket": None, "reason": block_reason}
+                        })
+                        continue
+
                     if data.get("isLimit"):
 
                         mgr.place_websocket_limit_order(
@@ -4080,19 +4499,25 @@ async def broadcast_to_web(msg_dict):
 
     async def _safe_send(c):
         try:
-            await asyncio.wait_for(c.send(msg_str), timeout=1.5)
+            # Timeout de 5.0s para suportar picos de renderização no navegador sem derrubar clientes
+            await asyncio.wait_for(c.send(msg_str), timeout=5.0)
+            return None
+        except asyncio.TimeoutError:
+            # Sobrecarga pontual de buffer: mantém o cliente vivo para não criar socket fantasma
             return None
         except Exception:
+            # Conexão encerrada ou corrompida: fecha explicitamente e descarta
+            try:
+                await c.close()
+            except Exception:
+                pass
             return c
 
     results = await asyncio.gather(*[_safe_send(c) for c in clients], return_exceptions=True)
 
     for r in results:
-
         if r and not isinstance(r, Exception):
-
             CONNECTED_CLIENTS.discard(r)
-
             CLIENT_STATES.pop(r, None)
 
 
@@ -4478,6 +4903,7 @@ LAST_TICK_TIMES = {s: 0 for s in STREAM_SYMBOLS}
 # (bid/ask/last mudando dentro do mesmo milissegundo) e o dedup antigo por `<=` no `time_msc`
 # deixava passar só o primeiro — 11,5% da fita do WIN perdidos em 04/Nov.
 LAST_TICK_OCC = {s: None for s in STREAM_SYMBOLS}
+LAST_SENT_QUOTE = {s: 0.0 for s in STREAM_SYMBOLS}
 # A fita do WIN teve pico de 1.326 ticks em um único segundo (04/Nov/2026), então o cap precisa
 # ficar acima disso com folga: lote cheio = cauda do segundo que nunca seria devolvida.
 TICK_BATCH_MAX = 5000
@@ -4568,11 +4994,30 @@ async def mt5_stream_loop():
                 if not ref:
                     continue
 
+                # ⚡ FAST-PATH DE COTAÇÃO IMEDIATA (Zero Latency com MT5):
+                # Transmite o preço instantâneo do Market Watch antes do processamento do lote
+                price_now = float(ref.last if ref.last > 0 else ref.bid)
+                if price_now > 0 and LAST_SENT_QUOTE.get(s) != price_now:
+                    LAST_SENT_QUOTE[s] = price_now
+                    await broadcast_to_web({
+                        "type": "PRICE_QUOTE",
+                        "symbol": s,
+                        "price": price_now,
+                        "bid": float(ref.bid),
+                        "ask": float(ref.ask),
+                        "timestamp": int(ref.time_msc) + MT5_BRT_OFFSET_MSC
+                    })
+
                 ultimo_msc = LAST_TICK_TIMES.get(s, 0)
-                # A âncora é o SEGUNDO do último tick que entrou no motor, e não 3s atrás do
-                # último tick que o terminal viu: com cap por consulta, a cauda dos segundos
-                # concorridos saía da janela sem nunca ter sido devolvida (14,1% da fita).
-                anchor_sec = anchor_da_consulta(s, int(ref.time))
+                ref_msc = int(getattr(ref, 'time_msc', 0) or (int(ref.time) * 1000))
+                # ⏩ Anti-Lag Catch-up: se o cursor ficou mais de 2.5s para trás do MT5 real,
+                # salta para os últimos 500ms para eliminar acúmulo de atraso e sincronizar
+                if ultimo_msc > 0 and (ref_msc - ultimo_msc) > 2500:
+                    definir_cursor_ticks(s, ref_msc - 500)
+                    anchor_sec = int(ref.time)
+                else:
+                    anchor_sec = anchor_da_consulta(s, int(ref.time))
+
                 with MT5_LOCK:
                     ticks = mt5.copy_ticks_from(s, anchor_sec, TICK_BATCH_MAX, mt5.COPY_TICKS_ALL)
 
@@ -4583,6 +5028,13 @@ async def mt5_stream_loop():
                     eng = get_or_create_engine(s)
                     mgr = get_or_create_order_manager(s)
                     corte = cursor_de_ingestao(ticks, ultimo_msc, LAST_TICK_OCC.get(s))
+                    if corte >= len(ticks):
+                        ref_msc = int(getattr(ref, 'time_msc', 0) or (int(ref.time) * 1000))
+                        if ref_msc > ultimo_msc + 2000:
+                            # Reancoragem automática anti-starvation: impede que o loop fique preso no mesmo lote de 5000 ticks
+                            definir_cursor_ticks(s, ref_msc)
+                        continue
+
                     batch_ticks = []
                     for tick in ticks[corte:]:
                         raw_msc = int(tick['time_msc'])
@@ -4658,8 +5110,8 @@ async def mt5_stream_loop():
                                     print(f" 🛑 ORDEM BLOQUEADA POR TRAVA [{'ORDERS_BLOCKED' if ORDERS_BLOCKED else 'MODO REPLAY'}] [{s}]: sinal "
                                           f"{signal} ({reason}) calculado e transmitido, nenhuma ordem enviada",
                                           flush=True)
-                                elif current_mode == "AUTO":
-                                    if any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
+                                elif current_mode in ("AUTO", "LIVE") or BRIDGE_ARMED or any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
+                                    if BRIDGE_ARMED or any(client_state(c).get("armed", False) for c in CONNECTED_CLIENTS):
                                         mgr.execute_pyramid_confluence(signal, new_box)
                                 else:
                                     print(f" 🎯 SINAL [{s}] DISPONÍVEL NO COPILOTO [{current_mode}]: {signal} ({reason}) — aguardando operador", flush=True)
@@ -4677,6 +5129,9 @@ async def mt5_stream_loop():
                                 "symbol": s,
                                 "data": batch_ticks
                             })
+
+            # 🛡️ Monitoramento contínuo de Hard Cap para Magics de cauda assimétrica (ex: 26092301)
+            check_magic_hard_caps()
 
             await asyncio.sleep(0.01)
         except Exception as exc:
@@ -4702,6 +5157,9 @@ async def mt5_equity_broadcaster_loop():
             if not acc:
 
                 continue
+
+            # Verificação de redundância de Hard Cap
+            check_magic_hard_caps()
 
             positions = await asyncio.to_thread(fetch_mt5_positions)
 
@@ -4735,7 +5193,9 @@ async def mt5_equity_broadcaster_loop():
 
                     "replayMode": REPLAY_MODE,
 
-                    "travaAmbiente": ORDERS_BLOCKED
+                    "travaAmbiente": ORDERS_BLOCKED,
+
+                    "armed": BRIDGE_ARMED
 
                 }
 

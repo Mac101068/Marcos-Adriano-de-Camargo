@@ -7,9 +7,10 @@ $alvos = Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Objec
 foreach ($p in $alvos) { Stop-Process -Id $p.ProcessId -Force }
 Start-Sleep -Seconds 3
 
-# Trava ligada: este lancador nao herda nada do iniciar_robo.cmd. Start-Process herda o
-# ambiente deste processo, entao a variavel precisa existir aqui.
-$env:ORDERS_BLOCKED = '1'
+# Trava: se ORDERS_BLOCKED nao estiver definida no ambiente, assume '1' por seguranca.
+if (-not (Test-Path env:ORDERS_BLOCKED)) {
+    $env:ORDERS_BLOCKED = '1'
+}
 
 Start-Process cmd -ArgumentList '/c', 'cd /d c:\Users\Lucas\Documents\RoboFluxoB3 && venv\Scripts\python.exe -u bot_mt5_ciclo15.py >> ponte_mt5_live.log 2>&1' -WindowStyle Hidden
 Start-Sleep -Seconds 10

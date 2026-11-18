@@ -1,80 +1,102 @@
-# 📈 ROBÔ QUANTITATIVO DE FLUXO & RENKO 10R (B3 MINI-ÍNDICE)
-### Plataforma Profissional de Trading Algorítmico, Gestão de Patrimônio e Rede de Assinantes
+# 📈 RoboFluxoB3 — Plataforma Quantitativa Renko & Fluxo (B3)
 
-[![MetaTrader 5](https://img.shields.io/badge/MetaTrader_5-XP_Investimentos-emerald.svg)](https://www.xpi.com.br/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-teal.svg)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/React-19.0-sky.svg)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-7.0-blue.svg)](https://www.typescriptlang.org/)
-[![Vite](https://img.shields.io/badge/Vite-8.3-purple.svg)](https://vitejs.dev/)
-[![Status](https://img.shields.io/badge/Status-Produção_Pronta-success.svg)]()
-
-Plataforma de alta precisão desenvolvida para operar o contrato futuro de Mini-Índice da B3 (**WINZ26**), combinando leitura de fluxo atemporal (CVD institucional), gráficos de tijolos **Renko 10R** (50 pontos), estratégia de piramidação com ordem mãe de surfe e painel multiusuário com modo degustação para convidados.
+Plataforma de alta precisão desenvolvida para operar contratos futuros da B3 (**WIN / WDO / BIT**), combinando motor de confluência atemporal de fluxo (Delta e CVD institucional), gráficos de tijolos **Renko (10R no WIN)** e execução com gestão de risco nativa no MetaTrader 5.
 
 ---
 
-## 🌟 Principais Recursos
+## 🏗️ Arquitetura do Repositório
 
-### 1. Motor de Confluência & Estratégia de Pirâmide
-* **Ordem Mãe de Surfe:** Aberta na primeira confluência de box verde/vermelho com fluxo positivo/negativo. Sem Take Profit fixo, projetada para surfar a tendência.
-* **Pirâmide Acumulativa (+50 pts):** A cada novo box na mesma direção, adiciona ordens com Take Profit fixo de 50 pontos (R$ 10,00 por contrato).
-* **Zeragem Compulsória por Inversão:** Se o fluxo institucional virar, todas as ordens abertas são imediatamente zeradas a mercado.
+O projeto é organizado em duas árvores Git independentes sincronizadas com o mesmo repositório remoto:
 
-### 2. Conexão Nativa MetaTrader 5 (XP Investimentos)
-* Comunicação bidirecional via WebSocket (`ws://0.0.0.0:8765`) e REST (`http://0.0.0.0:8003`).
-* Leitura em tempo real do patrimônio da conta XP Demo `#50534540` (**R$ 1.050.082,00**).
-* Execução direta de ordens a mercado e ordens limites de proteção.
+| Caminho | Branch Remoto | Finalidade |
+|---|---|---|
+| `/` (Raiz) | `backend-python` | Motor de trading, ponte WebSocket MT5, testes de paridade e dados históricos |
+| `/interface_github` | `main` | Frontend interativo em React 19, TypeScript e Vite |
 
-### 3. Curva de Patrimônio & Métricas Profissionais
-* Gráficos interativos com Recharts:
-  * Evolução do Equity acumulado vs. Saldo inicial.
-  * Distribuição de PnL por trade (Wins vs. Losses).
-  * Gráfico Underwater de Drawdown temporal.
-* KPIs em tempo real: Taxa de acerto (Win Rate), Fator de Lucro (Profit Factor), Payoff, Maior Drawdown e Saldo Líquido.
-
-### 4. Sistema de Assinantes & Modo Degustação para Amigos
-* **Compartilhamento em 1 Clique:** Acesse na rede local via `http://192.168.18.49:3000`.
-* **Gerador de Convites VIP:** Crie links personalizados com nome do amigo e envie direto no WhatsApp com período de teste liberado (7, 15 ou 30 dias grátis).
-* **Controle Administrativo:** Painel completo para o Administrador Master gerenciar licenças, renovações, faturamento mensal e permissões.
+> **Nota de Isolamento:** A pasta `interface_github/` é ignorada pelo `.gitignore` da raiz para garantir ciclo de vida e versionamento desacoplados entre motor de execução e interface visual.
 
 ---
 
-## 🚀 Como Executar
+## 🔒 Camada de Segurança & Hardening (Pós-Auditoria)
 
-### 1. Iniciar o Backend e a Ponte MT5
-```bash
-# Instalar dependências Python
-pip install -r backend/requirements.txt
+Após auditoria de segurança e hardening estrutural, a aplicação implementa:
 
-# Executar o robô MT5 e a API FastAPI
-python backend/bot_mt5_convergencia_10r.py
-python backend/main.py
+1. **Isolamento de Rede:** O WebSocket escuta exclusivamente em `127.0.0.1:8765`, bloqueando acessos não autorizados via rede local ou externa.
+2. **Autenticação por Token Dinâmico:** Cada sessão exige handshake prévio (`action: 'AUTH'`) com token criptográfico de pelo menos 16 caracteres.
+3. **Trava de Ambiente (Fail-Closed):**
+   - O motor nasce por padrão com `ORDERS_BLOCKED=1` (Modo Replay/Estudo).
+   - Para envio de ordens na conta de homologação, o operador deve declarar explicitamente `$env:ORDERS_BLOCKED = '0'`.
+4. **Proteção de Segredos:** Tokens, credenciais e logs de execução são estritamente excluídos do Git.
+
+---
+
+## 🚀 Como Iniciar a Plataforma
+
+### 1. Pré-Requisitos
+- Windows 10/11 x64
+- Python 3.11/3.12 (Virtualenv configurado em `venv/`)
+- Node.js 18+ e npm
+- MetaTrader 5 instalado e conectado à conta Demo XP (`50534540`)
+
+### 2. Inicialização do Backend (Ponte MT5)
+
+#### Modo Seguro / Validação (Padrão - Replay & Estudo):
+```powershell
+.\_reiniciar_ponte.ps1
+```
+*(As ordens de entrada ficam travadas por segurança).*
+
+#### Modo Operacional (Execução em Conta Demo):
+```powershell
+$env:ORDERS_BLOCKED = '0'
+.\venv\Scripts\python.exe -u bot_mt5_ciclo15.py
 ```
 
-### 2. Iniciar o Frontend Web
-```bash
-# Instalar dependências do Node.js
+### 3. Inicialização do Frontend (Interface React)
+```powershell
+cd interface_github
 npm install
-
-# Rodar servidor de desenvolvimento (escuta em 0.0.0.0:3000)
 npm run dev
 ```
-
-Acesse:
-* **Computador Host:** `http://localhost:3000`
-* **Celular / Rede Local:** `http://192.168.18.49:3000`
+Acesse no navegador: **`http://localhost:3000`**
 
 ---
 
-## 📁 Estrutura do Projeto
+## 🧪 Bateria de Testes & Paridade de Regras
 
-* `backend/`: Scripts Python do robô, bridge WebSocket MT5 e API FastAPI.
-* `src/components/`: Componentes React (Gráfico Renko, Fita de Fluxo, Curva de Patrimônio, Admin, Compartilhamento).
-* `src/services/`: Camada de serviços (Autenticação, Auditoria de Ordens, Configurações do EA).
-* `RELATORIO_CONQUISTAS_25_OUTUBRO.md`: Relatório executivo com todos os marcos alcançados hoje.
-* `GUIA_CONEXAO_MT5_XP.md`: Manual operacional de inicialização para o pregão.
-* `GUIA_DEGUSTACAO_AMIGOS.md`: Roteiro para convidar amigos e compartilhar acesso ao vivo.
+Antes de qualquer alteração no motor ou na tela, execute as suítes de validação:
+
+```powershell
+# 1. Paridade entre regras do Python e da tela (47 asserts obrigatórios)
+.\venv\Scripts\python.exe test_paridade_regras.py
+
+# 2. Diário de eventos e stubs de execução do MT5 (46 cenários)
+.\venv\Scripts\python.exe test_diario_eventos.py
+
+# 3. Verificação de sintaxe do backend
+.\venv\Scripts\python.exe -m py_compile bot_mt5_ciclo15.py
+
+# 4. Verificação de tipagem TypeScript do frontend
+cd interface_github && npx tsc --noEmit
+```
 
 ---
 
-**Autor:** Marcos Adriano de Camargo  
-**Licença:** Proprietária • Direitos Reservados
+## 🤖 Fluxo de Trabalho com IAs (Gemini / Antigravity, Kilo Code, Qwen)
+
+Para evitar conflitos de versão e regressões no código-fonte, siga as regras do [AGENTS.md](file:///c:/Users/Lucas/Documents/RoboFluxoB3/AGENTS.md):
+
+1. **Uma ferramenta por pasta por vez:** Nunca solicite alterações concorrentes na mesma árvore de arquivos.
+2. **`git status` obrigatório:** Verifique o status antes de iniciar e logo após terminar cada tarefa.
+3. **Paridade inquebrável:** Qualquer alteração em limiares ou regras deve ser espelhada simultaneamente no `bot_mt5_ciclo15.py` e em `convergenceEvaluator.ts`.
+4. **Sem commits cegos:** Commits e pushes são realizados sob demanda explícita após testes aprovados.
+
+---
+
+## 📋 Checklist de Segurança Pré-Operacional
+
+- [ ] MetaTrader 5 conectado estritamente na conta **DEMO** (`50534540`).
+- [ ] WebSocket escutando em `127.0.0.1` (verificado via `netstat -ano | findstr 8765`).
+- [ ] Token sincronizado entre `bridge_token.txt` e o header do frontend.
+- [ ] Trava de horários habilitada na interface (08:55 às 17:30).
+- [ ] Testes de paridade aprovados com 0 falhas.
