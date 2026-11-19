@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Lock,
   Unlock,
+  AlertTriangle,
 } from 'lucide-react';
 import { MT5ConnectionState } from '../types/trading';
 import { AssetSpec } from '../assets/assetRegistry';
@@ -63,9 +64,17 @@ export const RiskStatusPanel: React.FC<RiskStatusPanelProps> = ({
 }) => {
   const conn = getConnectionStatus(mt5State.status ?? 'DISCONNECTED');
   const ConnIcon = conn.icon; // JSX exige nome de componente com letra maiúscula
-  const ordersBlocked = !!mt5State.bridgeOrdersBlocked;
+  const isConnected = mt5State.status === 'CONNECTED';
+  const rawOrdersBlocked = !!mt5State.bridgeOrdersBlocked;
   const envLock = !!mt5State.bridgeEnvLock;
   const replayMode = !!mt5State.bridgeReplayMode;
+
+  // REGRA DE SEGURANÇA: se não está conectado, ordens estão sempre bloqueadas
+  // independentemente do que bridgeOrdersBlocked diga.
+  const ordersBlocked = !isConnected || rawOrdersBlocked;
+
+  // Contradição: desconectado mas bridgeOrdersBlocked diz false (liberada)
+  const contradiction = !isConnected && !rawOrdersBlocked && !envLock && !replayMode;
 
   const rules: RiskRule[] = [];
 
@@ -103,9 +112,10 @@ export const RiskStatusPanel: React.FC<RiskStatusPanelProps> = ({
     });
   }
 
+  // Abreviação inteligente para não truncar: tooltip com valor completo
   rules.push({
     label: 'Hard Cap por Magic',
-    value: 'Monitorado pela ponte',
+    value: 'ATIVO',
     active: true,
     ok: true,
   });
@@ -135,12 +145,20 @@ export const RiskStatusPanel: React.FC<RiskStatusPanelProps> = ({
               : 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200 hover:bg-emerald-950/80 hover:border-emerald-400/50'
           }`}
           title={
-            ordersBlocked
-              ? 'MODO SEGURO: a ponte está travada (ORDERS_BLOCKED). Nenhuma ordem de entrada sai para o MT5.'
-              : 'MODO OPERACIONAL: ordens de entrada estão liberadas.'
+            !isConnected
+              ? 'SEM CONEXÃO: a ponte está desconectada. Nenhuma ordem de entrada sai para o MT5. Modo forçado a SEGURO.'
+              : ordersBlocked
+                ? 'MODO SEGURO: a ponte está travada (ORDERS_BLOCKED). Nenhuma ordem de entrada sai para o MT5.'
+                : 'MODO OPERACIONAL: ordens de entrada estão liberadas.'
           }
         >
-          {ordersBlocked ? (
+          {!isConnected ? (
+            <>
+              <Lock className="w-3 h-3 text-rose-400 shrink-0" />
+              <span className="text-rose-200">MODO SEGURO</span>
+              <span className="text-rose-400/90 text-[9px] font-mono">SEM CONEXÃO</span>
+            </>
+          ) : ordersBlocked ? (
             <>
               <Lock className="w-3 h-3 text-rose-400 shrink-0" />
               <span className="text-rose-200">MODO SEGURO</span>
@@ -153,41 +171,56 @@ export const RiskStatusPanel: React.FC<RiskStatusPanelProps> = ({
             </>
           )}
         </button>
+
+        {/* Alerta vermelho pulsante: contradição (desconectado + ordens liberadas) */}
+        {contradiction && (
+          <div className="flex items-center gap-1 px-2 py-1 rounded-md border-rose-500/50 bg-rose-900/40 animate-pulse">
+            <AlertTriangle className="w-3 h-3 text-rose-400 shrink-0" />
+            <span className="text-[10px] font-bold text-rose-300">PONTE DESCONECTADA MAS ORDENS LIBERADAS</span>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 overflow-x-auto no-scrollbar pb-0.5">
-        {rules.map((rule, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-1 px-2 py-1 rounded-md border text-[9px] sm:text-xs leading-none shrink-0 whitespace-nowrap transition-colors"
-            style={{
-              backgroundColor: rule.ok
-                ? 'rgba(16, 185, 129, 0.10)'
-                : 'rgba(239, 68, 68, 0.10)',
-              borderColor: rule.ok
-                ? 'rgba(16, 185, 129, 0.35)'
-                : 'rgba(239, 68, 68, 0.35)',
-            }}
-            title={rule.label}
-          >
-            <span
-              className={`shrink-0 ${rule.ok ? 'text-emerald-400' : 'text-rose-400'}`}
+        {rules.map((rule, i) => {
+          const showTooltip = rule.label === 'Hard Cap por Magic';
+          return (
+            <div
+              key={i}
+              className="flex items-center gap-1 px-2 py-1 rounded-md border text-[9px] sm:text-xs leading-none shrink-0 whitespace-nowrap transition-colors"
+              style={{
+                backgroundColor: rule.ok
+                  ? 'rgba(16, 185, 129, 0.10)'
+                  : 'rgba(239, 68, 68, 0.10)',
+                borderColor: rule.ok
+                  ? 'rgba(16, 185, 129, 0.35)'
+                  : 'rgba(239, 68, 68, 0.35)',
+              }}
+              title={
+                showTooltip
+                  ? 'Hard Cap por Magic: limite máximo de exposição por magic number, monitorado pela ponte.'
+                  : rule.label
+              }
             >
-              {rule.ok ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
-            </span>
-            <span className={`font-medium shrink-0 text-slate-200 ${rule.ok ? 'text-emerald-100' : 'text-rose-200'}`}>
-              {rule.label}
-            </span>
-            <span
-              className={`font-mono font-bold shrink-0 ${rule.ok ? 'text-emerald-200' : 'text-rose-300'}`}
-            >
-              {rule.value}
-            </span>
-            {i < rules.length - 1 && (
-              <ChevronRight className="w-3 h-3 text-slate-600 shrink-0" />
-            )}
-          </div>
-        ))}
+              <span
+                className={`shrink-0 ${rule.ok ? 'text-emerald-400' : 'text-rose-400'}`}
+              >
+                {rule.ok ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+              </span>
+              <span className={`font-medium shrink-0 text-slate-200 ${rule.ok ? 'text-emerald-100' : 'text-rose-200'}`}>
+                {rule.label}
+              </span>
+              <span
+                className={`font-mono font-bold shrink-0 ${rule.ok ? 'text-emerald-200' : 'text-rose-300'}`}
+              >
+                {rule.value}
+              </span>
+              {i < rules.length - 1 && (
+                <ChevronRight className="w-3 h-3 text-slate-600 shrink-0" />
+              )}
+            </div>
+          );
+        })}
       </div>
     </section>
   );

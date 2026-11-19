@@ -138,7 +138,7 @@ import { computeSessionLevels, computeRunningVwap, PriceLevel, VwapCurve } from 
 
 import type { HedgeBook, HedgeSideBook } from './components/BoletaTicket';
 
-import { getBridgeToken, clearBridgeToken, syncBridgeTokenWithServer } from './utils/bridgeSecurity';
+import { getBridgeToken, setBridgeToken, clearBridgeToken, syncBridgeTokenWithServer } from './utils/bridgeSecurity';
 
 import { seriesCollectorService } from './services/seriesCollectorService';
 
@@ -726,6 +726,9 @@ export default function App() {
     getPregaoCompactCode,
     sessionGaps, setSessionGaps,
   } = useSession(asset);
+
+  const configRef = useRef(config);
+  configRef.current = config;
 
 
 
@@ -1499,6 +1502,8 @@ export default function App() {
     status: 'DISCONNECTED',
 
   });
+  const mt5StateRef = useRef(mt5State);
+  mt5StateRef.current = mt5State;
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -4659,8 +4664,9 @@ export default function App() {
     // argumento. Um objeto de evento não é pedido de conexão: ele tem que ser tratado como
     // "toggle", senão o botão de desconectar passa reto no ramo de CONNECT e abre outra ponte.
     const pedido = manualAction === 'CONNECT' || manualAction === 'DISCONNECT' ? manualAction : undefined;
+    const currentMt5Status = mt5StateRef.current.status;
 
-    if (pedido === 'DISCONNECT' || (pedido === undefined && (mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING'))) {
+    if (pedido === 'DISCONNECT' || (pedido === undefined && (currentMt5Status === 'CONNECTED' || currentMt5Status === 'CONNECTING'))) {
       userDisconnectedRef.current = true;
       if (!isRemoteSync) {
         try {
@@ -4712,13 +4718,14 @@ export default function App() {
     userDisconnectedRef.current = false;
     setMt5State({ status: 'CONNECTING' });
     let host = '127.0.0.1';
-    const rawHost = (config.mt5Host || '').trim();
+    const cfg = configRef.current;
+    const rawHost = (cfg.mt5Host || '').trim();
     if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
       host = '127.0.0.1';
     } else if (rawHost && rawHost.toLowerCase() !== 'localhost' && rawHost !== '127.0.0.1') {
       host = rawHost;
     }
-    const port = config.mt5Port || 8765;
+    const port = cfg.mt5Port || 8765;
     const wsUrl = `ws://${host}:${port}`;
     addConnectionLog('INFO', 'WEBSOCKET', `Iniciando conexão WebSocket com ${wsUrl}...`);
 
@@ -4731,27 +4738,28 @@ export default function App() {
         if (wsRef.current !== socket) return;
         addConnectionLog('SUCCESS', 'WEBSOCKET', `Conexão WebSocket aberta com sucesso em ${wsUrl}. Realizando autenticação e subscrição...`);
         try {
-          socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
+          const activeCfg = configRef.current;
+          socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: activeCfg.active }));
           // Informa à ponte qual ativo está selecionado nesta aba logo na conexão
           socket.send(JSON.stringify({
             action: 'SELECT_ASSET',
             assetId: asset.id,
             symbol: chartSymbolFor(asset),
-            boxPoints: config.boxPoints,
+            boxPoints: activeCfg.boxPoints,
           }));
           // Informa à ponte QUAL estratégia está ativa neste navegador. Sem o profileName a ponte
           // mantinha o default dela ("Janela de Fluxo & Agressão") e o devolvia em broadcast,
           // trocando a estratégia do operador a cada F5.
           strategyConnectAtRef.current = Date.now();
           try {
-            const syncMsg = JSON.parse(EaConfigService.buildBridgeSyncMessage(config));
+            const syncMsg = JSON.parse(EaConfigService.buildBridgeSyncMessage(activeCfg));
             const localName = activeStrategyNameRef.current;
             if (localName) syncMsg.profileName = localName;
             socket.send(JSON.stringify(syncMsg));
           } catch {
-            socket.send(EaConfigService.buildBridgeSyncMessage(config));
+            socket.send(EaConfigService.buildBridgeSyncMessage(activeCfg));
           }
-          socket.send(JSON.stringify({ action: 'GET_BACKFILL', symbol: chartSymbolFor(asset), days: 5, boxPoints: config.boxPoints }));
+          // Backfill inicial do ativo já é enviado automaticamente na resposta do AUTH pelo backend.
           socket.send(JSON.stringify({ action: 'LIST_LOCAL_PREGOES', symbol: chartSymbolFor(asset) }));
         } catch {}
 
@@ -4816,6 +4824,10 @@ export default function App() {
             const ok = Boolean(payload.data?.ok);
             const armed = Boolean(payload.data?.armed);
             const requireToken = Boolean(payload.data?.requireToken);
+            if (ok && typeof payload.data?.token === 'string' && payload.data.token.length >= 16) {
+              setBridgeToken(payload.data.token);
+            }
+            reconnectAttemptsRef.current = 0;
 
             addConnectionLog(
               ok ? 'SUCCESS' : 'ERROR',
@@ -5031,7 +5043,12 @@ export default function App() {
                 let updated = prev.map((o) => {
                   if (!isOrderForAsset(o, curActiveAsset)) return o;
                   const isAlive = o.status === 'OPEN' || o.status === 'PENDING_LIMIT';
-                  if (isAlive && (relevantLive.length === 0 || (o.ticket && !liveTicketSet.has(o.ticket)) || (o.isRealMT5 && !liveTicketSet.has(o.ticket || 0)))) {
+                  const isRecent = (Date.now() - o.timestamp < 15000);
+                  const hasRealTicket = Boolean(o.ticket && o.ticket >= 1000000);
+
+                  // Só encerra ordens que já possuíam ticket definitivo no MT5 e que de fato saíram do liveTicketSet.
+                  // Ordens recém-disparadas ou aguardando vinculação não são prematuramente descartadas.
+                  if (isAlive && !isRecent && hasRealTicket && !liveTicketSet.has(o.ticket!)) {
                     const exitDeal = dealsList.slice().reverse().find((d) => (d.order === o.ticket || d.ticket === o.ticket) && isSymbolForAsset(d.symbol, curActiveAsset));
                     const safeEntry = isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice;
                     const rawExit = exitDeal && Number(exitDeal.price) > 0 ? Number(exitDeal.price) : curPrice;
@@ -5053,9 +5070,9 @@ export default function App() {
                     };
                   }
                   // Descarta ordens locais abertas sem ticket apenas se foram disparadas para o MT5 (isRealMT5)
-                  // e passaram mais de 30 segundos sem confirmação do terminal (rejeitadas pela corretora).
+                  // e passaram mais de 60 segundos sem confirmação do terminal (rejeitadas pela corretora).
                   // Ordens puramente simuladas / paper jamais são descartadas aqui.
-                  if (o.isRealMT5 && o.status === 'OPEN' && !o.ticket && (Date.now() - o.timestamp > 30000)) {
+                  if (o.isRealMT5 && o.status === 'OPEN' && (!o.ticket || o.ticket < 1000000) && (Date.now() - o.timestamp > 60000)) {
                     const safeExit = isPriceSaneForAsset(curPrice, curActiveAsset) ? curPrice : (isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice);
                     return {
                       ...o,
@@ -5401,6 +5418,30 @@ export default function App() {
             // pela trava de risco e morria no execute_market_order sem a tela dizer nada.
 
             const ok = Boolean(payload.data?.ok);
+            const resTicket = payload.data?.ticket ? Number(payload.data.ticket) : null;
+            const resMagic = payload.data?.magic ? Number(payload.data.magic) : null;
+            const resType = payload.data?.type;
+
+            if (ok && resTicket && resTicket >= 1000000) {
+              setOrders((prev) => {
+                let linked = false;
+                return prev.map((o) => {
+                  if (!linked && (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && (!o.ticket || o.ticket < 1000000)) {
+                    if (!resType || o.type === resType) {
+                      if (!resMagic || Number(o.magicNumber) === resMagic) {
+                        linked = true;
+                        return {
+                          ...o,
+                          ticket: resTicket,
+                          isRealMT5: true,
+                        };
+                      }
+                    }
+                  }
+                  return o;
+                });
+              });
+            }
 
             setLatestToast({
 
@@ -5806,7 +5847,12 @@ export default function App() {
                 let updated = prev.map((o) => {
                   if (!isOrderForAsset(o, curActiveAsset)) return o;
                   const isAlive = o.status === 'OPEN' || o.status === 'PENDING_LIMIT';
-                  if (isAlive && (relevantLive.length === 0 || (o.ticket && !liveTicketSet.has(o.ticket)) || (o.isRealMT5 && !liveTicketSet.has(o.ticket || 0)))) {
+                  const isRecent = (Date.now() - o.timestamp < 15000);
+                  const hasRealTicket = Boolean(o.ticket && o.ticket >= 1000000);
+
+                  // Só encerra ordens que já possuíam ticket definitivo no MT5 e que de fato saíram do liveTicketSet.
+                  // Ordens recém-disparadas ou aguardando vinculação não são prematuramente descartadas.
+                  if (isAlive && !isRecent && hasRealTicket && !liveTicketSet.has(o.ticket!)) {
                     const exitDeal = dealsList.slice().reverse().find((d) => (d.order === o.ticket || d.ticket === o.ticket) && isSymbolForAsset(d.symbol, curActiveAsset));
                     const safeEntry = isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice;
                     const rawExit = exitDeal && Number(exitDeal.price) > 0 ? Number(exitDeal.price) : curPrice;
@@ -5828,9 +5874,9 @@ export default function App() {
                     };
                   }
                   // Descarta ordens locais abertas sem ticket apenas se foram disparadas para o MT5 (isRealMT5)
-                  // e passaram mais de 30 segundos sem confirmação do terminal (rejeitadas pela corretora).
+                  // e passaram mais de 60 segundos sem confirmação do terminal (rejeitadas pela corretora).
                   // Ordens puramente simuladas / paper jamais são descartadas aqui.
-                  if (o.isRealMT5 && o.status === 'OPEN' && !o.ticket && (Date.now() - o.timestamp > 30000)) {
+                  if (o.isRealMT5 && o.status === 'OPEN' && (!o.ticket || o.ticket < 1000000) && (Date.now() - o.timestamp > 60000)) {
                     const safeExit = isPriceSaneForAsset(curPrice, curActiveAsset) ? curPrice : (isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice);
                     return {
                       ...o,
@@ -5980,21 +6026,45 @@ export default function App() {
 
           } else if (payload.type === 'ORDER_RESULT') {
 
+            const resTicket = payload.ticket ? Number(payload.ticket) : (payload.data?.ticket ? Number(payload.data.ticket) : null);
+            const resType = payload.orderType || payload.data?.type;
+            const resMagic = payload.magic ? Number(payload.magic) : (payload.data?.magic ? Number(payload.data.magic) : null);
+            if (resTicket && resTicket >= 1000000) {
+              setOrders((prev) => {
+                let linked = false;
+                return prev.map((o) => {
+                  if (!linked && (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') && (!o.ticket || o.ticket < 1000000)) {
+                    if (!resType || o.type === resType) {
+                      if (!resMagic || Number(o.magicNumber) === resMagic) {
+                        linked = true;
+                        return {
+                          ...o,
+                          ticket: resTicket,
+                          isRealMT5: true,
+                        };
+                      }
+                    }
+                  }
+                  return o;
+                });
+              });
+            }
+
             setLatestToast({
 
               id: `mt5-ord-${Date.now()}`,
 
-              type: payload.orderType === 'BUY' ? 'BUY' : 'SELL',
+              type: (payload.orderType || payload.data?.type) === 'BUY' ? 'BUY' : 'SELL',
 
               chartOnly: true,
 
-              title: payload.status === 'DONE' ? 'ORDEM EXECUTADA NO MT5' : 'ERRO NO ENVIO MT5',
+              title: (payload.status === 'DONE' || payload.data?.ok) ? 'ORDEM EXECUTADA NO MT5' : 'ERRO NO ENVIO MT5',
 
               description:
 
-                payload.status === 'DONE'
+                (payload.status === 'DONE' || payload.data?.ok)
 
-                  ? `Ticket #${payload.ticket} executado a mercado no MetaTrader 5!`
+                  ? `Ticket #${resTicket || ''} executado a mercado no MetaTrader 5!`
 
                   : 'Falha ao enviar ordem para o MT5. Verifique margem e conexão.',
 
@@ -6172,7 +6242,7 @@ export default function App() {
 
     }
 
-  }, [config.mt5Host, config.mt5Port, config.active, mt5State.status]);
+  }, [asset]);
 
 
 
@@ -6190,21 +6260,42 @@ export default function App() {
 
 
 
-  // RECONEXÃO CONTÍNUA COM O MT5:
-  // Se a ponte cair ou ainda não tiver subido, tenta restabelecer a cada 2.5s silenciosamente.
-  // Só para se o operador clicar explicitamente em Desconectar (userDisconnectedRef = true).
+  // RECONEXÃO CONTÍNUA COM O MT5 COM EXPONENTIAL BACKOFF E JITTER:
+  // Evita rajadas de conexões que sobrecarregam a porta 8765 (gerando quedas repetidas).
+  // Intervalo inicial de ~2.0s, escalando até no máximo 15s com jitter de ±400ms.
+  const reconnectAttemptsRef = useRef(0);
+
   useEffect(() => {
-    if (userDisconnectedRef.current) return;
-    if (mt5State.status === 'CONNECTED' || mt5State.status === 'CONNECTING') return;
+    if (userDisconnectedRef.current) {
+      reconnectAttemptsRef.current = 0;
+      return;
+    }
+    if (mt5State.status === 'CONNECTED') {
+      reconnectAttemptsRef.current = 0;
+      return;
+    }
+    if (mt5State.status === 'CONNECTING') return;
+
+    const attempts = reconnectAttemptsRef.current;
+    // Backoff exponencial: 2.0s, 3.5s, 6.0s, 10.0s até o teto de 15.0s
+    const baseDelay = Math.min(15000, 2000 * Math.pow(1.6, Math.min(attempts, 5)));
+    const jitter = Math.floor(Math.random() * 800) - 400; // ±400ms de dispersão
+    const delay = Math.max(1500, Math.round(baseDelay + jitter));
 
     const timer = setTimeout(() => {
       if (!userDisconnectedRef.current && (mt5State.status === 'DISCONNECTED' || mt5State.status === 'ERROR')) {
+        reconnectAttemptsRef.current += 1;
+        addConnectionLog(
+          'INFO',
+          'RECONNECT',
+          `Tentativa de reconexão #${reconnectAttemptsRef.current} à ponte (após espera de ${(delay / 1000).toFixed(1)}s com backoff)...`
+        );
         toggleMT5ConnectRef.current?.('CONNECT', true);
       }
-    }, 2500);
+    }, delay);
 
     return () => clearTimeout(timer);
-  }, [mt5State.status]);
+  }, [mt5State.status, addConnectionLog]);
 
 
 
@@ -6231,7 +6322,7 @@ export default function App() {
 
     }
 
-  }, [config.active, mt5State.status]);
+  }, [config.active]);
 
 
 

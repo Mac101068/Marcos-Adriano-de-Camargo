@@ -24,7 +24,9 @@ export function generateBridgeToken(): string {
   return out;
 }
 
-/** Retorna o token atual (memória > localStorage > novo) */
+export const DEFAULT_BRIDGE_TOKEN = 'fluxo-renko-ponte-2026-chave-fixa-marcos';
+
+/** Retorna o token atual (memória > localStorage > padrão fixo de segurança) */
 export function getBridgeToken(): string {
   if (memoryToken && memoryToken.length >= 16) return memoryToken;
 
@@ -36,10 +38,10 @@ export function getBridgeToken(): string {
     }
   } catch { }
 
-  const fresh = generateBridgeToken();
-  memoryToken = fresh;
-  try { localStorage.setItem(TOKEN_STORAGE_KEY, fresh); } catch { }
-  return fresh;
+  // Fallback para o token oficial configurado na ponte do backend
+  memoryToken = DEFAULT_BRIDGE_TOKEN;
+  try { localStorage.setItem(TOKEN_STORAGE_KEY, DEFAULT_BRIDGE_TOKEN); } catch { }
+  return DEFAULT_BRIDGE_TOKEN;
 }
 
 /** Define token manualmente */
