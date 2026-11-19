@@ -395,6 +395,8 @@ def check_magic_hard_caps(symbol: str = None) -> list:
                     status="HARD_CAP_CLOSED" if is_done else "HARD_CAP_FAILED",
                     result_pnl=float(pos.profit),
                     position_ticket=pos.ticket,
+                    res=res,
+                    open_price=float(pos.price_open),
                 )
                 closed_positions.append(pos.ticket)
 
@@ -801,11 +803,14 @@ def log_trade_execution(
     box_index: str = "",
     sl_points: float = None,
     tp_points: float = None,
-    position_ticket: int = None
+    position_ticket: int = None,
+    res=None,
+    open_price: float = None,
 ):
     """
     Persiste o histórico de trades em formato JSONL em data/trades_YYYY-MM-DD.json.
     Non-blocking I/O, resiliente a falhas de disco e sem expor tokens ou dados sensíveis.
+    Garante o cálculo e persistência do result_pnl financeiro real para ordens de fechamento.
     """
     try:
         if not os.path.exists(DATA_DIR):
@@ -814,6 +819,116 @@ def log_trade_execution(
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
         log_file = os.path.join(DATA_DIR, f"trades_{date_str}.json")
+
+        action_u = str(action or "").upper()
+        closing_actions = {"CLOSE_POSITION", "CLOSE_PARCIAL", "TAKE_PROFIT", "STOP_LOSS", "HARD_CAP_CLOSED"}
+        is_closing = (action_u in closing_actions) or any(k in action_u for k in ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "ZERAR"))
+
+        final_pnl = 0.0
+        if is_closing:
+            pnl_found = None
+
+            # 1. Recupera do resultado do MT5 (res.profit) se disponível
+            if res is not None:
+                profit_attr = getattr(res, "profit", None)
+                if profit_attr is not None:
+                    try:
+                        pnl_found = float(profit_attr)
+                    except (ValueError, TypeError):
+                        pass
+
+            # 2. Consulta posição fechada via mt5.history_deals_get()
+            if pnl_found is None:
+                try:
+                    deals = None
+                    deal_ticket = getattr(res, "deal", None) if res is not None else None
+                    if deal_ticket and int(deal_ticket) > 0:
+                        with MT5_LOCK:
+                            deals = mt5.history_deals_get(ticket=int(deal_ticket))
+
+                    if not deals:
+                        pos_id = position_ticket or ticket
+                        if pos_id and int(pos_id) > 0:
+                            with MT5_LOCK:
+                                deals = mt5.history_deals_get(position=int(pos_id))
+
+                    if deals:
+                        out_deals = [d for d in deals if getattr(d, "entry", -1) == getattr(mt5, "DEAL_ENTRY_OUT", 1) or getattr(d, "profit", 0.0) != 0.0]
+                        chosen_deal = out_deals[-1] if out_deals else deals[-1]
+                        d_profit = float(getattr(chosen_deal, "profit", 0.0))
+                        d_comm = float(getattr(chosen_deal, "commission", 0.0))
+                        d_swap = float(getattr(chosen_deal, "swap", 0.0))
+                        pnl_found = round(d_profit + d_comm + d_swap, 2)
+
+                        if exec_price is None and getattr(chosen_deal, "price", None):
+                            exec_price = float(chosen_deal.price)
+                except Exception:
+                    pass
+
+            # 3. Valor de result_pnl passado explicitamente pelo chamador
+            if pnl_found is None and result_pnl is not None and abs(float(result_pnl)) > 1e-6:
+                pnl_found = float(result_pnl)
+
+            # 4. Cálculo baseado em (preco_execucao - preco_abertura) * valor_do_ponto * volume (ajustado BUY/SELL)
+            if pnl_found is None:
+                try:
+                    p_exec = exec_price or (float(res.price) if res and getattr(res, "price", None) else None) or signal_price
+                    p_open = open_price
+
+                    if p_open is None:
+                        pos_id = position_ticket or ticket
+                        if pos_id and int(pos_id) > 0:
+                            try:
+                                with MT5_LOCK:
+                                    h_deals = mt5.history_deals_get(position=int(pos_id))
+                                if h_deals:
+                                    in_deals = [d for d in h_deals if getattr(d, "entry", -1) == getattr(mt5, "DEAL_ENTRY_IN", 0)]
+                                    if in_deals:
+                                        p_open = float(in_deals[0].price)
+                            except Exception:
+                                pass
+
+                    if p_exec is not None and p_open is not None and float(p_exec) > 0 and float(p_open) > 0:
+                        vol_used = float(volume) if volume is not None else 1.0
+                        pt_val = 1.0
+                        try:
+                            if "get_asset_spec" in globals():
+                                spec = get_asset_spec(symbol)
+                                pt_val = float(spec.get("point_value", 1.0))
+                            elif "SUPPORTED_ASSETS" in globals():
+                                sym_u = str(symbol).upper()
+                                for k, v in SUPPORTED_ASSETS.items():
+                                    if v.get("symbol") == sym_u or sym_u.startswith(k) or k in sym_u:
+                                        pt_val = float(v.get("point_value", 1.0))
+                                        break
+                        except Exception:
+                            if "WIN" in str(symbol).upper():
+                                pt_val = 0.20
+                            elif "WDO" in str(symbol).upper():
+                                pt_val = 10.00
+                            else:
+                                pt_val = 1.00
+
+                        side_u = str(side).upper()
+                        if side_u == "SELL":
+                            pts_diff = float(p_exec) - float(p_open)
+                        elif side_u == "BUY":
+                            pts_diff = float(p_open) - float(p_exec)
+                        else:
+                            pts_diff = float(p_exec) - float(p_open)
+
+                        pnl_found = round(pts_diff * pt_val * vol_used, 2)
+                except Exception:
+                    pass
+
+            if pnl_found is not None:
+                final_pnl = float(pnl_found)
+            elif result_pnl is not None:
+                final_pnl = float(result_pnl)
+            else:
+                final_pnl = 0.0
+        else:
+            final_pnl = 0.0
 
         slippage = None
         if signal_price is not None and exec_price is not None and signal_price > 0 and exec_price > 0:
@@ -837,7 +952,7 @@ def log_trade_execution(
             "magic": int(magic) if magic is not None else None,
             "comment": str(comment or "")[:32],
             "status": str(status),
-            "result_pnl": float(result_pnl),
+            "result_pnl": round(float(final_pnl), 2),
             "box_index": str(box_index),
             "sl_points": float(sl_points) if sl_points is not None else None,
             "tp_points": float(tp_points) if tp_points is not None else None,
@@ -2396,6 +2511,21 @@ class MT5OrderManager:
             direction = self.pyramid_tickets.pop(ticket)
             print(f"🎯 [TP/FECHAMENTO PIRÂMIDE #{ticket} {direction} [{self.symbol}]] Movendo ordem mãe para o breakeven...", flush=True)
             self.move_main_to_breakeven(direction)
+            try:
+                pyr_close_side = "SELL" if str(direction).upper() == "BUY" else "BUY"
+                log_trade_execution(
+                    symbol=self.symbol,
+                    side=pyr_close_side,
+                    action="TAKE_PROFIT",
+                    volume=float(getattr(self, "pyramid_contracts", 1.0) or 1.0),
+                    ticket=ticket,
+                    magic=self.magic_number,
+                    comment=f"PIRAMIDE_CLOSED #{ticket}",
+                    status="EXECUTED",
+                    position_ticket=ticket,
+                )
+            except Exception:
+                pass
 
 
 
@@ -2429,7 +2559,8 @@ class MT5OrderManager:
 
     def _audit_ordem(self, acao="MERCADO", direcao="", volume=None, preco_box=None, preco_solicitado=None,
                      preco_fill=None, ticket=None, retcode=None, executada=False, motivo="",
-                     box_index="", sl_points=None, tp_points=None, magic=None, position=None):
+                     box_index="", sl_points=None, tp_points=None, magic=None, position=None,
+                     result_pnl=None, res=None, open_price=None):
         """Registra a tentativa no diário SEMPRE, inclusive quando nada é enviado.
 
         Existiu um pregão inteiro em que o console dizia "[ABRINDO ORDEM MÃE]" e nenhuma ordem
@@ -2467,6 +2598,9 @@ class MT5OrderManager:
                 sl_points=sl_points,
                 tp_points=tp_points,
                 position_ticket=position,
+                result_pnl=result_pnl if result_pnl is not None else 0.0,
+                res=res,
+                open_price=open_price,
             )
         except Exception:
             pass
@@ -2714,110 +2848,139 @@ class MT5OrderManager:
 
 
     def close_partial_position(self, ticket, partial_volume, new_sl=None, magic=None):
+        with MT5_LOCK:
+            positions = None
+            if ticket:
+                try:
+                    positions = mt5.positions_get(ticket=int(ticket))
+                except Exception:
+                    positions = None
+            if not positions:
+                try:
+                    positions = mt5.positions_get(symbol=self.symbol)
+                    if positions and magic is not None:
+                        filtered = [p for p in positions if p.magic == int(magic)]
+                        if filtered:
+                            positions = filtered
+                except Exception:
+                    positions = None
 
-        positions = mt5.positions_get(ticket=ticket)
+            if not positions:
+                print(f"⚠️ [CLOSE_PARCIAL AVISO] Nenhuma posição encontrada para encerrar ticket={ticket}", flush=True)
+                return False
 
-        if not positions:
+            pos = positions[0]
+            pos_sym = pos.symbol
+            close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
 
-            positions = mt5.positions_get(symbol=self.symbol)
+            tick = mt5.symbol_info_tick(pos_sym)
+            if not tick:
+                print(f"⚠️ [CLOSE_PARCIAL SEM TICK] Não foi possível obter tick para {pos_sym}", flush=True)
+                return False
 
-        if not positions:
+            price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
+            vol_to_close = min(float(partial_volume), float(pos.volume)) if partial_volume else float(pos.volume)
 
-            return False
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "position": int(pos.ticket),
+                "symbol": pos_sym,
+                "volume": vol_to_close,
+                "type": close_type,
+                "price": price,
+                "deviation": 25,
+                "magic": int(magic) if magic else int(pos.magic),
+                "comment": f"Parcial #{pos.ticket}"[:31],
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": self.get_filling_mode(),
+            }
 
+            res = mt5.order_send(request)
 
-
-        pos = positions[0]
-
-        close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-
-        tick = mt5.symbol_info_tick(self.symbol)
-
-        price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
-
-
-
-        request = {
-
-            "action": mt5.TRADE_ACTION_DEAL,
-
-            "position": pos.ticket,
-
-            "symbol": self.symbol,
-
-            "volume": float(partial_volume),
-
-            "type": close_type,
-
-            "price": price,
-
-            "deviation": 20,
-
-            "magic": int(magic) if magic else self.magic_number,
-
-            "comment": f"Parcial #{pos.ticket}",
-
-            "type_time": mt5.ORDER_TIME_GTC,
-
-            "type_filling": self.get_filling_mode(),
-
-        }
-
-
-
-        res = mt5.order_send(request)
-
-        if res.retcode == mt5.TRADE_RETCODE_DONE:
+        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+            spec = get_asset_spec(pos_sym)
+            pt_value = spec.get("point_value", ASSET_POINT_VALUE)
+            exec_p = getattr(res, "price", price) or price
+            dir_sign = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else -1.0
+            pnl_parcial = (exec_p - pos.price_open) * dir_sign * pt_value * float(vol_to_close)
 
             self._audit_ordem("CLOSE_PARCIAL", "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY",
-                              partial_volume, None, None, price, res.order, res.retcode, True,
-                              "PARCIAL_ACCEPTED", magic=magic, position=pos.ticket)
+                              vol_to_close, None, None, exec_p, res.order, res.retcode, True,
+                              "PARCIAL_ACCEPTED", magic=magic, position=pos.ticket,
+                              result_pnl=pnl_parcial, res=res, open_price=pos.price_open)
 
             if new_sl is not None:
-
-                self.modify_stop_loss(pos.ticket, new_sl)
+                self.modify_stop_loss(pos.ticket, new_sl, magic=magic)
 
             return True
-
-        return False
-
+        else:
+            ret_c = getattr(res, 'retcode', None)
+            ret_desc = getattr(res, 'comment', 'sem resposta')
+            print(f"❌ [CLOSE_PARCIAL FALHA MT5] #{pos.ticket} RetCode={ret_c} ({ret_desc})", flush=True)
+            return False
 
 
     def modify_stop_loss(self, ticket, new_sl, magic=None):
-
-        positions = mt5.positions_get(ticket=ticket)
-
-        if not positions:
-
-            positions = mt5.positions_get(symbol=self.symbol)
-
-        if not positions:
-
+        if new_sl is None or float(new_sl) <= 0:
             return False
 
+        with MT5_LOCK:
+            positions = None
+            if ticket:
+                try:
+                    positions = mt5.positions_get(ticket=int(ticket))
+                except Exception:
+                    positions = None
+            if not positions:
+                try:
+                    positions = mt5.positions_get(symbol=self.symbol)
+                    if positions and magic is not None:
+                        filtered = [p for p in positions if p.magic == int(magic)]
+                        if filtered:
+                            positions = filtered
+                except Exception:
+                    positions = None
 
+            if not positions:
+                print(f"⚠️ [MODIFY_SL AVISO] Nenhuma posição encontrada para ticket={ticket} / symbol={self.symbol}", flush=True)
+                return False
 
-        pos = positions[0]
+            pos = positions[0]
+            pos_sym = pos.symbol
+            sym_info = mt5.symbol_info(pos_sym)
+            tick_size = sym_info.trade_tick_size if (sym_info and sym_info.trade_tick_size > 0) else 1.0
+            digits = sym_info.digits if sym_info else 0
 
-        request = {
+            # Arredondamento estrito pelo tick_size para evitar INVALID_STOPS / INVALID_PRICE
+            sl_rounded = round(round(float(new_sl) / tick_size) * tick_size, digits)
 
-            "action": mt5.TRADE_ACTION_SLTP,
+            # Valida distância em relação ao preço de mercado
+            tick = mt5.symbol_info_tick(pos_sym)
+            if tick:
+                is_buy = (pos.type == mt5.ORDER_TYPE_BUY)
+                if is_buy and sl_rounded >= tick.bid:
+                    sl_rounded = round(round((tick.bid - tick_size) / tick_size) * tick_size, digits)
+                elif not is_buy and sl_rounded <= tick.ask:
+                    sl_rounded = round(round((tick.ask + tick_size) / tick_size) * tick_size, digits)
 
-            "position": pos.ticket,
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": int(pos.ticket),
+                "symbol": pos_sym,
+                "sl": float(sl_rounded),
+                "tp": float(pos.tp),
+                "magic": int(magic) if magic else int(pos.magic)
+            }
 
-            "symbol": self.symbol,
-
-            "sl": float(new_sl),
-
-            "tp": float(pos.tp),
-
-            "magic": int(magic) if magic else self.magic_number
-
-        }
-
-        res = mt5.order_send(request)
-
-        return res.retcode == mt5.TRADE_RETCODE_DONE
+            res = mt5.order_send(request)
+            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                print(f"✅ [TRAILING STOP ATUALIZADO] Posição #{pos.ticket} ({pos_sym}) novo SL={sl_rounded} (Magic={request['magic']})", flush=True)
+                return True
+            else:
+                ret_c = getattr(res, 'retcode', None)
+                ret_desc = getattr(res, 'comment', 'sem resposta')
+                print(f"⚠️ [MODIFY_SL FALHA MT5] Posição #{pos.ticket} SL={sl_rounded} RetCode={ret_c} ({ret_desc})", flush=True)
+                return False
 
 
 
@@ -2885,11 +3048,14 @@ class MT5OrderManager:
                 # A zeragem também vai para a trilha, com magic e ticket da posição: é o que permite
                 # atribuir o resultado ao dono certo no cruzamento com o extrato.
                 _ok_zero = bool(res) and res.retcode == mt5.TRADE_RETCODE_DONE
+                exec_p = getattr(res, "price", price) or price
+                pos_pnl = (exec_p - pos.price_open) * dir_sign * pt_value * pos.volume if _ok_zero else 0.0
                 self._audit_ordem("CLOSE_POSITION", "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY",
-                                  pos.volume, None, None, price, getattr(res, "order", None),
+                                  pos.volume, None, None, exec_p, getattr(res, "order", None),
                                   getattr(res, "retcode", None), _ok_zero,
                                   "ZERAGEM_ACCEPTED" if _ok_zero else f"ZERAGEM_REJEITADA | {getattr(res, 'comment', '')}",
-                                  magic=magic_filter, position=pos.ticket)
+                                  magic=magic_filter, position=pos.ticket,
+                                  result_pnl=pos_pnl, res=res, open_price=pos.price_open)
 
         # 2. CANCELA ORDENS PENDENTES (Buy Limit, Sell Limit, Buy Stop, Sell Stop)
         with MT5_LOCK:
@@ -3037,6 +3203,29 @@ class MT5VaralManager:
                     res = mt5.order_send(req)
                 if res and res.retcode == mt5.TRADE_RETCODE_DONE:
                     print(f"🔄 [VARAL {self.symbol}] Posição #{pos.ticket} zerada por virada de sinal", flush=True)
+                    try:
+                        spec = get_asset_spec(self.symbol)
+                        pt_value = spec.get("point_value", ASSET_POINT_VALUE)
+                        dir_sign = 1.0 if is_buy else -1.0
+                        exec_p = getattr(res, "price", close_price) or close_price
+                        varal_pnl = (exec_p - pos.price_open) * dir_sign * pt_value * float(pos.volume)
+                        log_trade_execution(
+                            symbol=self.symbol,
+                            side="SELL" if is_buy else "BUY",
+                            action="CLOSE_POSITION",
+                            volume=float(pos.volume),
+                            exec_price=float(exec_p),
+                            ticket=getattr(res, "order", pos.ticket),
+                            magic=self.magic,
+                            comment=f"FLIP_VARAL_{pos.ticket}"[:31],
+                            status="EXECUTED",
+                            result_pnl=varal_pnl,
+                            position_ticket=pos.ticket,
+                            res=res,
+                            open_price=pos.price_open,
+                        )
+                    except Exception:
+                        pass
 
     def on_box_signal(self, signal, box_price, tick_time_msc=None):
         """
@@ -4436,23 +4625,19 @@ async def ws_handler(websocket):
                             })
 
                 elif action == "ORDER_PARTIAL_CLOSE":
-
-                    mgr.close_partial_position(
-
+                    req_sym = data.get("symbol") or target_sym
+                    req_mgr = get_or_create_order_manager(req_sym) if req_sym else mgr
+                    req_mgr.close_partial_position(
                         data.get("ticket"), data.get("partialVolume"), data.get("newSL"),
-
                         magic=data.get("robotMagic") or None
-
                     )
 
                 elif action == "ORDER_MODIFY_SL":
-
-                    mgr.modify_stop_loss(
-
+                    req_sym = data.get("symbol") or target_sym
+                    req_mgr = get_or_create_order_manager(req_sym) if req_sym else mgr
+                    req_mgr.modify_stop_loss(
                         data.get("ticket"), data.get("newSL"),
-
                         magic=data.get("robotMagic") or None
-
                     )
 
                 elif action == "CLOSE_POSITIONS":
