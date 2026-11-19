@@ -2870,7 +2870,7 @@ class MT5OrderManager:
                 return False
 
             pos = positions[0]
-            pos_sym = pos.symbol
+            pos_sym = getattr(pos, "symbol", self.symbol) or self.symbol
             close_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
 
             tick = mt5.symbol_info_tick(pos_sym)
@@ -2889,7 +2889,7 @@ class MT5OrderManager:
                 "type": close_type,
                 "price": price,
                 "deviation": 25,
-                "magic": int(magic) if magic else int(pos.magic),
+                "magic": int(magic) if magic else int(getattr(pos, "magic", self.magic_number)),
                 "comment": f"Parcial #{pos.ticket}"[:31],
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.get_filling_mode(),
@@ -2902,12 +2902,13 @@ class MT5OrderManager:
             pt_value = spec.get("point_value", ASSET_POINT_VALUE)
             exec_p = getattr(res, "price", price) or price
             dir_sign = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else -1.0
-            pnl_parcial = (exec_p - pos.price_open) * dir_sign * pt_value * float(vol_to_close)
+            pos_open = getattr(pos, "price_open", exec_p) or exec_p
+            pnl_parcial = (exec_p - pos_open) * dir_sign * pt_value * float(vol_to_close)
 
             self._audit_ordem("CLOSE_PARCIAL", "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY",
                               vol_to_close, None, None, exec_p, res.order, res.retcode, True,
                               "PARCIAL_ACCEPTED", magic=magic, position=pos.ticket,
-                              result_pnl=pnl_parcial, res=res, open_price=pos.price_open)
+                              result_pnl=pnl_parcial, res=res, open_price=pos_open)
 
             if new_sl is not None:
                 self.modify_stop_loss(pos.ticket, new_sl, magic=magic)
@@ -2935,7 +2936,7 @@ class MT5OrderManager:
                 try:
                     positions = mt5.positions_get(symbol=self.symbol)
                     if positions and magic is not None:
-                        filtered = [p for p in positions if p.magic == int(magic)]
+                        filtered = [p for p in positions if getattr(p, "magic", None) == int(magic)]
                         if filtered:
                             positions = filtered
                 except Exception:
@@ -2946,10 +2947,10 @@ class MT5OrderManager:
                 return False
 
             pos = positions[0]
-            pos_sym = pos.symbol
+            pos_sym = getattr(pos, "symbol", self.symbol) or self.symbol
             sym_info = mt5.symbol_info(pos_sym)
-            tick_size = sym_info.trade_tick_size if (sym_info and sym_info.trade_tick_size > 0) else 1.0
-            digits = sym_info.digits if sym_info else 0
+            tick_size = sym_info.trade_tick_size if (sym_info and getattr(sym_info, "trade_tick_size", 0) > 0) else 1.0
+            digits = getattr(sym_info, "digits", 0) if sym_info else 0
 
             # Arredondamento estrito pelo tick_size para evitar INVALID_STOPS / INVALID_PRICE
             sl_rounded = round(round(float(new_sl) / tick_size) * tick_size, digits)
@@ -2958,9 +2959,9 @@ class MT5OrderManager:
             tick = mt5.symbol_info_tick(pos_sym)
             if tick:
                 is_buy = (pos.type == mt5.ORDER_TYPE_BUY)
-                if is_buy and sl_rounded >= tick.bid:
+                if is_buy and hasattr(tick, "bid") and sl_rounded >= tick.bid:
                     sl_rounded = round(round((tick.bid - tick_size) / tick_size) * tick_size, digits)
-                elif not is_buy and sl_rounded <= tick.ask:
+                elif not is_buy and hasattr(tick, "ask") and sl_rounded <= tick.ask:
                     sl_rounded = round(round((tick.ask + tick_size) / tick_size) * tick_size, digits)
 
             request = {
@@ -2968,8 +2969,8 @@ class MT5OrderManager:
                 "position": int(pos.ticket),
                 "symbol": pos_sym,
                 "sl": float(sl_rounded),
-                "tp": float(pos.tp),
-                "magic": int(magic) if magic else int(pos.magic)
+                "tp": float(getattr(pos, "tp", 0.0) or 0.0),
+                "magic": int(magic) if magic else int(getattr(pos, "magic", self.magic_number))
             }
 
             res = mt5.order_send(request)
