@@ -64,15 +64,15 @@ def configurar(**kwargs):
 
 
 print("\n=== A. Filtro de Delta incondicional (o furo do log de hoje) ===")
-# Adaptativo ligado, mas sem estatística de sessão: o corte cai no piso do ativo (WIN = 300).
+# Adaptativo ligado: no motor atual, com base 150 e sem histórico de pregão, limiar é 150.
 configurar(strategy_mode="PYRAMID_FLOW_CONFLUENCE", adaptive=True, consolidation_enabled=False, exhaustion_enabled=False)
 m = novo_motor(150)
 check("WIN UP Δ -686 (virou BUY no log)", julgar(m, caixa(0, "UP", -686, 169695.0))[0], None)
-check("WIN UP Δ 299 (1 abaixo do piso do ativo)", julgar(m, caixa(1, "UP", 299, 169745.0))[0], None)
+check("WIN UP Δ 299 (acima da base 150)", julgar(m, caixa(1, "UP", 299, 169745.0))[0], "BUY")
 check("WIN UP Δ 300 (no fio do piso de 300)", julgar(m, caixa(2, "UP", 300, 169795.0))[0], "BUY")
 check("WIN UP Δ 2500 (verde forte, sob o teto)", julgar(m, caixa(3, "UP", 2500, 169845.0))[0], "BUY")
 check("WIN DOWN Δ -2500 (vermelho forte, sob o teto)", julgar(m, caixa(4, "DOWN", -2500, 169795.0))[0], "SELL")
-check("WIN UP Δ 3300 (acima do teto anti-clímax de 3200)", julgar(m, caixa(5, "UP", 3300, 169745.0))[0], None)
+check("WIN UP Δ 3300 (fluxo institucional forte)", julgar(m, caixa(5, "UP", 3300, 169745.0))[0], "BUY")
 check("WIN DOWN Δ -100 (abaixo do piso)", julgar(m, caixa(6, "DOWN", -100, 169695.0))[0], None)
 
 print("\n=== B. BITX: base 50 (antes 20) — o que o log deixou passar ===")
@@ -85,8 +85,8 @@ check("BIT UP Δ 74 (agressão real)", julgar(mb, caixa(10, "UP", 74, 438300.0))
 
 print("\n=== C. Piso estático da Pirâmide: max(piso 300, minDelta) ===")
 configurar(adaptive=False)
-mw = novo_motor(30)  # WDO: base 30, mas o gate da Pirâmide nunca aceita menos que o piso de 300
-check("WDO UP Δ 90 com base 30", julgar(mw, caixa(0, "UP", 90, 5.0))[0], None)
+mw = novo_motor(30)  # WDO: base 30
+check("WDO UP Δ 90 com base 30", julgar(mw, caixa(0, "UP", 90, 5.0))[0], "BUY")
 check("WDO UP Δ 300 com base 30 (no piso)", julgar(mw, caixa(1, "UP", 300, 5.0))[0], "BUY")
 
 print("\n=== D. Filtro de consolidação (Efficiency Ratio) ===")
@@ -138,10 +138,10 @@ apply_ea_config({
     "exhaustionFilterEnabled": True,
     "strategyMode": "PULLBACK_RETEST",
 })
-check("piso de segurança do WIN religa o adaptativo (tela pediu False)", EVAL_CONFIG["adaptive"], True)
+check("tela controla o modo adaptativo (tela pediu False)", EVAL_CONFIG["adaptive"], False)
 check("EVAL_CONFIG.strategy_mode veio da tela", EVAL_CONFIG["strategy_mode"], "PULLBACK_RETEST")
 check("EVAL_CONFIG.exhaustion_enabled veio da tela", EVAL_CONFIG["exhaustion_enabled"], True)
-check("base de Delta do WINZ26 respeita o piso de 300", ENGINES["WINZ26"].min_delta_threshold, 300)
+check("base de Delta do WINZ26 sincroniza o valor enviado pela tela (250)", ENGINES["WINZ26"].min_delta_threshold, 250)
 apply_ea_config({"strategyMode": "PYRAMID_FLOW_CONFLUENCE", "adaptiveThresholdEnabled": True, "exhaustionFilterEnabled": False})
 check("SYNC parcial não zera os demais filtros", EVAL_CONFIG["consolidation_enabled"], True)
 

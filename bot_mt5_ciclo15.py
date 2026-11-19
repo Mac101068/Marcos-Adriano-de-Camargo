@@ -283,10 +283,11 @@ MAGIC_HARD_CAPS = {
         "enabled": True,
         "description": "Hard Cap assimétrico para Magic 26092301",
         "assets": {
-            "BIT": {"max_loss_pts": 100.0},   # ~R$ 100,00 no BITX
-            "WIN": {"max_loss_pts": 150.0},   # R$ 30,00 no WIN (30 pts de tolerância)
-            "WDO": {"max_loss_pts": 5.0},     # R$ 5,00 no WDO (10 ticks)
-        }
+            "BIT": {"max_loss_pts": 100.0},   # ~R$ 100,00 no BITX (adequado à volatilidade)
+            "WIN": {"max_loss_pts": 150.0},   # R$ 30,00 no WIN (30 pts de tolerância para ruído)
+            "WDO": {"max_loss_pts": 5.0},     # R$ 5,00 no WDO (10 ticks de tolerância)
+        },
+        "default_max_loss_pts": 100.0,  # Fallback caso o ativo não esteja listado
     }
 }
 
@@ -330,7 +331,7 @@ def check_magic_hard_caps(symbol: str = None) -> list:
             if asset_k in assets_cfg:
                 max_loss_pts = float(assets_cfg[asset_k].get("max_loss_pts", 100.0))
             else:
-                max_loss_pts = float(cap_cfg.get("max_loss_pts", 100.0))
+                max_loss_pts = float(cap_cfg.get("default_max_loss_pts", cap_cfg.get("max_loss_pts", 100.0)))
 
             is_buy = (pos.type == mt5.POSITION_TYPE_BUY)
 
