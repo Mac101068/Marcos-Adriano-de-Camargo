@@ -2384,6 +2384,7 @@ export default function App() {
           wsRef.current!.send(JSON.stringify({
             action: 'ORDER_PARTIAL_CLOSE',
             ticket,
+            symbol: ord?.symbol || asset.activeContract || asset.primarySymbol,
             partialVolume: ord?.remainingContracts || ord?.contracts || c.contracts,
             robotMagic: r.magic,
           }));
@@ -2399,6 +2400,7 @@ export default function App() {
           wsRef.current!.send(JSON.stringify({
             action: 'ORDER_MODIFY_SL',
             ticket,
+            symbol: bookById.get(p.id)?.symbol || asset.activeContract || asset.primarySymbol,
             newSL: p.stopLoss,
             robotMagic: r.magic,
           }));
@@ -4237,6 +4239,7 @@ export default function App() {
                   JSON.stringify({
                     action: 'ORDER_MODIFY_SL',
                     ticket: ord.ticket,
+                    symbol: ord.symbol || asset.activeContract || asset.primarySymbol,
                     newSL: currentSL,
                     robotMagic: ord.magicNumber || mainRobotMagic(config),
                   })
@@ -4387,6 +4390,7 @@ export default function App() {
                   JSON.stringify({
                     action: 'ORDER_PARTIAL_CLOSE',
                     ticket: ord.ticket,
+                    symbol: ord.symbol || asset.activeContract || asset.primarySymbol,
                     partialVolume: activeCtros,
                     robotMagic: ord.magicNumber || mainRobotMagic(config),
                   })
@@ -9301,9 +9305,12 @@ export default function App() {
     };
     const mt5Stats = isRealMT5 ? (symStats || fallbackAssetStats) : undefined;
 
-    const buyContractsToday = mt5Stats ? mt5Stats.buyContractsToday : localBuyContractsToday;
-    const sellContractsToday = mt5Stats ? mt5Stats.sellContractsToday : localSellContractsToday;
-    const contractsTodayTotal = mt5Stats ? mt5Stats.totalContractsToday : (buyContractsToday + sellContractsToday);
+    const buyContractsToday = Math.max(mt5Stats?.buyContractsToday || 0, localBuyContractsToday);
+    const sellContractsToday = Math.max(mt5Stats?.sellContractsToday || 0, localSellContractsToday);
+    const contractsTodayTotal = Math.max(
+      mt5Stats?.totalContractsToday || (buyContractsToday + sellContractsToday),
+      buyContractsToday + sellContractsToday
+    );
     const realizedProfit = mt5Stats ? mt5Stats.realizedProfit : localRealizedProfit;
     const realizedLoss = mt5Stats ? mt5Stats.realizedLoss : localRealizedLoss;
 
