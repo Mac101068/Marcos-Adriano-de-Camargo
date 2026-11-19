@@ -158,6 +158,7 @@ import { SimulatorView } from './components/SimulatorView';
 import { B3MarketSimulator, generateHistoricalTicks, randomReplaySeed } from './utils/marketSimulator';
 
 import { Header } from './components/Header';
+import { RiskStatusPanel } from './components/RiskStatusPanel';
 
 import { RenkoFlowChart } from './components/RenkoFlowChart';
 
@@ -9870,6 +9871,13 @@ export default function App() {
 
         onToggleReplayMode={handleToggleReplayMode}
 
+      />
+      {/* Painel de Status de Risco — conexão WebSocket, modo de operação (ORDERS_BLOCKED) e regras de risco ativas */}
+
+      <RiskStatusPanel
+        mt5State={mt5State}
+        asset={asset}
+        onUnlockOrders={() => handleToggleReplayMode(false)}
       />
 
 
