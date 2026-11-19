@@ -601,6 +601,7 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => {
               if (mt5State.bridgeOrdersBlocked) {
                 onToggleReplayMode?.(false);
+                setRobotActive(true);
               } else if (!mt5State.bridgeArmed || !robotActive) {
                 setRobotActive(true);
               } else {

@@ -534,6 +534,10 @@ export function isOrderForAsset(
       if (asset.id === 'WDO') return p > 0 && p < 20000;
       return false;
     }
+    if (order.magicNumber === 999999) {
+      if (Number.isFinite(p) && p > 0) return isPriceSaneForAsset(p, asset);
+      return true;
+    }
   }
 
   // 4. Sem símbolo e sem magic: só aceita se o preço for estritamente são para este ativo

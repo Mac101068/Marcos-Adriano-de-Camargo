@@ -598,6 +598,20 @@ export class EaConfigService {
       flowTrendFilterEnabled: config.flowTrendFilterEnabled === true,
       flowTrendLookback: config.flowTrendLookback ?? 20,
       requireCvdNewExtreme: config.requireCvdNewExtreme,
+      // ── Parâmetros da boleta (ordem mãe + pirâmide) ──
+      pyramidTpPoints: config.pyramidTpPoints,
+      pyramidSlPoints: config.pyramidSlPoints,
+      pyramidContracts: config.pyramidContracts,
+      contracts: config.contracts,
+      holdMainUntilFlip: config.holdMainUntilFlip,
+      closeAllOnFlowFlip: config.closeAllOnFlowFlip,
+      moveMainToBreakevenOnPyramidTp: config.moveMainToBreakevenOnPyramidTp,
+      pyramidEntryType: config.pyramidEntryType,
+      stopLossPoints: config.stopLossPoints,
+      takeProfitPoints: config.takeProfitPoints,
+      breakevenOffsetPoints: config.breakevenOffsetPoints,
+      breakevenTriggerPoints: config.breakevenTriggerPoints,
+      breakevenLockPoints: config.breakevenLockPoints,
     });
   }
 }

@@ -617,6 +617,38 @@ export class DirectionalRobot {
     this.saveState();
   }
 
+  /** Fecha todas as posições abertas pertencentes a este robô. */
+  public closeAllPositions(price?: number, reason: string = 'MANUAL'): DirectionalPosition[] {
+    const closed: DirectionalPosition[] = [];
+    const curP = price && price > 0 ? price : this._lastPrice || this.asset.basePrice;
+    this._positions = this._positions.map((p) => {
+      if (p.status !== 'OPEN') return p;
+      const pts = p.type === 'BUY' ? curP - p.entryPrice : p.entryPrice - curP;
+      const fin = pointsToBRL(pts, p.contracts, this.asset);
+      const isWin = fin >= 0;
+      const evt = OrderAuditService.createEvent(
+        'MANUAL_CLOSED',
+        'Encerramento Manual',
+        `Posição do robô encerrada via Zerar Tudo a ${curP} pts.`,
+        curP,
+        p.contracts
+      );
+      const updated: DirectionalPosition = {
+        ...p,
+        status: isWin ? 'CLOSED_PROFIT' : 'CLOSED_LOSS',
+        exitPrice: curP,
+        exitTimestamp: Date.now(),
+        pointsResult: pts,
+        financialResult: fin,
+        auditTrail: p.auditTrail ? [...p.auditTrail, evt] : [evt],
+      };
+      closed.push(updated);
+      return updated;
+    });
+    this.saveState();
+    return closed;
+  }
+
   public updateStrategy(strategy: SavedStrategy): void {
     // Preserva o magic e role de runtime invioláveis ao trocar/atualizar estratégia
     this._config = {

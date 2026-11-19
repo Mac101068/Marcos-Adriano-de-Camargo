@@ -2429,8 +2429,17 @@ export default function App() {
             };
           }
 
+          if (o.status === 'CLOSED_MANUAL' && pos.status === 'OPEN') {
+            pos.status = 'CLOSED_LOSS';
+            pos.exitTimestamp = Date.now();
+            pos.exitPrice = o.exitPrice || tick.price;
+            targetRobot.saveState();
+            return o;
+          }
+
           if (
             pos.status === 'OPEN' &&
+            o.status !== 'CLOSED_MANUAL' &&
             (o.status !== 'OPEN' ||
               o.stopLoss !== saneSL ||
               o.takeProfit !== saneTP ||
@@ -2883,7 +2892,11 @@ export default function App() {
 
                 if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 
-                  wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
+                  wsRef.current.send(JSON.stringify({
+                    action: 'CLOSE_POSITIONS',
+                    symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                    robotMagic: mainRobotMagic(config),
+                  }));
 
                 }
 
@@ -2933,7 +2946,11 @@ export default function App() {
 
                   if (hadOpen && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 
-                    wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
+                    wsRef.current.send(JSON.stringify({
+                      action: 'CLOSE_POSITIONS',
+                      symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                      robotMagic: mainRobotMagic(config),
+                    }));
 
                   }
 
@@ -3430,7 +3447,11 @@ export default function App() {
 
                     if (hadOpen && mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 
-                      wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', robotMagic: mainRobotMagic(config) }));
+                      wsRef.current.send(JSON.stringify({
+                        action: 'CLOSE_POSITIONS',
+                        symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
+                        robotMagic: mainRobotMagic(config),
+                      }));
 
                     }
 
@@ -4689,14 +4710,12 @@ export default function App() {
 
     userDisconnectedRef.current = false;
     setMt5State({ status: 'CONNECTING' });
+    let host = '127.0.0.1';
     const rawHost = (config.mt5Host || '').trim();
-    let host = rawHost;
-    if (!host || host.toLowerCase() === 'localhost') {
-      if (typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        host = window.location.hostname;
-      } else {
-        host = '127.0.0.1';
-      }
+    if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+      host = '127.0.0.1';
+    } else if (rawHost && rawHost.toLowerCase() !== 'localhost' && rawHost !== '127.0.0.1') {
+      host = rawHost;
     }
     const port = config.mt5Port || 8765;
     const wsUrl = `ws://${host}:${port}`;
@@ -4712,6 +4731,13 @@ export default function App() {
         addConnectionLog('SUCCESS', 'WEBSOCKET', `Conexão WebSocket aberta com sucesso em ${wsUrl}. Realizando autenticação e subscrição...`);
         try {
           socket.send(JSON.stringify({ action: 'AUTH', token: getBridgeToken(), armed: config.active }));
+          // Informa à ponte qual ativo está selecionado nesta aba logo na conexão
+          socket.send(JSON.stringify({
+            action: 'SELECT_ASSET',
+            assetId: asset.id,
+            symbol: chartSymbolFor(asset),
+            boxPoints: config.boxPoints,
+          }));
           // Informa à ponte QUAL estratégia está ativa neste navegador. Sem o profileName a ponte
           // mantinha o default dela ("Janela de Fluxo & Agressão") e o devolvia em broadcast,
           // trocando a estratégia do operador a cada F5.
@@ -4797,8 +4823,16 @@ export default function App() {
               { details: `requireToken: ${requireToken}, maxOrdersPerMin: ${payload.data?.maxOrdersPerMinute ?? 'N/A'}` }
             );
 
-            setMt5State((prev) => ({ ...prev, bridgeAuthOk: ok, bridgeArmed: armed, bridgeLegacy: !requireToken }));
-            if (payload.data?.armed !== undefined && Date.now() - strategyConnectAtRef.current >= 5000) {
+            setMt5State((prev) => ({
+              ...prev,
+              bridgeAuthOk: ok,
+              bridgeArmed: armed,
+              bridgeLegacy: !requireToken,
+              ...(payload.data?.ordersBlocked !== undefined ? { bridgeOrdersBlocked: Boolean(payload.data.ordersBlocked) } : {}),
+              ...(payload.data?.replayMode !== undefined ? { bridgeReplayMode: Boolean(payload.data.replayMode) } : {}),
+              ...(payload.data?.travaAmbiente !== undefined ? { bridgeEnvLock: Boolean(payload.data.travaAmbiente) } : {}),
+            }));
+            if (payload.data?.armed !== undefined) {
               const serverArmed = Boolean(payload.data.armed);
               setConfig((prev) => {
                 if (prev.active === serverArmed) return prev;
@@ -4992,10 +5026,11 @@ export default function App() {
                 const relevantLive = livePositions.filter((p) => isSymbolForAsset(p.symbol, curActiveAsset));
                 const liveTicketSet = new Set(relevantLive.map((p) => p.ticket));
 
-                // 1. Fecha ordens locais com ticket MT5 que não existem mais na lista de posições reais
+                // 1. Fecha ordens locais que não existem mais na lista de posições reais do MT5
                 let updated = prev.map((o) => {
                   if (!isOrderForAsset(o, curActiveAsset)) return o;
-                  if (o.status === 'OPEN' && o.ticket && !liveTicketSet.has(o.ticket)) {
+                  const isAlive = o.status === 'OPEN' || o.status === 'PENDING_LIMIT';
+                  if (isAlive && (relevantLive.length === 0 || (o.ticket && !liveTicketSet.has(o.ticket)) || (o.isRealMT5 && !liveTicketSet.has(o.ticket || 0)))) {
                     const exitDeal = dealsList.slice().reverse().find((d) => (d.order === o.ticket || d.ticket === o.ticket) && isSymbolForAsset(d.symbol, curActiveAsset));
                     const safeEntry = isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice;
                     const rawExit = exitDeal && Number(exitDeal.price) > 0 ? Number(exitDeal.price) : curPrice;
@@ -5318,6 +5353,17 @@ export default function App() {
 
             }));
 
+            if (!on && !blocked) {
+              setConfig((prev) => {
+                if (prev.active) return prev;
+                isRemoteArmSyncRef.current = true;
+                const updated = { ...prev, active: true, lastSavedTimestamp: Date.now() };
+                EaConfigService.saveConfig(updated);
+                return updated;
+              });
+              setReplayOperates(true);
+            }
+
             setLatestToast({
 
               id: `mt5-replay-mode-${Date.now()}`,
@@ -5373,6 +5419,26 @@ export default function App() {
 
             });
 
+          } else if (payload.type === 'PRICE_QUOTE') {
+            const qSym = String(payload.symbol || '').toUpperCase();
+            const qSpec = resolveAsset(qSym);
+            const qAssetId = qSpec.id;
+            const qPrice = Number(payload.price);
+            if (qPrice > 0 && Math.abs(qPrice - qSpec.basePrice) / qSpec.basePrice < 0.4) {
+              const targetState = assetStateRef.current[qAssetId];
+              if (targetState) {
+                targetState.currentPrice = qPrice;
+              }
+              if (qAssetId === activeAssetIdRef.current) {
+                setCurrentPrice(qPrice);
+                const allRobotsList = allDirectionalRobotsRef.current
+                  ? Object.values(allDirectionalRobotsRef.current)
+                  : [directionalRobots.buy, directionalRobots.sell];
+                for (const r of allRobotsList) {
+                  r.onTick(qPrice);
+                }
+              }
+            }
           } else if (payload.type === 'TICK' || payload.type === 'TICKS_BATCH') {
             const rawTicks: Tick[] = payload.type === 'TICKS_BATCH'
               ? (Array.isArray(payload.data) ? payload.data : payload.data?.ticks || [])
@@ -5604,6 +5670,47 @@ export default function App() {
               }
             }
 
+          } else if (payload.type === 'POSITIONS_CLOSED_CONFIRM') {
+            const curActiveAsset = activeAssetRef.current;
+            const closedSym = payload.data?.symbol;
+            const closedSide = payload.data?.type;
+            setOrders((prev) => {
+              const updated = prev.map((o) => {
+                if (o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT') return o;
+                if (closedSide && closedSide !== 'ALL' && o.type !== closedSide) return o;
+                if (closedSym && closedSym !== 'ALL' && !isSymbolForAsset(closedSym, curActiveAsset) && o.symbol !== closedSym) return o;
+                return {
+                  ...o,
+                  status: 'CLOSED_MANUAL' as const,
+                  exitPrice: currentPriceRef.current || o.entryPrice,
+                  exitTimestamp: Date.now(),
+                  exitTimeStr: new Date().toLocaleTimeString(),
+                  exitReason: 'MANUAL' as const,
+                };
+              });
+              try {
+                OrderAuditService.saveIntradayOrders(updated, curActiveAsset.id);
+              } catch {}
+              return updated;
+            });
+            if (closedSide === 'BUY' || !closedSide || closedSide === 'ALL') {
+              directionalRobots.buy.closeAllPositions?.(currentPriceRef.current, 'MANUAL');
+              directionalRobots.buy.resetBook();
+            }
+            if (closedSide === 'SELL' || !closedSide || closedSide === 'ALL') {
+              directionalRobots.sell.closeAllPositions?.(currentPriceRef.current, 'MANUAL');
+              directionalRobots.sell.resetBook();
+            }
+            if (allDirectionalRobotsRef.current) {
+              for (const r of Object.values(allDirectionalRobotsRef.current)) {
+                if (!closedSide || closedSide === 'ALL' || r.direction === closedSide) {
+                  r.closeAllPositions?.(currentPriceRef.current, 'MANUAL');
+                  r.resetBook();
+                }
+              }
+            }
+            syncDirectionalSnapshots();
+
           } else if (payload.type === 'MT5_EQUITY_UPDATE') {
 
             setMt5State((prev) => ({
@@ -5697,7 +5804,8 @@ export default function App() {
 
                 let updated = prev.map((o) => {
                   if (!isOrderForAsset(o, curActiveAsset)) return o;
-                  if (o.status === 'OPEN' && o.ticket && !liveTicketSet.has(o.ticket)) {
+                  const isAlive = o.status === 'OPEN' || o.status === 'PENDING_LIMIT';
+                  if (isAlive && (relevantLive.length === 0 || (o.ticket && !liveTicketSet.has(o.ticket)) || (o.isRealMT5 && !liveTicketSet.has(o.ticket || 0)))) {
                     const exitDeal = dealsList.slice().reverse().find((d) => (d.order === o.ticket || d.ticket === o.ticket) && isSymbolForAsset(d.symbol, curActiveAsset));
                     const safeEntry = isPriceSaneForAsset(o.entryPrice, curActiveAsset) ? o.entryPrice : curActiveAsset.basePrice;
                     const rawExit = exitDeal && Number(exitDeal.price) > 0 ? Number(exitDeal.price) : curPrice;
@@ -5737,10 +5845,13 @@ export default function App() {
 
                 for (const pos of relevantLive) {
                   let existingIdx = updated.findIndex((o) => o.ticket === pos.ticket);
+                  if (existingIdx >= 0 && updated[existingIdx].status !== 'OPEN' && updated[existingIdx].status !== 'PENDING_LIMIT') {
+                    continue;
+                  }
                   if (existingIdx < 0) {
                     existingIdx = updated.findIndex(
                       (o) => (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') &&
-                             !o.ticket &&
+                             (!o.ticket || o.ticket < 1000000) &&
                              o.type === pos.type &&
                              isOrderForAsset(o, curActiveAsset)
                     );
@@ -6047,7 +6158,6 @@ export default function App() {
         );
 
         if (event && event.code === 4001) {
-          clearBridgeToken();
           syncBridgeTokenWithServer().catch(() => {});
         }
         setMt5State((prev) => ({ ...prev, status: 'DISCONNECTED', bridgeAuthOk: undefined, bridgeArmed: undefined, bridgeLegacy: undefined }));
@@ -6302,6 +6412,7 @@ export default function App() {
         id: `manual-${Date.now()}`,
 
         ticket,
+        symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
 
         timestamp: Date.now(),
 
@@ -6450,6 +6561,7 @@ export default function App() {
       id: `manual-${Date.now()}`,
 
       ticket,
+      symbol: config.symbol || (asset.activeContract || asset.primarySymbol),
 
       timestamp: Date.now(),
 
@@ -6699,89 +6811,102 @@ export default function App() {
 
 
 
-  // Zerar posições abertas. COM LADO é o início do hedge: 'BUY' zera só compras, 'SELL' só
-
-  // vendas. SEM LADO zera tudo — é o uso interno de sempre (inversão da estratégia e trava do
-
-  // simulador), e a ponte MT5 recebe o mesmo comando com type 'ALL' (o script filtra por lado
-
-  // quando vem BUY/SELL).
-
+  // Zerar posições e ordens abertas. COM LADO é o início do hedge: 'BUY' zera só compras, 'SELL' só
+  // vendas. SEM LADO zera tudo (compras, vendas e ordens pendentes do ativo).
   const handleClosePositions = (side?: 'BUY' | 'SELL') => {
-
-    const targets = orders.filter((o) => o.status === 'OPEN' && (!side || o.type === side));
-
-    if (targets.length === 0) return;
-
-    setOrders((prev) =>
-
-      prev.map((o) => {
-
-        if (o.status !== 'OPEN') return o;
-
-        if (side && o.type !== side) return o;
-        if (!isOrderForAsset(o, asset)) return o;
-
-        const activeCtros = o.remainingContracts || o.contracts;
-        const safePrice = isPriceSaneForAsset(currentPrice, asset) ? currentPrice : (isPriceSaneForAsset(o.entryPrice, asset) ? o.entryPrice : asset.basePrice);
-        const pts = isPriceSaneForAsset(o.entryPrice, asset) ? (o.type === 'BUY' ? safePrice - o.entryPrice : o.entryPrice - safePrice) : 0;
-
-        const fin = pointsToBRL(pts, activeCtros, asset) + (o.partialFinancial || 0);
-
-
-
-        const closeEvt = OrderAuditService.createEvent(
-
-          'MANUAL_CLOSED',
-
-          side
-
-            ? `Encerramento Manual ${side === 'BUY' ? 'COMPRAS' : 'VENDAS'}`
-
-            : 'Encerramento Manual Compulsório',
-
-          `Posição zerada a mercado a ${currentPrice} pts. Resultado obtido: ${pts > 0 ? '+' : ''}${pts} pts (R$ ${fin.toFixed(2)}).`,
-
-          currentPrice,
-
-          activeCtros
-
-        );
-
-
-
-        return {
-
-          ...o,
-
-          status: 'CLOSED_MANUAL' as const,
-
-          exitPrice: currentPrice,
-
-          exitTimestamp: Date.now(),
-
-          exitTimeStr: new Date().toTimeString().split(' ')[0],
-
-          exitReason: 'MANUAL' as const,
-
-          pointsResult: pts,
-
-          financialResult: fin,
-
-          auditTrail: o.auditTrail ? [...o.auditTrail, closeEvt] : [closeEvt],
-
-        };
-
-      })
-
+    const curSym = config.symbol || (asset.activeContract || asset.primarySymbol);
+    const targets = orders.filter((o) =>
+      (o.status === 'OPEN' || o.status === 'PENDING_LIMIT') &&
+      (!side || o.type === side) &&
+      isOrderForAsset(o, asset)
     );
 
+    if (targets.length > 0) {
+      setOrders((prev) => {
+        const updated = prev.map((o) => {
+          if (o.status !== 'OPEN' && o.status !== 'PENDING_LIMIT') return o;
+          if (side && o.type !== side) return o;
+          if (!isOrderForAsset(o, asset)) return o;
 
+          if (o.status === 'PENDING_LIMIT') {
+            const cancelEvt = OrderAuditService.createEvent(
+              'MANUAL_CLOSED',
+              'Cancelamento Manual Pendente',
+              `Ordem pendente cancelada pelo operador via Zerar.`,
+              o.limitPrice || currentPrice,
+              o.remainingContracts || o.contracts
+            );
+            return {
+              ...o,
+              status: 'CLOSED_MANUAL' as const,
+              exitTimestamp: Date.now(),
+              exitTimeStr: new Date().toTimeString().split(' ')[0],
+              exitReason: 'MANUAL' as const,
+              auditTrail: o.auditTrail ? [...o.auditTrail, cancelEvt] : [cancelEvt],
+            };
+          }
+
+          const activeCtros = o.remainingContracts || o.contracts;
+          const safePrice = isPriceSaneForAsset(currentPrice, asset) ? currentPrice : (isPriceSaneForAsset(o.entryPrice, asset) ? o.entryPrice : asset.basePrice);
+          const pts = isPriceSaneForAsset(o.entryPrice, asset) ? (o.type === 'BUY' ? safePrice - o.entryPrice : o.entryPrice - safePrice) : 0;
+          const fin = pointsToBRL(pts, activeCtros, asset) + (o.partialFinancial || 0);
+
+          const closeEvt = OrderAuditService.createEvent(
+            'MANUAL_CLOSED',
+            side
+              ? `Encerramento Manual ${side === 'BUY' ? 'COMPRAS' : 'VENDAS'}`
+              : 'Encerramento Manual Compulsório',
+            `Posição zerada a mercado a ${currentPrice} pts. Resultado obtido: ${pts > 0 ? '+' : ''}${pts} pts (R$ ${fin.toFixed(2)}).`,
+            currentPrice,
+            activeCtros
+          );
+
+          return {
+            ...o,
+            status: 'CLOSED_MANUAL' as const,
+            exitPrice: currentPrice,
+            exitTimestamp: Date.now(),
+            exitTimeStr: new Date().toTimeString().split(' ')[0],
+            exitReason: 'MANUAL' as const,
+            pointsResult: pts,
+            financialResult: fin,
+            auditTrail: o.auditTrail ? [...o.auditTrail, closeEvt] : [closeEvt],
+          };
+        });
+        try {
+          OrderAuditService.saveIntradayOrders(updated, asset.id);
+        } catch {}
+        return updated;
+      });
+    }
+
+    // 2. Limpa o livro de todos os robôs direcionais vinculados
+    const curP = currentPriceRef.current || currentPrice;
+    if (side === 'BUY' || !side) {
+      directionalRobots.buy.closeAllPositions?.(curP, 'MANUAL');
+      directionalRobots.buy.resetBook();
+    }
+    if (side === 'SELL' || !side) {
+      directionalRobots.sell.closeAllPositions?.(curP, 'MANUAL');
+      directionalRobots.sell.resetBook();
+    }
+    if (allDirectionalRobotsRef.current) {
+      for (const r of Object.values(allDirectionalRobotsRef.current)) {
+        if (!side || r.direction === side) {
+          r.closeAllPositions?.(curP, 'MANUAL');
+          r.resetBook();
+        }
+      }
+    }
+    syncDirectionalSnapshots();
 
     if (mt5State.status === 'CONNECTED' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-
-      wsRef.current.send(JSON.stringify({ action: 'CLOSE_POSITIONS', type: side || 'ALL' }));
-
+      wsRef.current.send(JSON.stringify({
+        action: 'CLOSE_POSITIONS',
+        symbol: curSym,
+        assetId: asset.id,
+        type: side || 'ALL',
+      }));
     }
 
 
