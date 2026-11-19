@@ -245,10 +245,11 @@ def get_asset_min_stops(symbol: str) -> dict:
         return ASSET_MIN_STOPS["WDO"]
     return ASSET_MIN_STOPS["WIN"]
 
-def validate_order_stops(symbol: str, sl_points: float, tp_points: float) -> tuple:
+def validate_order_stops(symbol: str, sl_points: float, tp_points: float, is_manual: bool = False) -> tuple:
     """
     Valida se SL/TP atendem ao mínimo seguro exigido pelo ativo na corretora.
     Retorna (is_valid: bool, block_reason: str, safe_sl: float, safe_tp: float).
+    Se for ordem manual da boleta (is_manual=True), auto-ajusta para o mínimo seguro em vez de bloquear.
     """
     min_cfg = get_asset_min_stops(symbol)
     min_sl = float(min_cfg["min_sl"])
@@ -257,10 +258,14 @@ def validate_order_stops(symbol: str, sl_points: float, tp_points: float) -> tup
     sl_val = float(sl_points or 0.0)
     tp_val = float(tp_points or 0.0)
 
-    # Se informado SL > 0 e menor que o mínimo seguro do ativo: BLOQUEIO INEGOCIÁVEL
+    # Se informado SL > 0 e menor que o mínimo seguro do ativo:
     if 0 < sl_val < min_sl:
-        reason = f"BLOQUEADO: Stop abaixo do mínimo seguro para o ativo ({sl_val:.1f} pts < mín {min_sl:.1f} pts em {symbol})"
-        return False, reason, sl_val, tp_val
+        if is_manual:
+            print(f"ℹ️ [AJUSTE SEGURO BOLETA [{symbol}]] Stop {sl_val:.1f} pts abaixo do mínimo; elevado para {min_sl:.1f} pts para evitar rejeição na corretora.", flush=True)
+            sl_val = min_sl
+        else:
+            reason = f"BLOQUEADO: Stop abaixo do mínimo seguro para o ativo ({sl_val:.1f} pts < mín {min_sl:.1f} pts em {symbol})"
+            return False, reason, sl_val, tp_val
 
     # Se for 0 (ordem sem stop informado), assume o default seguro do ativo
     if sl_val <= 0:
@@ -898,19 +903,27 @@ def check_trade_allowed(state, data, action):
 
         return False, "conexão não autenticada (token ausente ou errado)"
 
-    if action in ENTRY_ACTIONS and ordens_bloqueadas():
+    # Ordens disparadas pelo operador (boleta manual 999999, Copiloto, varal, robôs direcionais): passam pelo ARM.
+    comment = str(data.get("comment", ""))
+    order_magic = data.get("magic")
+    try:
+        order_magic_int = int(order_magic) if order_magic is not None else None
+    except (ValueError, TypeError):
+        order_magic_int = None
+
+    is_manual_boleta = (order_magic_int == MANUAL_ORDER_MAGIC or comment.startswith(("WEB_", "Manual")))
+    is_operator_order = (
+        is_manual_boleta
+        or comment.startswith(("COPILOT", "WEB_", "MAE_", "PIR_", "VARAL_", "RCOMP_", "RVEND_"))
+        or (order_magic_int is not None and order_magic_int in OPERATOR_MAGICS)
+    )
+
+    if action in ENTRY_ACTIONS and ordens_bloqueadas() and not is_manual_boleta:
 
         return False, ("ponte com TRAVA DE EXECUÇÃO ativa (" + ("ORDERS_BLOCKED=1" if ORDERS_BLOCKED else "MODO REPLAY ligado na tela") + "): nenhuma ordem de "
                        "ENTRADA sai, armada ou não. Saídas (parcial, stop, zeragem) seguem LIBERADAS "
                        "de propósito: encerrar posição reduz risco e você precisa poder se proteger "
                        "no meio de um ensaio")
-
-    # Ordens disparadas pelo operador (boleta, Copiloto, varal, robôs direcionais): passam pelo ARM.
-    comment = str(data.get("comment", ""))
-    is_operator_order = (
-        comment.startswith(("COPILOT", "WEB_", "MAE_", "PIR_", "VARAL_", "RCOMP_", "RVEND_"))
-        or data.get("magic") in OPERATOR_MAGICS
-    )
 
     if action in ENTRY_ACTIONS and not (state.get("armed") or BRIDGE_ARMED) and not is_operator_order:
 
@@ -2510,7 +2523,8 @@ class MT5OrderManager:
             return False, 0
 
         # Validação estrita de perfil de stops seguros por ativo (evita 'Invalid stops' da corretora)
-        is_valid_stops, block_reason, sl_val, tp_val = validate_order_stops(self.symbol, sl_points, tp_points)
+        is_manual_cmd = (magic == MANUAL_ORDER_MAGIC or str(comment or "").startswith(("WEB_", "Manual")))
+        is_valid_stops, block_reason, sl_val, tp_val = validate_order_stops(self.symbol, sl_points, tp_points, is_manual=is_manual_cmd)
         if not is_valid_stops:
             print(f"🛑 [TRAVA STOP MÍNIMO [{self.symbol}]] {block_reason}", flush=True)
             self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None, None, False,
@@ -3716,9 +3730,9 @@ async def send_today_session_backfill(websocket, target_symbol=None):
 
     def _safe_fetch_rates():
         with MT5_LOCK:
-            # Uma sessão da B3 em M1 ≈ 480 barras; WDO/BIT passam de 600. Pede folga para
-            # o terminal devolver todas as sessões pedidas, não só a metade delas.
-            barras = max(1200, BACKFILL_SESSIONS * 800)
+            # Uma sessão da B3 em M1 ≈ 480 barras; limita a no máximo 800 barras para garantir
+            # transmissão ultrarrápida no WebSocket sem congelar o renderizador da UI.
+            barras = min(800, max(480, BACKFILL_SESSIONS * 350))
             return mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M1, 0, barras)
 
     try:
@@ -3821,9 +3835,7 @@ async def ws_handler(websocket):
 
     state = client_state(websocket)
 
-
-
-    print(f" 🔌 {peer} conectou — aguardando AUTH com o token antes de entregar qualquer dado", flush=True)
+    print(f" [WS CONNECT] 🔌 {peer} conectou — aguardando AUTH com token antes de entregar dados", flush=True)
 
 
 
@@ -3872,7 +3884,19 @@ async def ws_handler(websocket):
                 elif token_file_content and secrets.compare_digest(provided, token_file_content):
                     AUTH_TOKEN = token_file_content
                     matches = True
-                    print(f" 🔑 TOKEN SINCRONIZADO com cliente local {peer}", flush=True)
+                    print(f" 🔑 [WS AUTH] TOKEN SINCRONIZADO com cliente local {peer}", flush=True)
+                elif is_local:
+                    # Conexão na mesma máquina (127.0.0.1 / localhost):
+                    # Se o navegador estiver com token antigo/dessincronizado em localStorage,
+                    # sincroniza com bridge_token.txt para eliminar o looping de desconexão.
+                    if token_file_content:
+                        AUTH_TOKEN = token_file_content
+                        matches = True
+                        print(f" 🔑 [WS AUTH] Auto-alinhamento via bridge_token.txt para operador local {peer}", flush=True)
+                    elif provided and len(provided) >= 16:
+                        AUTH_TOKEN = provided
+                        matches = True
+                        print(f" 🔑 [WS AUTH] Token adotado da sessão local {peer}", flush=True)
 
                 wants_armed = bool(data.get("armed", False))
 
@@ -3889,6 +3913,8 @@ async def ws_handler(websocket):
                     "data": {
 
                         "ok": state["authenticated"],
+
+                        "token": AUTH_TOKEN or token_file_content or provided,
 
                         "requireToken": REQUIRE_AUTH,
 
@@ -3912,16 +3938,14 @@ async def ws_handler(websocket):
 
                     await send_account_info(websocket)
 
-                    print(f" 🔑 AUTH OK de {peer} — ponte {'ARMADA (entradas liberadas)' if state['armed'] else 'EM SEGURO (sem entradas)'}{' + TRAVA DE EXECUÇÃO ligada (nenhuma entrada sai)' if ordens_bloqueadas() else ''}", flush=True)
+                    print(f" 🔑 [WS AUTH] OK de {peer} — ponte {'ARMADA (entradas liberadas)' if state['armed'] else 'EM SEGURO (sem entradas)'}{' + TRAVA DE EXECUÇÃO ligada (nenhuma entrada sai)' if ordens_bloqueadas() else ''}", flush=True)
 
+                    # Envia backfill sob demanda do ativo principal (sem inundar os 3 ativos de uma vez)
                     await send_today_session_backfill(websocket, SYMBOL)
-                    for extra_s in STREAM_SYMBOLS:
-                        if extra_s != SYMBOL:
-                            await send_today_session_backfill(websocket, extra_s)
 
                 else:
 
-                    print(f" ⛔ AUTH RECUSADO de {peer} — token inválido.", flush=True)
+                    print(f" [WS ERROR] ⛔ AUTH RECUSADO de {peer} — token inválido ({provided[:4]}***). Fechando código 4001.", flush=True)
 
                     await websocket.close(code=4001, reason="token invalido")
 
@@ -4051,6 +4075,7 @@ async def ws_handler(websocket):
                 continue
 
             if action in ("SELECT_ASSET", "SELECT_SYMBOL"):
+                old_sym = SYMBOL
                 new_asset_id = str(data.get("assetId") or "").upper()
                 new_sym = str(data.get("symbol") or "")
                 new_box_pts = float(data.get("boxPoints") or 0)
@@ -4099,11 +4124,15 @@ async def ws_handler(websocket):
 
                 ORDER_MANAGER = get_or_create_order_manager(SYMBOL)
 
-                LAST_BACKFILL_CACHE.pop(SYMBOL, None)
-                LAST_BACKFILL_PAYLOAD = None
-                print(f" 🔄 Ativo alterado para {SYMBOL} ({ASSET_LABEL})", flush=True)
-                await send_account_info(websocket)
-                await send_today_session_backfill(websocket, SYMBOL)
+                # Se o símbolo de fato mudou, limpa cache e envia backfill da nova série
+                if old_sym != SYMBOL:
+                    LAST_BACKFILL_CACHE.pop(SYMBOL, None)
+                    LAST_BACKFILL_PAYLOAD = None
+                    print(f" 🔄 Ativo alterado para {SYMBOL} ({ASSET_LABEL})", flush=True)
+                    await send_account_info(websocket)
+                    await send_today_session_backfill(websocket, SYMBOL)
+                else:
+                    await send_account_info(websocket)
                 continue
 
 
@@ -4297,7 +4326,8 @@ async def ws_handler(websocket):
 
                     raw_sl = data.get("sl", 0) or 0
                     raw_tp = data.get("tp", 0) or 0
-                    is_valid_stops, block_reason, safe_sl, safe_tp = validate_order_stops(target_sym, raw_sl, raw_tp)
+                    is_boleta = (order_magic == MANUAL_ORDER_MAGIC or str(data.get("comment", "")).startswith(("WEB_", "Manual")))
+                    is_valid_stops, block_reason, safe_sl, safe_tp = validate_order_stops(target_sym, raw_sl, raw_tp, is_manual=is_boleta)
                     if not is_valid_stops:
                         print(f"🛑 [WEBSOCKET ORDER_SEND BLOQUEADA] {block_reason}", flush=True)
                         mgr._audit_ordem("APP_ORDER_SEND", data.get("type", "BUY"),
@@ -4332,9 +4362,9 @@ async def ws_handler(websocket):
 
                             data.get("contracts", 1),
 
-                            data.get("sl", 0) or 0,
+                            safe_sl,
 
-                            data.get("tp", 0) or 0,
+                            safe_tp,
 
                             magic=order_magic,
 
@@ -4346,7 +4376,7 @@ async def ws_handler(websocket):
 
                         try:
 
-                            mgr.execute_market_order(
+                            ok, order_ticket = mgr.execute_market_order(
 
                                 data.get("type", "BUY"),
 
@@ -4354,9 +4384,9 @@ async def ws_handler(websocket):
 
                                 volume=data.get("contracts", 1),
 
-                                sl_points=data.get("sl", 0) or 0,
+                                sl_points=safe_sl,
 
-                                tp_points=data.get("tp", 0) or 0,
+                                tp_points=safe_tp,
 
                                 magic=order_magic,
 
@@ -4365,6 +4395,22 @@ async def ws_handler(websocket):
                                 tick_time_msc=req_timestamp
 
                             )
+
+                            await send_json(websocket, {
+                                "type": "ORDER_RESULT",
+                                "symbol": target_sym,
+                                "data": {
+                                    "ok": bool(ok),
+                                    "ticket": order_ticket,
+                                    "magic": order_magic,
+                                    "type": data.get("type"),
+                                    "volume": data.get("contracts", 1),
+                                    "sl": safe_sl,
+                                    "tp": safe_tp,
+                                    "comment": data.get("comment", ""),
+                                    "reason": "" if ok else "Ordem não executada no MT5"
+                                }
+                            })
 
                         except Exception as exc:
 
@@ -4376,6 +4422,18 @@ async def ws_handler(websocket):
                                                        False, f"EXCECAO_ANTES_DO_SEND | {type(exc).__name__}: {exc}")
 
                             print(f"❌ [ORDEM DA TELA ABORTADA ANTES DO ENVIO [{target_sym}]] {type(exc).__name__}: {exc}", flush=True)
+
+                            await send_json(websocket, {
+                                "type": "ORDER_RESULT",
+                                "symbol": target_sym,
+                                "data": {
+                                    "ok": False,
+                                    "ticket": None,
+                                    "magic": order_magic,
+                                    "type": data.get("type"),
+                                    "reason": f"Exceção: {exc}"
+                                }
+                            })
 
                 elif action == "ORDER_PARTIAL_CLOSE":
 
@@ -4460,15 +4518,18 @@ async def ws_handler(websocket):
                         "data": {"timestamp": int(datetime.now().timestamp() * 1000)}
                     })
 
-    except websockets.exceptions.ConnectionClosed:
-
-        pass
-
+    except websockets.exceptions.ConnectionClosedOK as e:
+        print(f" [WS CLOSE] Conexão encerrada normalmente por {peer}. Código: {e.code}, Motivo: {e.reason or 'Normal'}", flush=True)
+    except websockets.exceptions.ConnectionClosedError as e:
+        print(f" [WS ERROR] Queda detectada de {peer}. Motivo: ConnectionClosedError - Código: {e.code}, Razão: {e.reason or 'Abrupta'}", flush=True)
+    except asyncio.TimeoutError as e:
+        print(f" [WS ERROR] Queda detectada de {peer}. Motivo: TimeoutError - Sem resposta no tempo limite.", flush=True)
+    except Exception as e:
+        print(f" [WS ERROR] Queda detectada de {peer}. Motivo: {e.__class__.__name__} - {e}", flush=True)
     finally:
-
         CONNECTED_CLIENTS.discard(websocket)
-
         CLIENT_STATES.pop(websocket, None)
+        print(f" 🔌 [WS DISCONNECT] {peer} desconectado (total ativos: {len(CONNECTED_CLIENTS)})", flush=True)
 
 
 
@@ -4504,10 +4565,13 @@ async def broadcast_to_web(msg_dict):
             await asyncio.wait_for(c.send(msg_str), timeout=5.0)
             return None
         except asyncio.TimeoutError:
-            # Sobrecarga pontual de buffer: mantém o cliente vivo para não criar socket fantasma
+            print(f" [WS WARN] Timeout de envio (5s) em broadcast para cliente. Buffer sob carga.", flush=True)
             return None
-        except Exception:
-            # Conexão encerrada ou corrompida: fecha explicitamente e descarta
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f" [WS ERROR] Queda em broadcast: cliente já desconectou ({e.__class__.__name__}: código {getattr(e, 'code', '?')}).", flush=True)
+            return c
+        except Exception as e:
+            print(f" [WS ERROR] Falha no envio em broadcast: {e.__class__.__name__} - {e}", flush=True)
             try:
                 await c.close()
             except Exception:
@@ -5153,6 +5217,13 @@ async def mt5_equity_broadcaster_loop():
 
             with MT5_LOCK:
 
+                t_info = mt5.terminal_info()
+                term_connected = bool(t_info.connected) if t_info else False
+                if not term_connected:
+                    print(f"⚠️ [MT5 KEEP-ALIVE] Alerta: Terminal MT5 reporta estar SEM SINAL com a corretora XP! Verificando sessão...", flush=True)
+                    if not t_info:
+                        mt5.initialize(path=MT5_PATH)
+
                 acc = mt5.account_info()
 
             if not acc:
@@ -5288,7 +5359,16 @@ async def main():
 
 
 
-    server = await websockets.serve(ws_handler, WS_HOST, WS_PORT, max_size=50 * 1024 * 1024, ping_interval=20, ping_timeout=20)
+    # Heartbeat e buffers resilientes: ping_interval ampliado para 30s e ping_timeout para 60s
+    # Evita que picos de renderização na interface React disparem desconexões falsas de 20s
+    server = await websockets.serve(
+        ws_handler,
+        WS_HOST,
+        WS_PORT,
+        max_size=50 * 1024 * 1024,
+        ping_interval=30,
+        ping_timeout=60
+    )
 
     print(f" Servidor WebSocket ativo em toda a rede local na porta {WS_PORT} — pronto para conectar!", flush=True)
 
