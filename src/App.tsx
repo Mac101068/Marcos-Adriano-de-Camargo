@@ -307,6 +307,16 @@ function isSameAssetSymbol(incomingSym: string, targetAsset: AssetSpec): boolean
 }
 
 
+/**
+ * Chave de data do pregão em horário local (YYYY-MM-DD). Usada para detectar a
+ * virada do dia enquanto o terminal fica aberto, sem exigir recarregar a página.
+ */
+function hojeLocalKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+
 
 /**
 
@@ -9158,6 +9168,47 @@ export default function App() {
   // direito zera a cada reinício para não confundir com resultados de sessões passadas)
 
   const sessionStartRef = React.useRef<number>(Date.now());
+
+// Chave de data local (YYYY-MM-DD) do pregão em tela, comparada a cada minuto para
+// detectar a virada do dia sem exigir recarregar o terminal.
+const hojeLocalRef = useRef<string>(hojeLocalKey());
+
+// ------------------------------------------------------------------
+// RESET DE ESTADO DA BOLETA — troca de ativo OU virada de pregão (dia).
+// Cada ativo opera de forma isolada: trocar de ativo (WIN ↔ WDO ↔ BIT) ou
+// virar o dia zera contratos abertos e o PnL acumulado da boleta, eliminando
+// o "estado sujo" (ex.: contratos de WIN do dia anterior ao abrir o WDO hoje).
+// Não reseta no primeiro mount para preservar as ordens restauradas do storage
+// (comportamento de F5). Não quebra o envio de ordens — apenas limpa o state
+// de exibição (contratos e PnL).
+// ------------------------------------------------------------------
+const prevAssetIdRef = useRef<string | null>(null);
+
+useEffect(() => {
+  // Troca de ativo: limpa o livro completamente (cada ativo tem seu próprio bucket).
+  if (prevAssetIdRef.current !== null && prevAssetIdRef.current !== asset.id) {
+    setOrders([]);
+    sessionStartRef.current = Date.now();
+  }
+  prevAssetIdRef.current = asset.id;
+}, [asset.id]);
+
+// Detecção autônoma de virada de dia (pregão): zera a boleta quando o dia muda.
+useEffect(() => {
+  const timer = setInterval(() => {
+    const hoje = hojeLocalKey();
+    if (hoje !== hojeLocalRef.current) {
+      hojeLocalRef.current = hoje;
+      setOrders([]);
+      sessionStartRef.current = Date.now();
+      // Novo pregão: limpa a auditoria do ativo corrente para começar do zero.
+      try {
+        OrderAuditService.clearIntradayAudit(asset.id);
+      } catch {}
+    }
+  }, 60000);
+  return () => clearInterval(timer);
+}, [asset.id]);
 
   const stats: TerminalStats = React.useMemo(() => {
 
