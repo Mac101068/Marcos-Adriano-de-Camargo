@@ -122,19 +122,72 @@ export const RiskStatusPanel: React.FC<RiskStatusPanelProps> = ({
 
   return (
     <section
-      className="flex flex-col gap-1.5 px-3 sm:px-4 md:px-5 py-2 bg-slate-950 border-b border-slate-800/80 shrink-0"
+      className="flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-4 md:px-5 py-1.5 bg-slate-950 border-b border-slate-800/80 shrink-0"
       aria-label="Painel de status de risco e conexão"
     >
-      <div className="flex items-center justify-between gap-2 sm:gap-3 min-w-0">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 overflow-x-auto no-scrollbar">
         {/* Ícone de conexão (JSX exige componente com letra maiúscula) */}
         <div
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[10px] sm:text-xs font-medium leading-none transition-colors ${conn.bg} ${conn.border} ${conn.color}`}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[10px] sm:text-xs font-medium leading-none transition-colors shrink-0 ${conn.bg} ${conn.border} ${conn.color}`}
           title={`WebSocket 127.0.0.1:8765 — ${conn.label}`}
         >
           <ConnIcon className={`w-3 h-3 shrink-0 ${conn.color}`} />
           <span className={`shrink-0 font-semibold ${conn.color}`}>{conn.label}</span>
           <span className={`w-1.5 h-1.5 rounded-full ${conn.color}`} />
         </div>
+
+        {/* Caixas de regras de risco (Stop Mínimo, Execução de Ordens, Hard Cap, etc.) */}
+        <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 overflow-x-auto no-scrollbar">
+          {rules.map((rule, i) => {
+            const showTooltip = rule.label === 'Hard Cap por Magic';
+            return (
+              <div
+                key={i}
+                className="flex items-center gap-1 px-2 py-1 rounded-md border text-[9px] sm:text-xs leading-none shrink-0 whitespace-nowrap transition-colors"
+                style={{
+                  backgroundColor: rule.ok
+                    ? 'rgba(16, 185, 129, 0.10)'
+                    : 'rgba(239, 68, 68, 0.10)',
+                  borderColor: rule.ok
+                    ? 'rgba(16, 185, 129, 0.35)'
+                    : 'rgba(239, 68, 68, 0.35)',
+                }}
+                title={
+                  showTooltip
+                    ? 'Hard Cap por Magic: limite máximo de exposição por magic number, monitorado pela ponte.'
+                    : rule.label
+                }
+              >
+                <span
+                  className={`shrink-0 ${rule.ok ? 'text-emerald-400' : 'text-rose-400'}`}
+                >
+                  {rule.ok ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                </span>
+                <span className={`font-medium shrink-0 text-slate-200 ${rule.ok ? 'text-emerald-100' : 'text-rose-200'}`}>
+                  {rule.label}
+                </span>
+                <span
+                  className={`font-mono font-bold shrink-0 ${rule.ok ? 'text-emerald-200' : 'text-rose-300'}`}
+                >
+                  {rule.value}
+                </span>
+                {i < rules.length - 1 && (
+                  <ChevronRight className="w-3 h-3 text-slate-600 shrink-0" />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 shrink-0">
+        {/* Alerta vermelho pulsante: contradição (desconectado + ordens liberadas) */}
+        {contradiction && (
+          <div className="flex items-center gap-1 px-2 py-1 rounded-md border-rose-500/50 bg-rose-900/40 animate-pulse">
+            <AlertTriangle className="w-3 h-3 text-rose-400 shrink-0" />
+            <span className="text-[10px] font-bold text-rose-300">PONTE DESCONECTADA MAS ORDENS LIBERADAS</span>
+          </div>
+        )}
 
         <button
           onClick={onUnlockOrders}
@@ -171,56 +224,6 @@ export const RiskStatusPanel: React.FC<RiskStatusPanelProps> = ({
             </>
           )}
         </button>
-
-        {/* Alerta vermelho pulsante: contradição (desconectado + ordens liberadas) */}
-        {contradiction && (
-          <div className="flex items-center gap-1 px-2 py-1 rounded-md border-rose-500/50 bg-rose-900/40 animate-pulse">
-            <AlertTriangle className="w-3 h-3 text-rose-400 shrink-0" />
-            <span className="text-[10px] font-bold text-rose-300">PONTE DESCONECTADA MAS ORDENS LIBERADAS</span>
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 overflow-x-auto no-scrollbar pb-0.5">
-        {rules.map((rule, i) => {
-          const showTooltip = rule.label === 'Hard Cap por Magic';
-          return (
-            <div
-              key={i}
-              className="flex items-center gap-1 px-2 py-1 rounded-md border text-[9px] sm:text-xs leading-none shrink-0 whitespace-nowrap transition-colors"
-              style={{
-                backgroundColor: rule.ok
-                  ? 'rgba(16, 185, 129, 0.10)'
-                  : 'rgba(239, 68, 68, 0.10)',
-                borderColor: rule.ok
-                  ? 'rgba(16, 185, 129, 0.35)'
-                  : 'rgba(239, 68, 68, 0.35)',
-              }}
-              title={
-                showTooltip
-                  ? 'Hard Cap por Magic: limite máximo de exposição por magic number, monitorado pela ponte.'
-                  : rule.label
-              }
-            >
-              <span
-                className={`shrink-0 ${rule.ok ? 'text-emerald-400' : 'text-rose-400'}`}
-              >
-                {rule.ok ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
-              </span>
-              <span className={`font-medium shrink-0 text-slate-200 ${rule.ok ? 'text-emerald-100' : 'text-rose-200'}`}>
-                {rule.label}
-              </span>
-              <span
-                className={`font-mono font-bold shrink-0 ${rule.ok ? 'text-emerald-200' : 'text-rose-300'}`}
-              >
-                {rule.value}
-              </span>
-              {i < rules.length - 1 && (
-                <ChevronRight className="w-3 h-3 text-slate-600 shrink-0" />
-              )}
-            </div>
-          );
-        })}
       </div>
     </section>
   );
