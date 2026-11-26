@@ -101,9 +101,32 @@ import websockets
 
 
 # ==============================================================================
+# CONFIGURAÇÃO DE ESTRATÉGIAS (True = Ativo, False = Desativado)
+# ==============================================================================
+STRATEGY_ENABLED = {
+    102030: False,   # DESATIVADO: Performance negativa consistente
+    150101: False,   # DESATIVADO: Performance negativa
+    26092301: True,  # ATIVADO: Com Hard Cap de proteção
+    150201: True,    # ATIVADO: Varal Manual Compra (positivo)
+    150202: True,    # ATIVADO: Varal Manual Venda (em teste)
+    999999: True,    # ATIVADO: Boleta Manual
+    100001: True,    # ATIVADO: RoboCompra (Hedge)
+    100002: True,    # ATIVADO: RoboVenda (Hedge)
+    # Default é False se não listado
+}
 
+# ==============================================================================
+# FILTRO DE SPREAD MÁXIMO PERMITIDO (PONTOS) PRÉ-EXECUÇÃO
+# ==============================================================================
+MAX_ALLOWED_SPREAD = {
+    "WIN": 25.0,   # 25 pontos (5 ticks de 5 pts no WIN)
+    "WDO": 2.5,    # 2.5 pontos (5 ticks de 0.5 pt no WDO)
+    "BIT": 120.0,  # 120 pontos (6 ticks de 20 pts no BITX)
+    "BTC": 120.0,  # 120 pontos para BTC
+}
+
+# ==============================================================================
 # CONFIGURAÇÕES DA ESTRATÉGIA E MODO DE OPERAÇÃO
-
 # ==============================================================================
 
 SUPPORTED_ASSETS = {
@@ -124,7 +147,7 @@ SUPPORTED_ASSETS = {
         "pyramid_contracts": 1,
         "pyramid_tp_points": 50.0,
         "pyramid_sl_points": 50.0,
-        "max_pyramids": 3,
+        "max_pyramids": 1,
         "breakeven_offset_ticks": 1,
         "max_spread_ticks": 3,
         "max_daily_loss": 1000.0,
@@ -217,8 +240,8 @@ ASSET_MIN_STOPS = {
         "default_tp": 200.0,
     },
     "WDO": {
-        "min_sl": 2.5,
-        "min_tp": 2.0,
+        "min_sl": 0.5,
+        "min_tp": 0.5,
         "default_sl": 5.0,
         "default_tp": 10.0,
     },
@@ -715,7 +738,7 @@ MAX_ORDERS_PER_MINUTE = 12
 
 ENTRY_ACTIONS = {"ORDER_SEND"}
 
-TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "CLOSE_POSITIONS"}
+TRADE_ACTIONS = {"ORDER_SEND", "ORDER_PARTIAL_CLOSE", "ORDER_MODIFY_SL", "ORDER_MODIFY_TP", "ORDER_MODIFY_STOPS", "CLOSE_POSITIONS"}
 
 
 # Trava de execução por ambiente. PADRÃO = LIGADA (1) para segurança (Fail-Closed);
@@ -820,6 +843,11 @@ def log_trade_execution(
         date_str = now.strftime("%Y-%m-%d")
         log_file = os.path.join(DATA_DIR, f"trades_{date_str}.json")
 
+        # Isolamento de testes unitários: dados de mock/teste nunca poluem o log de produção
+        sym_str = str(symbol or "").upper()
+        if sym_str in ("TESTE", "MOCK", "SIMULADO"):
+            return
+
         action_u = str(action or "").upper()
         closing_actions = {"CLOSE_POSITION", "CLOSE_PARCIAL", "TAKE_PROFIT", "STOP_LOSS", "HARD_CAP_CLOSED"}
         is_closing = (action_u in closing_actions) or any(k in action_u for k in ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "ZERAR"))
@@ -841,10 +869,10 @@ def log_trade_execution(
             if pnl_found is None:
                 try:
                     deals = None
-                    deal_ticket = getattr(res, "deal", None) if res is not None else None
-                    if deal_ticket and int(deal_ticket) > 0:
+                    order_ticket = getattr(res, "order", None) if res is not None else None
+                    if order_ticket and int(order_ticket) > 0:
                         with MT5_LOCK:
-                            deals = mt5.history_deals_get(ticket=int(deal_ticket))
+                            deals = mt5.history_deals_get(ticket=int(order_ticket))
 
                     if not deals:
                         pos_id = position_ticket or ticket
@@ -869,57 +897,94 @@ def log_trade_execution(
             if pnl_found is None and result_pnl is not None and abs(float(result_pnl)) > 1e-6:
                 pnl_found = float(result_pnl)
 
-            # 4. Cálculo baseado em (preco_execucao - preco_abertura) * valor_do_ponto * volume (ajustado BUY/SELL)
+            # STEP 4: CÁLCULO FORENSE DIRETO (FALLBACK FINAL)
             if pnl_found is None:
-                try:
-                    p_exec = exec_price or (float(res.price) if res and getattr(res, "price", None) else None) or signal_price
-                    p_open = open_price
+                print(f"[DEBUG STEP4] Iniciando cálculo forense para {action_u} | Ticket: {ticket} | Magic: {magic}", flush=True)
+
+                # 4.1 - Obter preço de execução
+                p_exec = None
+                if exec_price is not None and float(exec_price) > 0:
+                    p_exec = float(exec_price)
+                elif signal_price is not None and float(signal_price) > 0:
+                    p_exec = float(signal_price)
+                elif res is not None:
+                    res_price = getattr(res, "price", None)
+                    if res_price is not None and float(res_price) > 0:
+                        p_exec = float(res_price)
+
+                # 4.2 - Obter preço de abertura
+                p_open = None
+                if open_price is not None and float(open_price) > 0:
+                    p_open = float(open_price)
+                elif (position_ticket is not None and int(position_ticket) > 0) or (ticket is not None and int(ticket) > 0):
+                    pos_id = position_ticket or ticket
+                    try:
+                        with MT5_LOCK:
+                            h_deals = mt5.history_deals_get(position=int(pos_id))
+                        if not h_deals:
+                            with MT5_LOCK:
+                                h_deals = mt5.history_deals_get(ticket=int(pos_id))
+                        if h_deals:
+                            # Pega o primeiro deal de entrada (DEAL_ENTRY_IN)
+                            in_deals = [d for d in h_deals if getattr(d, "entry", -1) == getattr(mt5, "DEAL_ENTRY_IN", 0)]
+                            if in_deals:
+                                p_open = float(in_deals[0].price)
+                                print(f"[DEBUG STEP4] Open price obtido do histórico: {p_open}", flush=True)
+                            elif getattr(h_deals[0], "price", None):
+                                p_open = float(h_deals[0].price)
+                                print(f"[DEBUG STEP4] Open price obtido do histórico: {p_open}", flush=True)
+                    except Exception as e:
+                        print(f"[DEBUG STEP4] Erro ao buscar open_price no histórico: {e}", flush=True)
 
                     if p_open is None:
-                        pos_id = position_ticket or ticket
-                        if pos_id and int(pos_id) > 0:
-                            try:
-                                with MT5_LOCK:
-                                    h_deals = mt5.history_deals_get(position=int(pos_id))
-                                if h_deals:
-                                    in_deals = [d for d in h_deals if getattr(d, "entry", -1) == getattr(mt5, "DEAL_ENTRY_IN", 0)]
-                                    if in_deals:
-                                        p_open = float(in_deals[0].price)
-                            except Exception:
-                                pass
-
-                    if p_exec is not None and p_open is not None and float(p_exec) > 0 and float(p_open) > 0:
-                        vol_used = float(volume) if volume is not None else 1.0
-                        pt_val = 1.0
                         try:
-                            if "get_asset_spec" in globals():
-                                spec = get_asset_spec(symbol)
-                                pt_val = float(spec.get("point_value", 1.0))
-                            elif "SUPPORTED_ASSETS" in globals():
-                                sym_u = str(symbol).upper()
-                                for k, v in SUPPORTED_ASSETS.items():
-                                    if v.get("symbol") == sym_u or sym_u.startswith(k) or k in sym_u:
-                                        pt_val = float(v.get("point_value", 1.0))
-                                        break
+                            with MT5_LOCK:
+                                act_pos = mt5.positions_get(ticket=int(pos_id))
+                            if act_pos and len(act_pos) > 0:
+                                p_open = float(act_pos[0].price_open)
+                                print(f"[DEBUG STEP4] Open price obtido da posição ativa: {p_open}", flush=True)
                         except Exception:
-                            if "WIN" in str(symbol).upper():
-                                pt_val = 0.20
-                            elif "WDO" in str(symbol).upper():
-                                pt_val = 10.00
-                            else:
-                                pt_val = 1.00
+                            pass
 
-                        side_u = str(side).upper()
-                        if side_u == "SELL":
-                            pts_diff = float(p_exec) - float(p_open)
-                        elif side_u == "BUY":
-                            pts_diff = float(p_open) - float(p_exec)
-                        else:
-                            pts_diff = float(p_exec) - float(p_open)
+                # 4.3 - Calcular PnL se tivermos ambos os preços
+                if p_exec is not None and p_open is not None and p_exec > 0 and p_open > 0:
+                    vol_used = float(volume) if volume is not None else 1.0
 
-                        pnl_found = round(pts_diff * pt_val * vol_used, 2)
-                except Exception:
-                    pass
+                    # Determinar valor do ponto
+                    pt_val = 1.0
+                    sym_upper = str(symbol).upper()
+                    try:
+                        if "get_asset_spec" in globals():
+                            spec = get_asset_spec(symbol)
+                            pt_val = float(spec.get("point_value", 1.0))
+                        elif "SUPPORTED_ASSETS" in globals():
+                            for k, v in SUPPORTED_ASSETS.items():
+                                if v.get("symbol") == sym_upper or sym_upper.startswith(k) or k in sym_upper:
+                                    pt_val = float(v.get("point_value", 1.0))
+                                    break
+                    except Exception:
+                        pass
+
+                    # Fallback hardcoded se necessário
+                    if pt_val == 1.0:
+                        if "WIN" in sym_upper:
+                            pt_val = 0.20
+                        elif "WDO" in sym_upper:
+                            pt_val = 10.00
+                        elif "BIT" in sym_upper or "BTC" in sym_upper:
+                            pt_val = 1.0
+
+                    # Calcular diferença de pontos
+                    side_u = str(side).upper()
+                    if side_u == "SELL":
+                        pts_diff = p_exec - p_open
+                    else:  # BUY
+                        pts_diff = p_open - p_exec
+
+                    pnl_found = round(pts_diff * pt_val * vol_used, 2)
+                    print(f"[DEBUG STEP4 SUCESSO] Calculado: {pnl_found} | Open: {p_open} | Exec: {p_exec} | PtVal: {pt_val} | Vol: {vol_used}", flush=True)
+                else:
+                    print(f"[DEBUG STEP4 FALHOU] p_exec={p_exec}, p_open={p_open} - não foi possível calcular", flush=True)
 
             if pnl_found is not None:
                 final_pnl = float(pnl_found)
@@ -927,6 +992,8 @@ def log_trade_execution(
                 final_pnl = float(result_pnl)
             else:
                 final_pnl = 0.0
+
+            print(f"[DEBUG LOG_TRADE] Action: {action_u} | Ticket: {ticket} | Pos: {position_ticket} | PnL_Param: {result_pnl} | PnL_Found: {pnl_found} | FinalPnL: {final_pnl}", flush=True)
         else:
             final_pnl = 0.0
 
@@ -2029,6 +2096,9 @@ class MT5OrderManager:
         max_gain = float(spec.get("max_daily_profit", MAX_DAILY_PROFIT))
         current_pnl = self.get_daily_pnl()
 
+        if getattr(self, "risk_override", False):
+            return True, "OK"
+
         if current_pnl <= -max_loss:
             if not getattr(self, "is_loss_locked", False):
                 self.is_loss_locked = True
@@ -2048,6 +2118,7 @@ class MT5OrderManager:
         """Rearma as travas de perda e ganho para permitir que o robô volte a operar."""
         self.is_loss_locked = False
         self.is_gain_locked = False
+        self.risk_override = True
         print(f"🔓 [RISCO RESETADO [{self.symbol}]] Travas de perda/ganho rearmadas pelo operador.", flush=True)
 
     def update_trailing_stop_box(self, box):
@@ -2072,12 +2143,16 @@ class MT5OrderManager:
             return False
 
         updated_any = False
+        spec = get_asset_spec(self.symbol)
+        b_size = float(spec.get("box_points", 50.0) or 50.0)
+
         for pos in active_positions:
             is_buy = pos.type == mt5.ORDER_TYPE_BUY
             current_sl = float(pos.sl) if pos.sl else 0.0
 
             if is_buy and box_dir == "UP":
-                raw_sl = box_open - tick_size
+                # Respiro de 1 box (N-1): Stop fica na abertura do box anterior, dando espaço contra ruído de leilão
+                raw_sl = box_open - b_size - tick_size
                 candidate_sl = round(round(raw_sl / tick_size) * tick_size, digits)
                 if candidate_sl > current_sl and candidate_sl < box_close:
                     print(f"📈 [TRAILING STOP [{self.symbol}]] Elevando SL da posição #{pos.ticket} de {current_sl} para {candidate_sl} (Box #{box['index']})", flush=True)
@@ -2085,7 +2160,8 @@ class MT5OrderManager:
                     updated_any = True
 
             elif not is_buy and box_dir == "DOWN":
-                raw_sl = box_open + tick_size
+                # Respiro de 1 box (N-1): Stop fica na abertura do box anterior na venda
+                raw_sl = box_open + b_size + tick_size
                 candidate_sl = round(round(raw_sl / tick_size) * tick_size, digits)
                 if (current_sl == 0.0 or candidate_sl < current_sl) and candidate_sl > box_close:
                     print(f"📉 [TRAILING STOP [{self.symbol}]] Descendo SL da posição #{pos.ticket} de {current_sl} para {candidate_sl} (Box #{box['index']})", flush=True)
@@ -2249,7 +2325,7 @@ class MT5OrderManager:
 
 
 
-    def place_pyramid_limit_order(self, signal, box, comment="", volume=None, sl_points=0, tp_points=0, tick_time_msc=None):
+    def place_pyramid_limit_order(self, signal, box, comment="", volume=None, sl_points=0, tp_points=0, tick_time_msc=None, signal_time=None):
 
         can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
 
@@ -2363,10 +2439,12 @@ class MT5OrderManager:
 
     def place_websocket_limit_order(self, signal, limit_price, comment="", volume=None, sl_points=0, tp_points=0, magic=None, tick_time_msc=None):
 
-        can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
-
-        if not can_trade or limit_price <= 0:
-
+        is_manual_cmd = (magic == MANUAL_ORDER_MAGIC or str(comment or "").startswith(("WEB_", "Manual")))
+        if not is_manual_cmd:
+            can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
+            if not can_trade or limit_price <= 0:
+                return False, 0
+        elif limit_price <= 0:
             return False, 0
 
 
@@ -2607,18 +2685,22 @@ class MT5OrderManager:
 
 
     def execute_market_order(self, order_type, comment="", volume=None, sl_points=None, tp_points=None, magic=None,
-                             box_index="", preco_box=None, acao="MERCADO", tick_time_msc=None):
+                             box_index="", preco_box=None, acao="MERCADO", tick_time_msc=None, signal_time=None):
 
-        can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
+        # 1. Filtro Central de Estratégias (STRATEGY_ENABLED)
+        magic_int = int(magic) if magic else int(self.magic_number)
+        is_manual_cmd = (magic_int == MANUAL_ORDER_MAGIC or str(comment or "").startswith(("WEB_", "Manual")) or acao == "APP_ORDER_SEND")
+        is_enabled = STRATEGY_ENABLED.get(magic_int, False) or is_manual_cmd
+        if not is_enabled:
+            print(f"[ESTRATÉGIA DESATIVADA] Magic {magic_int} está desligado na configuração. Sinal ignorado.", flush=True)
+            return False, "STRATEGY_DISABLED"
 
-        if not can_trade:
-
-            self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
-                              "BLOQUEADO_POR_HORARIO", box_index, sl_points, tp_points, magic=magic)
-
-            return False, 0
-
-
+        if not is_manual_cmd:
+            can_trade, _ = self.check_schedule(tick_time_msc=tick_time_msc)
+            if not can_trade:
+                self._audit_ordem(acao, order_type, volume, preco_box, None, None, None, None, False,
+                                  "BLOQUEADO_POR_HORARIO", box_index, sl_points, tp_points, magic=magic)
+                return False, 0
 
         mt5.symbol_select(self.symbol, True)
         sym_info = mt5.symbol_info(self.symbol)
@@ -2632,6 +2714,7 @@ class MT5OrderManager:
 
         tick_size = sym_info.trade_tick_size if sym_info.trade_tick_size > 0 else 1.0
         digits = sym_info.digits
+        point = sym_info.point if (sym_info and getattr(sym_info, "point", 0) > 0) else 1.0
 
         tick = mt5.symbol_info_tick(self.symbol)
         if not tick:
@@ -2639,6 +2722,22 @@ class MT5OrderManager:
                               "SEM_TICK_DA_CORRETORA", box_index, sl_points, tp_points, magic=magic)
             print(f"[ERRO MT5] Sem tick disponível para {self.symbol}!", flush=True)
             return False, 0
+
+        # Identifica se é ordem manual/boleta para tolerância adequada
+        is_manual_cmd = (magic == MANUAL_ORDER_MAGIC or str(comment or "").startswith(("WEB_", "Manual")) or acao == "APP_ORDER_SEND")
+
+        # 2. Filtro de Spread Pré-Execução (em pontos da cotação B3 - nunca dividir por point!)
+        spread_pts = abs(tick.ask - tick.bid)
+        sym_base = "WIN" if "WIN" in self.symbol.upper() else ("WDO" if "WDO" in self.symbol.upper() else "BIT")
+        limit = MAX_ALLOWED_SPREAD.get(sym_base, 25.0 if sym_base == "WIN" else (2.5 if sym_base == "WDO" else 120.0))
+        effective_limit = (limit * 2.5) if is_manual_cmd else limit
+
+        if spread_pts > effective_limit:
+            print(f"[FILTRO SPREAD] {self.symbol}: Spread atual {spread_pts:.1f} pts > Limite {effective_limit:.1f} pts. ORDEM BLOQUEADA.", flush=True)
+            self._audit_ordem(acao, order_type, volume, preco_box, (tick.ask if order_type == "BUY" else tick.bid),
+                              None, None, None, False,
+                              f"SPREAD_EXCESSIVO | spread={spread_pts:.1f} > max={effective_limit:.1f}", box_index, sl_points, tp_points, magic=magic)
+            return False, "SPREAD_EXCESSIVO"
 
         use_volume = float(volume) if volume is not None else float(self.contracts)
         is_buy = order_type == "BUY"
@@ -2648,10 +2747,11 @@ class MT5OrderManager:
 
         # Proteção contra spread excessivo (evita slippage em momentos de book furado)
         max_spread_pts = spec.get("max_spread_ticks", 4) * tick_size
+        max_spread_eff = (max_spread_pts * 2.5) if is_manual_cmd else max_spread_pts
         current_spread = abs(tick.ask - tick.bid)
-        if current_spread > max_spread_pts:
-            msg_spread = f"SPREAD_EXCESSIVO | spread={current_spread:.1f} > max={max_spread_pts:.1f}"
-            print(f"🛑 [TRAVA DE SPREAD [{self.symbol}]] Ordem cancelada: spread {current_spread:.1f} pts > teto de {max_spread_pts:.1f} pts", flush=True)
+        if current_spread > max_spread_eff:
+            msg_spread = f"SPREAD_EXCESSIVO | spread={current_spread:.1f} > max={max_spread_eff:.1f}"
+            print(f"🛑 [TRAVA DE SPREAD [{self.symbol}]] Ordem cancelada: spread {current_spread:.1f} pts > teto de {max_spread_eff:.1f} pts", flush=True)
             self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None, None, False,
                               msg_spread, box_index, sl_points, tp_points, magic=magic)
             return False, 0
@@ -2705,25 +2805,48 @@ class MT5OrderManager:
             "type_filling": self.get_filling_mode(),
         }
 
+        if signal_time is None:
+            signal_time = time.time()
+
         print(f" 🚀 ENVIANDO ORDEM AO MT5: {self.symbol} {order_type} {use_volume} ctros @ {entry_price} | SL={sl_price} TP={tp_price} Magic={request['magic']}", flush=True)
         res = mt5.order_send(request)
+        exec_time = time.time()
+        latency_ms = (exec_time - signal_time) * 1000
+        print(f"[LATÊNCIA] Sinal→Ordem: {latency_ms:.0f}ms", flush=True)
 
         if res is None:
             err_code, err_desc = mt5.last_error()
             print(f"❌ [ERRO MT5 CRÍTICO [{self.symbol}]] order_send retornou None! Erro={err_code} ({err_desc}) | Request: {request}", flush=True)
             return False, 0
 
+        # FALLBACK SEGURO PARA B3 (XP): se a corretora rejeitar deal a mercado com 10016 (Invalid stops),
+        # envia a mercado com SL/TP zerados e aplica os stops imediatamente via TRADE_ACTION_SLTP
+        if res.retcode == 10016 and (sl_price > 0 or tp_price > 0):
+            print(f"⚠️ [STOPS REJEITADOS NA ENTRADA [{self.symbol}]] RetCode=10016 (Invalid stops). Tentando entrada limpa e posicionamento posterior via TRADE_ACTION_SLTP...", flush=True)
+            req_clean = dict(request)
+            req_clean["sl"] = 0.0
+            req_clean["tp"] = 0.0
+            res = mt5.order_send(req_clean)
+
         if res.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✅ ORDEM EXECUTADA: {self.symbol} {order_type} {use_volume} ctros @ {entry_price} | Ticket #{res.order}", flush=True)
-            self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, entry_price,
+            exec_p = getattr(res, "price", entry_price) or entry_price
+            print(f"✅ ORDEM EXECUTADA: {self.symbol} {order_type} {use_volume} ctros @ {exec_p} | Ticket #{res.order}", flush=True)
+
+            # Se tínhamos stops e a ordem entrou (seja limpa ou via fallback), garante SL e TP no MT5
+            if sl_price > 0 or tp_price > 0:
+                self.modify_position_stops(res.order, new_sl=sl_price, new_tp=tp_price, magic=request['magic'])
+
+            self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, exec_p,
                               res.order, res.retcode, True, "ORDEM_ACCEPTED", box_index, sl_val, tp_val,
-                              magic=magic)
+                              magic=magic if magic is not None else self.magic_number,
+                              res=res, open_price=exec_p)
             return True, res.order
         else:
             print(f"❌ [ERRO MT5 [{self.symbol}]] RetCode={res.retcode}, Desc={res.comment} | Request: {request}", flush=True)
             self._audit_ordem(acao, order_type, use_volume, preco_box, entry_price, None, None,
                               getattr(res, "retcode", None), False, f"REJEITADO_CORRETORA | {getattr(res, 'comment', '')}",
-                              box_index, sl_val, tp_val, magic=magic)
+                              box_index, sl_val, tp_val, magic=magic if magic is not None else self.magic_number,
+                              res=res)
             return False, 0
 
 
@@ -2828,6 +2951,12 @@ class MT5OrderManager:
                 print(f"⚠️ [LIMITE PIRÂMIDE [{self.symbol}]] Já existem {pyramid_count} pirâmides ativas (teto = {max_pyr}). Adição ignorada.", flush=True)
                 return False, 0, "MAX_PYRAMIDS_REACHED"
 
+            # 🛡️ FILTRO DE CONVICÇÃO PARA PIRAMIDAR (Proteção Microestrutural):
+            # Só autoriza piramidação em fluxo de alta convicção (mínimo 7/10)
+            if flow_score < 7:
+                print(f"🛡️ [PIRÂMIDE BLOQUEADA [{self.symbol}]] Score de Fluxo {flow_score}/10 abaixo do limiar institucional (mínimo 7/10). Adição cancelada para proteger o capital.", flush=True)
+                return False, 0, "FLOW_SCORE_LOW"
+
             pyramid_num = pyramid_count + 1
             print(f"🪜 [PIRAMIDAÇÃO #{pyramid_num} [{self.symbol}]] Adicionando {pyr_vol} ctro(s) a favor de {current_dir} no Box #{box['index']}", flush=True)
 
@@ -2838,12 +2967,29 @@ class MT5OrderManager:
                     comment=f"PIR_{pyramid_num}_{box['index']}",
                     volume=pyr_vol,
                     sl_points=pyr_sl,
-                    tp_points=pyr_tp
+                    tp_points=pyr_tp,
+                    signal_time=signal_time
                 )
                 if success:
                     self.pyramid_tickets[ticket] = current_dir
-                    if main_be_on_pyr_tp:
-                        self.move_main_to_breakeven(current_dir)
+                    # 🛡️ REGRA DE OURO: Move a Ordem Mãe imediatamente para o Breakeven no fill da pirâmide!
+                    self.move_main_to_breakeven(current_dir)
+                return success, ticket, "PYRAMID"
+            else:
+                success, ticket = self.execute_market_order(
+                    order_type=current_dir,
+                    comment=f"PIR_{pyramid_num}_{box['index']}",
+                    volume=pyr_vol,
+                    sl_points=pyr_sl,
+                    tp_points=pyr_tp,
+                    box_index=box["index"],
+                    preco_box=box["close"],
+                    acao=f"ORDEM_PIR_{pyramid_num}",
+                    signal_time=signal_time
+                )
+                if success:
+                    self.pyramid_tickets[ticket] = current_dir
+                    self.move_main_to_breakeven(current_dir)
                 return success, ticket, "PYRAMID"
 
 
@@ -2905,13 +3051,19 @@ class MT5OrderManager:
             pos_open = getattr(pos, "price_open", exec_p) or exec_p
             pnl_parcial = (exec_p - pos_open) * dir_sign * pt_value * float(vol_to_close)
 
+            print(f"[DEBUG PARCIAL] Ticket: {pos.ticket} | Open: {getattr(pos, 'price_open', pos_open)} | Exec: {exec_p} | Vol: {vol_to_close} | PtVal: {pt_value} | PnL_Calculado: {pnl_parcial}", flush=True)
+
+            real_magic = getattr(pos, "magic", None)
+            if real_magic is None:
+                real_magic = magic if magic is not None else self.magic_number
+
             self._audit_ordem("CLOSE_PARCIAL", "SELL" if pos.type == mt5.ORDER_TYPE_BUY else "BUY",
                               vol_to_close, None, None, exec_p, res.order, res.retcode, True,
-                              "PARCIAL_ACCEPTED", magic=magic, position=pos.ticket,
+                              "PARCIAL_ACCEPTED", magic=real_magic, position=pos.ticket,
                               result_pnl=pnl_parcial, res=res, open_price=pos_open)
 
             if new_sl is not None:
-                self.modify_stop_loss(pos.ticket, new_sl, magic=magic)
+                self.modify_stop_loss(pos.ticket, new_sl, magic=real_magic)
 
             return True
         else:
@@ -2921,8 +3073,8 @@ class MT5OrderManager:
             return False
 
 
-    def modify_stop_loss(self, ticket, new_sl, magic=None):
-        if new_sl is None or float(new_sl) <= 0:
+    def modify_position_stops(self, ticket, new_sl=None, new_tp=None, magic=None):
+        if (new_sl is None or float(new_sl) <= 0) and (new_tp is None or float(new_tp) <= 0):
             return False
 
         with MT5_LOCK:
@@ -2943,7 +3095,7 @@ class MT5OrderManager:
                     positions = None
 
             if not positions:
-                print(f"⚠️ [MODIFY_SL AVISO] Nenhuma posição encontrada para ticket={ticket} / symbol={self.symbol}", flush=True)
+                print(f"⚠️ [MODIFY_STOPS AVISO] Nenhuma posição encontrada para ticket={ticket} / symbol={self.symbol}", flush=True)
                 return False
 
             pos = positions[0]
@@ -2951,37 +3103,56 @@ class MT5OrderManager:
             sym_info = mt5.symbol_info(pos_sym)
             tick_size = sym_info.trade_tick_size if (sym_info and getattr(sym_info, "trade_tick_size", 0) > 0) else 1.0
             digits = getattr(sym_info, "digits", 0) if sym_info else 0
-
-            # Arredondamento estrito pelo tick_size para evitar INVALID_STOPS / INVALID_PRICE
-            sl_rounded = round(round(float(new_sl) / tick_size) * tick_size, digits)
-
-            # Valida distância em relação ao preço de mercado
+            is_buy = (pos.type == mt5.ORDER_TYPE_BUY)
             tick = mt5.symbol_info_tick(pos_sym)
-            if tick:
-                is_buy = (pos.type == mt5.ORDER_TYPE_BUY)
-                if is_buy and hasattr(tick, "bid") and sl_rounded >= tick.bid:
-                    sl_rounded = round(round((tick.bid - tick_size) / tick_size) * tick_size, digits)
-                elif not is_buy and hasattr(tick, "ask") and sl_rounded <= tick.ask:
-                    sl_rounded = round(round((tick.ask + tick_size) / tick_size) * tick_size, digits)
+
+            # SL com arredondamento e validação de distância
+            if new_sl is not None and float(new_sl) > 0:
+                sl_rounded = round(round(float(new_sl) / tick_size) * tick_size, digits)
+                if tick:
+                    if is_buy and hasattr(tick, "bid") and sl_rounded >= tick.bid:
+                        sl_rounded = round(round((tick.bid - tick_size) / tick_size) * tick_size, digits)
+                    elif not is_buy and hasattr(tick, "ask") and sl_rounded <= tick.ask:
+                        sl_rounded = round(round((tick.ask + tick_size) / tick_size) * tick_size, digits)
+            else:
+                sl_rounded = float(getattr(pos, "sl", 0.0) or 0.0)
+
+            # TP com arredondamento e validação de distância
+            if new_tp is not None and float(new_tp) > 0:
+                tp_rounded = round(round(float(new_tp) / tick_size) * tick_size, digits)
+                if tick:
+                    if is_buy and hasattr(tick, "bid") and tp_rounded <= tick.bid:
+                        tp_rounded = round(round((tick.bid + tick_size) / tick_size) * tick_size, digits)
+                    elif not is_buy and hasattr(tick, "ask") and tp_rounded >= tick.ask:
+                        tp_rounded = round(round((tick.ask - tick_size) / tick_size) * tick_size, digits)
+            else:
+                tp_rounded = float(getattr(pos, "tp", 0.0) or 0.0)
+
+            pos_magic = getattr(pos, "magic", None)
+            final_magic = int(magic) if magic else (int(pos_magic) if pos_magic else self.magic_number)
 
             request = {
                 "action": mt5.TRADE_ACTION_SLTP,
                 "position": int(pos.ticket),
                 "symbol": pos_sym,
                 "sl": float(sl_rounded),
-                "tp": float(getattr(pos, "tp", 0.0) or 0.0),
-                "magic": int(magic) if magic else int(getattr(pos, "magic", self.magic_number))
+                "tp": float(tp_rounded),
+                "magic": final_magic
             }
 
             res = mt5.order_send(request)
             if res and res.retcode == mt5.TRADE_RETCODE_DONE:
-                print(f"✅ [TRAILING STOP ATUALIZADO] Posição #{pos.ticket} ({pos_sym}) novo SL={sl_rounded} (Magic={request['magic']})", flush=True)
+                print(f"✅ [STOPS ATUALIZADOS] Posição #{pos.ticket} ({pos_sym}) SL={sl_rounded} TP={tp_rounded} (Magic={final_magic})", flush=True)
                 return True
             else:
                 ret_c = getattr(res, 'retcode', None)
                 ret_desc = getattr(res, 'comment', 'sem resposta')
-                print(f"⚠️ [MODIFY_SL FALHA MT5] Posição #{pos.ticket} SL={sl_rounded} RetCode={ret_c} ({ret_desc})", flush=True)
+                print(f"⚠️ [MODIFY_STOPS FALHA MT5] Posição #{pos.ticket} SL={sl_rounded} TP={tp_rounded} RetCode={ret_c} ({ret_desc})", flush=True)
                 return False
+
+
+    def modify_stop_loss(self, ticket, new_sl, magic=None):
+        return self.modify_position_stops(ticket, new_sl=new_sl, magic=magic)
 
 
 
@@ -3029,6 +3200,10 @@ class MT5OrderManager:
                 dir_sign = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else -1.0
                 pnl_brl += (price - pos.price_open) * dir_sign * pt_value * pos.volume
 
+                real_pos_magic = getattr(pos, "magic", None)
+                if real_pos_magic is None:
+                    real_pos_magic = magic_filter if magic_filter is not None else self.magic_number
+
                 req = {
                     "action": mt5.TRADE_ACTION_DEAL,
                     "position": pos.ticket,
@@ -3037,7 +3212,7 @@ class MT5OrderManager:
                     "type": close_type,
                     "price": price,
                     "deviation": 20,
-                    "magic": magic_filter if magic_filter is not None else self.magic_number,
+                    "magic": real_pos_magic,
                     "comment": "Zerar Terminal Web",
                     "type_time": mt5.ORDER_TIME_GTC,
                     "type_filling": self.get_filling_mode(),
@@ -3055,7 +3230,7 @@ class MT5OrderManager:
                                   pos.volume, None, None, exec_p, getattr(res, "order", None),
                                   getattr(res, "retcode", None), _ok_zero,
                                   "ZERAGEM_ACCEPTED" if _ok_zero else f"ZERAGEM_REJEITADA | {getattr(res, 'comment', '')}",
-                                  magic=magic_filter, position=pos.ticket,
+                                  magic=real_pos_magic, position=pos.ticket,
                                   result_pnl=pos_pnl, res=res, open_price=pos.price_open)
 
         # 2. CANCELA ORDENS PENDENTES (Buy Limit, Sell Limit, Buy Stop, Sell Stop)
@@ -4633,11 +4808,13 @@ async def ws_handler(websocket):
                         magic=data.get("robotMagic") or None
                     )
 
-                elif action == "ORDER_MODIFY_SL":
+                elif action in ("ORDER_MODIFY_SL", "ORDER_MODIFY_TP", "ORDER_MODIFY_STOPS"):
                     req_sym = data.get("symbol") or target_sym
                     req_mgr = get_or_create_order_manager(req_sym) if req_sym else mgr
-                    req_mgr.modify_stop_loss(
-                        data.get("ticket"), data.get("newSL"),
+                    req_mgr.modify_position_stops(
+                        data.get("ticket"),
+                        new_sl=data.get("newSL") or data.get("sl"),
+                        new_tp=data.get("newTP") or data.get("tp"),
                         magic=data.get("robotMagic") or None
                     )
 
