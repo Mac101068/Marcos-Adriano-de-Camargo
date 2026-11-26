@@ -532,9 +532,9 @@ MAIN_BREAKEVEN_ON_PYR_TP = True
 
 
 
-ENTRY_TRIGGER_TYPE = "MARKET_ON_CLOSE"
+ENTRY_TRIGGER_TYPE = "PULLBACK"
 
-PULLBACK_TARGET = "BOX_OPEN"
+PULLBACK_TARGET = "BOX_50_PCT"
 
 PULLBACK_CUSTOM_POINTS = 25
 
@@ -604,6 +604,11 @@ EVAL_CONFIG = {
     # A tela pode ligar pelo checkbox; o SYNC sobrescreve este padrão.
     "flow_trend_filter": False,
     "flow_trend_lookback": 20,
+    # Filtro Anti-Clímax: barra sinais fora da faixa de fluxo sustentável (Score 4..6),
+    # eliminando a armadilha de exaustão institucional comprovada em 22 pregões de replay real.
+    "anti_climax_filter_enabled": False,
+    "anti_climax_min_score": 4,
+    "anti_climax_max_score": 6,
     "max_delta_ceiling": MAX_DELTA_CEILING,
     "require_cvd_extreme": REQUIRE_CVD_EXTREME,
     # ── Parâmetros da boleta (ordem mãe + pirâmide) — defaults, podem ser sobrescritos via SYNC ──
@@ -1919,6 +1924,20 @@ class RenkoFlowEngine:
             audit["motivo"] = f"CALADO_ABSORCAO | Box {direction} com Δ {delta} oposto ao fechamento"
             box["audit"] = audit
             return None, ""
+
+        # Filtro Anti-Clímax: barra sinais fora da faixa de fluxo sustentável (Score 4..6),
+        # eliminando a armadilha de exaustão institucional comprovada em 22 pregões de replay real.
+        if bool(cfg.get("anti_climax_filter_enabled", False)):
+            min_sc = int(cfg.get("anti_climax_min_score", 4))
+            max_sc = int(cfg.get("anti_climax_max_score", 6))
+            if flow_score > max_sc:
+                audit["motivo"] = f"CALADO_CLIMAX | Score {flow_score} > teto {max_sc} (exaustão)"
+                box["audit"] = audit
+                return None, ""
+            if flow_score < min_sc:
+                audit["motivo"] = f"CALADO_SCORE_MINIMO | Score {flow_score} < piso {min_sc}"
+                box["audit"] = audit
+                return None, ""
 
         if pyramid:
             if direction == "UP":
@@ -3648,6 +3667,9 @@ def apply_ea_config(payload):
     _num("adaptiveThresholdPercentile", "percentile", float)
     _num("adaptiveFloorMultiple", "floor_multiple", float)
     _num("flowDivergenceMin", "flow_divergence_min", float)
+    _bool("antiClimaxFilterEnabled", "anti_climax_filter_enabled")
+    _num("antiClimaxMinScore", "anti_climax_min_score", int)
+    _num("antiClimaxMaxScore", "anti_climax_max_score", int)
     # ── Parâmetros da boleta (ordem mãe + pirâmide) lidos da tela via SYNC ──
     _num("pyramidTpPoints", "pyramid_tp_points", float)
     _num("pyramidSlPoints", "pyramid_sl_points", float)
@@ -5493,6 +5515,30 @@ async def mt5_stream_loop():
                         ts_msc = raw_msc + MT5_BRT_OFFSET_MSC
                         LAST_TAPE_TIME_MSC[s] = ts_msc
 
+                        batch_ticks.append({
+                            "id": f"mt5-{s}-{ts_msc}",
+                            "symbol": s,
+                            "timestamp": ts_msc,
+                            "timeStr": datetime.fromtimestamp(ts_msc / 1000).strftime('%H:%M:%S.%f')[:-3],
+                            "price": price,
+                            "volume": volume,
+                            "aggressor": aggressor
+                        })
+
+                        # O motor Renko de CADA ativo processa o tick concorrentemente
+                        new_box, signal, reason = eng.process_tick(price, volume, aggressor, ts_msc)
+
+                        # Vincula metadados do sinal (score, box, motivo) ao coletor no tick exato do disparo
+                        sinal_info = None
+                        if signal and new_box:
+                            sinal_info = {
+                                "signal": signal,
+                                "reason": reason,
+                                "boxIndex": new_box.get("index"),
+                                "index": new_box.get("index"),
+                                "score": new_box.get("flow_score", 5),
+                            }
+
                         # Coleta quantitativa de microestrutura e agressão B3
                         if MICRO_COLETOR_ENABLED and micro_collector:
                             try:
@@ -5507,23 +5553,10 @@ async def mt5_stream_loop():
                                     bid=bid_val,
                                     ask=ask_val,
                                     fonte="VIVO_MT5",
-                                    sinal_info=None
+                                    sinal_info=sinal_info
                                 )
                             except Exception as _mc_rec_exc:
                                 pass
-
-                        batch_ticks.append({
-                            "id": f"mt5-{s}-{ts_msc}",
-                            "symbol": s,
-                            "timestamp": ts_msc,
-                            "timeStr": datetime.fromtimestamp(ts_msc / 1000).strftime('%H:%M:%S.%f')[:-3],
-                            "price": price,
-                            "volume": volume,
-                            "aggressor": aggressor
-                        })
-
-                        # O motor Renko de CADA ativo processa o tick concorrentemente
-                        new_box, signal, reason = eng.process_tick(price, volume, aggressor, ts_msc)
                         if new_box:
                             print(f"[{datetime.fromtimestamp(ts_msc/1000).strftime('%H:%M:%S')}] Box {s} #{new_box['index']}: {new_box['direction']} | {new_box['open']} -> {new_box['close']}", flush=True)
                             # Uma linha por box fechado, sinal OU corte, com o motivo do veredito

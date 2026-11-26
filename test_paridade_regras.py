@@ -198,6 +198,14 @@ check("janela maior que a série não bloqueia",
       flow_trend(subindo.boxes[:2], subindo.boxes[2], 30), 0)
 configurar(flow_trend_filter=False)
 
+print("\n=== J. Filtro Anti-Clímax (Score 4..6 sustentável) ===")
+configurar(strategy_mode="PYRAMID_FLOW_CONFLUENCE", adaptive=True, consolidation_enabled=False,
+           exhaustion_enabled=False, anti_climax_filter_enabled=True, anti_climax_min_score=4, anti_climax_max_score=6)
+m_climax = novo_motor(150)
+check("Score 7 calado pelo filtro anti-clímax", julgar(m_climax, caixa(0, "UP", 2500, 169695.0))[0], None)
+configurar(anti_climax_filter_enabled=False)
+check("mesmo box com anti-clímax desligado passa", julgar(m_climax, caixa(1, "UP", 2500, 169745.0))[0], "BUY")
+
 print("\n" + "=" * 62)
 if FAILS:
     print(f"❌ {len(FAILS)} VEREDITO(S) FORA DA REGRA DA TELA:")

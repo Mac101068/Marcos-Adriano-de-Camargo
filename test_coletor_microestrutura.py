@@ -80,6 +80,9 @@ def test_coletor_e_antecipacao():
         check("CROSS não entra no delta", True,
               all(r["delta_negocio"] == "0" for r in linhas if r["lado_agressor"] == "CROSS"))
         check("sinal vinculado ao evento 51", ["51"], [r["sequencia_evento"] for r in linhas if r["sinal_ativo"] == "1"])
+        check("sinal tipo BUY", "BUY", linhas[50]["sinal_tipo"])
+        check("sinal motivo TESTE", "TESTE", linhas[50]["sinal_motivo"])
+        check("sinal box index 7", "7", linhas[50]["sinal_box_index"])
 
         print("\n=== 2. Labels futuros (+100ms/+500ms/+1s/+5s) sem look-ahead ===")
         saida = calcular_antecipacao_arquivo(caminho)
@@ -108,5 +111,31 @@ def test_coletor_e_antecipacao():
     print("OK COLETOR E ANALISADOR: todos os checks passaram.")
 
 
+def test_sinal_info_metadados():
+    test_dir = tempfile.mkdtemp(prefix="coletor_micro_meta_")
+    try:
+        col = MicrostructureCollector(output_dir=test_dir)
+        col.start()
+        base_ts = 1795694400000
+        # Evento com index e score completos (formato vindo do motor mt5_stream_loop)
+        sinal = {"signal": "SELL", "reason": "PULLBACK_RETEST", "index": 42, "score": 8}
+        col.registrar_evento(
+            symbol="WDOZ26", preco=5500.0, volume=5, aggressor="SELL",
+            ts_msc=base_ts, bid=5499.5, ask=5500.0, fonte="VIVO_MT5", sinal_info=sinal
+        )
+        col.stop()
+        arquivos = [f for f in os.listdir(test_dir) if f.endswith(".csv")]
+        check("arquivo gerado com metadados", 1, len(arquivos))
+        linhas = ler_csv(os.path.join(test_dir, arquivos[0]))
+        check("1 linha gerada", 1, len(linhas))
+        check("sinal_ativo = 1", "1", linhas[0]["sinal_ativo"])
+        check("sinal_tipo = SELL", "SELL", linhas[0]["sinal_tipo"])
+        check("sinal_box_index resolvido de index = 42", "42", linhas[0]["sinal_box_index"])
+        check("sinal_motivo contém score", True, "[score=8]" in linhas[0]["sinal_motivo"])
+    finally:
+        shutil.rmtree(test_dir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_coletor_e_antecipacao()
+    test_sinal_info_metadados()

@@ -189,9 +189,22 @@ class MicrostructureCollector:
         
         # Sinais operacionais vinculados
         tem_sinal = 1 if sinal_info else 0
-        sinal_tipo = sinal_info.get("signal", "") if sinal_info else ""
-        sinal_motivo = sinal_info.get("reason", "") if sinal_info else ""
-        sinal_box = sinal_info.get("boxIndex", "") if sinal_info else ""
+        sinal_tipo = str(sinal_info.get("signal", "") or "") if sinal_info else ""
+        sinal_motivo = str(sinal_info.get("reason", "") or "") if sinal_info else ""
+        sinal_box = ""
+        if sinal_info:
+            box_idx = sinal_info.get("boxIndex")
+            if box_idx is None:
+                box_idx = sinal_info.get("index")
+            if box_idx is None:
+                box_idx = sinal_info.get("box_index", "")
+            sinal_box = str(box_idx) if box_idx is not None else ""
+            if "score" in sinal_info and sinal_info["score"] is not None:
+                sc = sinal_info["score"]
+                if sinal_motivo and "score" not in sinal_motivo.lower():
+                    sinal_motivo = f"{sinal_motivo} [score={sc}]"
+                elif not sinal_motivo:
+                    sinal_motivo = f"[score={sc}]"
 
         registro = [
             ts_msc,
