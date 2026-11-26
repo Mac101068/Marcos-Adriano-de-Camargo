@@ -98,6 +98,13 @@ LAST_BACKFILL_TIME = 0
 
 import websockets
 
+try:
+    from coletor_microestrutura import collector as micro_collector
+    MICRO_COLETOR_ENABLED = True
+except Exception as _mc_exc:
+    MICRO_COLETOR_ENABLED = False
+    micro_collector = None
+
 
 
 # ==============================================================================
@@ -1072,8 +1079,14 @@ def client_state(websocket):
 
 
 async def send_json(websocket, payload):
-
-    await websocket.send(json.dumps(payload))
+    try:
+        # Proteção contra congelamento do loop de eventos ao serializar/transmitir payloads pesados (ex: backfill)
+        msg_str = json.dumps(payload)
+        await asyncio.wait_for(websocket.send(msg_str), timeout=15.0)
+    except asyncio.TimeoutError:
+        print(f" [WS WARN] Timeout (15s) ao enviar send_json({payload.get('type')}) para {get_peer_ip(websocket)}", flush=True)
+    except Exception as exc:
+        print(f" [WS ERROR] Erro em send_json: {exc}", flush=True)
 
 
 
@@ -2689,7 +2702,7 @@ class MT5OrderManager:
 
         # 1. Filtro Central de Estratégias (STRATEGY_ENABLED)
         magic_int = int(magic) if magic else int(self.magic_number)
-        is_manual_cmd = (magic_int == MANUAL_ORDER_MAGIC or str(comment or "").startswith(("WEB_", "Manual")) or acao == "APP_ORDER_SEND")
+        is_manual_cmd = (magic_int == MANUAL_ORDER_MAGIC or str(comment or "").startswith(("WEB_", "Manual")))
         is_enabled = STRATEGY_ENABLED.get(magic_int, False) or is_manual_cmd
         if not is_enabled:
             print(f"[ESTRATÉGIA DESATIVADA] Magic {magic_int} está desligado na configuração. Sinal ignorado.", flush=True)
@@ -2851,7 +2864,9 @@ class MT5OrderManager:
 
 
 
-    def execute_pyramid_confluence(self, signal, box):
+    def execute_pyramid_confluence(self, signal, box, signal_time=None):
+        if signal_time is None:
+            signal_time = time.time()
         positions = mt5.positions_get(symbol=self.symbol)
         active_positions = [p for p in (positions or []) if p.magic == self.magic_number]
 
@@ -4924,11 +4939,12 @@ async def broadcast_to_web(msg_dict):
 
     async def _safe_send(c):
         try:
-            # Timeout de 5.0s para suportar picos de renderização no navegador sem derrubar clientes
-            await asyncio.wait_for(c.send(msg_str), timeout=5.0)
+            # Timeout ampliado de 5.0s para 15.0s para tolerar picos pesados de processamento na UI
+            # sem disparar desconexões e falsos descartes de conexão viva
+            await asyncio.wait_for(c.send(msg_str), timeout=15.0)
             return None
         except asyncio.TimeoutError:
-            print(f" [WS WARN] Timeout de envio (5s) em broadcast para cliente. Buffer sob carga.", flush=True)
+            print(f" [WS WARN] Timeout de envio (15s) em broadcast para cliente. Buffer sob carga.", flush=True)
             return None
         except websockets.exceptions.ConnectionClosed as e:
             print(f" [WS ERROR] Queda em broadcast: cliente já desconectou ({e.__class__.__name__}: código {getattr(e, 'code', '?')}).", flush=True)
@@ -5476,6 +5492,25 @@ async def mt5_stream_loop():
                         aggressor = "BUY" if (flags & mt5.TICK_FLAG_BUY) else ("SELL" if (flags & mt5.TICK_FLAG_SELL) else "CROSS")
                         ts_msc = raw_msc + MT5_BRT_OFFSET_MSC
                         LAST_TAPE_TIME_MSC[s] = ts_msc
+
+                        # Coleta quantitativa de microestrutura e agressão B3
+                        if MICRO_COLETOR_ENABLED and micro_collector:
+                            try:
+                                bid_val = float(_field(tick, "bid", 0.0) or 0.0)
+                                ask_val = float(_field(tick, "ask", 0.0) or 0.0)
+                                micro_collector.registrar_evento(
+                                    symbol=s,
+                                    preco=price,
+                                    volume=volume,
+                                    aggressor=aggressor,
+                                    ts_msc=ts_msc,
+                                    bid=bid_val,
+                                    ask=ask_val,
+                                    fonte="VIVO_MT5",
+                                    sinal_info=None
+                                )
+                            except Exception as _mc_rec_exc:
+                                pass
 
                         batch_ticks.append({
                             "id": f"mt5-{s}-{ts_msc}",
