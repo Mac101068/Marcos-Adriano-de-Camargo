@@ -1112,6 +1112,8 @@ def check_trade_allowed(state, data, action):
         order_magic_int = None
 
     is_manual_boleta = (order_magic_int == MANUAL_ORDER_MAGIC or comment.startswith(("WEB_", "Manual")))
+    if "_BOX" in comment or REPLAY_MODE:
+        return False, f"ordem de simulação/replay bloqueada contra envio ao vivo (comment={comment})"
     is_operator_order = (
         is_manual_boleta
         or comment.startswith(("COPILOT", "WEB_", "MAE_", "PIR_", "VARAL_", "RCOMP_", "RVEND_"))
@@ -4621,6 +4623,8 @@ async def ws_handler(websocket):
 
                     continue
 
+                req_target_date = data.get("date") or data.get("targetDate") or data.get("pregaoDate")
+
                 await handle_request_history(
 
                     websocket,
@@ -4639,8 +4643,29 @@ async def ws_handler(websocket):
 
                     ate=data.get("ate"),
 
+                    target_date=req_target_date,
+
                 )
 
+                continue
+
+            if action == "REPLAY_END":
+                REPLAY_MODE = False
+                print(f" 🎬 [REPLAY END] Replay encerrado por {peer}. Restaurando modo ao vivo e enviando backfill de {SYMBOL}...", flush=True)
+                await broadcast_to_web({
+                    "type": "REPLAY_MODE_RESULT",
+                    "data": {
+                        "on": False,
+                        "blocked": ordens_bloqueadas(),
+                        "envLocked": ORDERS_BLOCKED,
+                        "armed": BRIDGE_ARMED,
+                        "note": "entradas liberadas na ponte (pregão ao vivo)"
+                    }
+                })
+                # Invalida cache de backfill para que o pregão do dia ao vivo seja recarregado limpo
+                LAST_BACKFILL_CACHE.pop(SYMBOL, None)
+                await send_today_session_backfill(websocket, SYMBOL)
+                await send_account_info(websocket)
                 continue
 
 
@@ -4726,9 +4751,33 @@ async def ws_handler(websocket):
                             req_timestamp = None
                     print(f" 📥 [WEBSOCKET] RECEBIDA SOLICITAÇÃO ORDER_SEND: {target_sym} {data.get('type')} {data.get('contracts', 1)} ctros | Magic={order_magic} SL={data.get('sl')} TP={data.get('tp')}", flush=True)
 
+                    order_comment = str(data.get("comment", ""))
+                    if REPLAY_MODE or "_BOX" in order_comment:
+                        block_reason = f"BLOQUEADO: Ordem de simulação/replay não pode ser enviada ao mercado ao vivo (comment={order_comment})"
+                        print(f"🛑 [WEBSOCKET ORDER_SEND BLOQUEADA (ANTI-REPLAY)] {block_reason}", flush=True)
+                        mgr._audit_ordem("APP_ORDER_SEND", data.get("type", "BUY"),
+                                         data.get("contracts", 1), None, None, None, None, None,
+                                         False, block_reason, magic=order_magic)
+                        log_trade_execution(
+                            symbol=target_sym,
+                            side=data.get("type", "BUY"),
+                            action="APP_ORDER_SEND",
+                            volume=float(data.get("contracts", 1)),
+                            magic=order_magic,
+                            comment=block_reason,
+                            status="REJECTED_REPLAY_MODE"
+                        )
+                        await send_json(websocket, {
+                            "type": "ORDER_REJECTED",
+                            "symbol": target_sym,
+                            "reason": block_reason,
+                            "data": {"ticket": None, "reason": block_reason}
+                        })
+                        continue
+
                     raw_sl = data.get("sl", 0) or 0
                     raw_tp = data.get("tp", 0) or 0
-                    is_boleta = (order_magic == MANUAL_ORDER_MAGIC or str(data.get("comment", "")).startswith(("WEB_", "Manual")))
+                    is_boleta = (order_magic == MANUAL_ORDER_MAGIC or order_comment.startswith(("WEB_", "Manual")))
                     is_valid_stops, block_reason, safe_sl, safe_tp = validate_order_stops(target_sym, raw_sl, raw_tp, is_manual=is_boleta)
                     if not is_valid_stops:
                         print(f"🛑 [WEBSOCKET ORDER_SEND BLOQUEADA] {block_reason}", flush=True)
@@ -5143,7 +5192,7 @@ async def _enviar_histico_replay(websocket, req_id, payload):
           f"{chunks} chunk(s), arquivos: {', '.join(payload['arquivos'])}", flush=True)
 
 
-async def handle_request_history(websocket, req_id, symbol, days, bucket_ms=None, desde=None, ate=None):
+async def handle_request_history(websocket, req_id, symbol, days, bucket_ms=None, desde=None, ate=None, target_date=None):
 
     """Histórico do replay: fita REAL de disco quando existe, M1 rotulado quando não existe.
 
@@ -5180,7 +5229,7 @@ async def handle_request_history(websocket, req_id, symbol, days, bucket_ms=None
 
             payload = await asyncio.to_thread(
 
-                replay.servir_histico, symbol, days, bucket_ms, desde, ate
+                replay.servir_histico, symbol, days, bucket_ms, desde, ate, MAX_TICKS_POR_PEDIDO, target_date
 
             )
 

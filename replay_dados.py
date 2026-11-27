@@ -391,7 +391,7 @@ def resolucao_que_cabe(ts, preco, vol, agg, dias_no_pedido=1, teto=MAX_TICKS_POR
 
 
 def servir_histico(symbol, days, bucket_ms=None, desde=None, ate=None,
-                   teto=MAX_TICKS_POR_PEDIDO):
+                   teto=MAX_TICKS_POR_PEDIDO, target_date=None):
     """Monta o payload do REQUEST_HISTORY a partir dos recortes REAIS em disco.
 
     Devolve dict com `lotes` (listas de ticks no formato do HISTORY_CHUNK), `resolucaoMs`, os dias
@@ -410,7 +410,21 @@ def servir_histico(symbol, days, bucket_ms=None, desde=None, ate=None,
     disponiveis = dias_disponiveis(symbol)
     if not disponiveis:
         return None
-    alvo = disponiveis[:max(1, min(int(days or 1), MAX_DIAS_POR_PEDIDO))]
+
+    # Se target_date foi especificado (ou desde parece uma data YYYY-MM-DD / YYYYMMDD),
+    # ancora o recorte exatamente no dia solicitado!
+    dia_especifico = None
+    if target_date:
+        dia_especifico = str(target_date).replace("-", "").strip()
+    elif desde and ("-" in str(desde) or len(str(desde)) == 8):
+        dia_especifico = str(desde).replace("-", "").strip()
+
+    if dia_especifico and dia_especifico in disponiveis:
+        idx = disponiveis.index(dia_especifico)
+        n_dias = max(1, min(int(days or 1), MAX_DIAS_POR_PEDIDO))
+        alvo = disponiveis[idx : idx + n_dias]
+    else:
+        alvo = disponiveis[:max(1, min(int(days or 1), MAX_DIAS_POR_PEDIDO))]
 
     piso = int(bucket_ms) if bucket_ms else BUCKET_PADRAO_MS
     pedida = int(bucket_ms) if bucket_ms else None
@@ -420,6 +434,10 @@ def servir_histico(symbol, days, bucket_ms=None, desde=None, ate=None,
              "contratos_buy": 0, "contratos_sell": 0}
     seq = 0
 
+    # Se desde/ate forem datas e não horários (ex: contêm hífen), não passa para _filtrar_por_hora
+    filtro_desde = None if (desde and ("-" in str(desde) or len(str(desde)) == 8)) else desde
+    filtro_ate = None if (ate and ("-" in str(ate) or len(str(ate)) == 8)) else ate
+
     for dia in alvo:
         caminho = localizar_recorte(symbol, dia)
         if not caminho:
@@ -427,8 +445,8 @@ def servir_histico(symbol, days, bucket_ms=None, desde=None, ate=None,
         leitura = pd.read_csv(caminho, usecols=["time_msc", "last", "volume", "flags"])
         ts, preco, vol, agg = _canonizar(leitura)
         stats["sem_negocio"] += int(len(leitura)) - int(ts.size)
-        if ts.size:
-            ts, preco, vol, agg = (a[_filtrar_por_hora(ts, desde, ate)] for a in (ts, preco, vol, agg))
+        if ts.size and (filtro_desde or filtro_ate):
+            ts, preco, vol, agg = (a[_filtrar_por_hora(ts, filtro_desde, filtro_ate)] for a in (ts, preco, vol, agg))
         if ts.size == 0:
             servidos.append(dia)
             continue
